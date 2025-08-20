@@ -14,7 +14,7 @@ Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scient
 ## 📦 Installation
 
 ```bash
-# Not implemented yet.
+pip install .
 ```
 
 ### 🚀 Quick start 
