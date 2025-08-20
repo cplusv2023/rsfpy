@@ -1,6 +1,7 @@
 import numpy as np
-import warnings, re, os
+import warnings, re, os, io, datetime, socket
 from .utils import check_input_source
+from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
 
@@ -39,13 +40,15 @@ def read_rsf(file):
                 break
 
         header_text = buf.rstrip(RSFHSPLITER).decode("utf-8", errors="ignore")
-        tokens = re.split(r"[\s\n\r]+", header_text.strip())
+        split_pattern = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)'
+        tokens = re.split(split_pattern, header_text.strip())
+
+        header = {}
         for token in tokens:
-            if "=" in token:
-                k, v = token.split("=", 1)
-                # 去掉首尾引号（双引号或单引号）
-                v = v.strip('"').strip("'")
-                header[k] = v  # 最后一次出现覆盖
+            if "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            header[k] = v.strip('"').strip("'")
 
         # Format conversion
         for k, v in list(header.items()):
@@ -142,9 +145,77 @@ def read_rsf(file):
 
 
 
-def write_rsf(file, header, data, out=None, form="native"):
+def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="native", fmt="%s"):
     """
     Write RSF file with given header and data.
+
+    Parameters:
+    arr : ndarray
+        The data array to write.
+    file : str or file-like object
+        The output file or file-like object.
+    header : dict
+        The header information to write.
+    out : str, optional
+        The output file path (if different from `file`).
+    form : str, optional
+        The data format (default is "native").
+        native: little-endian
+        xdr: network (big-endian) byte order
+        ascii: plain text
     """
-    # TODO: integrate your latest write_rsf logic here
-    pass
+    close_after = False
+    outheader = {}
+    outheader.update(header if isinstance(header, dict) else {})
+    if not isinstance(arr, np.ndarray):
+        raise TypeError(f"Expected ndarray, got {type(arr)}")
+    if isinstance(file, str):
+        close_after = True
+    file_fp = check_input_source(file, 'wb')
+
+    if file_fp is None:
+        raise ValueError(f"Cannot open file: {file}")
+    
+    if out is None or out == 'stdout':
+        out_fp = file_fp
+    elif isinstance(out, str) or isinstance(out, io.IOBase):
+        out_fp = check_input_source(out, 'wb')
+        if out_fp is None:
+            raise ValueError(f"Cannot open output file: {out}")
+        outheader["in"] = os.path.abspath(out)
+
+    dtype = arr.dtype.name
+    dtype = ''.join([c for c in dtype if c.isalpha()])
+    outheader.update({"data_format": f"{form}_{dtype}"})
+    # cast outheader to string
+    header_str = ""
+    for key, value in outheader.items():
+        if isinstance(value, str):
+            if key not in ["in","data_format","esize","out"]: value = f'"{value}"'
+            header_str += f"{key}={value}\n"
+        else:
+            header_str += f"{key}={str(value)}\n"
+
+    # Write header
+    try:
+        uname = os.getlogin()
+        hostname = socket.gethostname()
+    except:
+        uname = "unknown"
+        hostname = "unknown"
+    banner = f"RSFPY_{__version__}\t{os.getcwd()}\t{uname}@{hostname}\t{datetime.datetime.now().strftime('%a %b %d %H:%M:%S %Y')}"
+    file_fp.write(history.encode('utf-8') + b"\n\n")
+    file_fp.write(banner.encode('utf-8') + b"\n")
+    file_fp.write(header_str.encode('utf-8') + b"\n\n")
+    if out is None or out == 'stdout': file_fp.write(RSFHSPLITER)
+
+    # Write data
+    if form == "ascii":
+        np.savetxt(out_fp, arr, fmt=fmt)
+    elif form == "native":
+        out_fp.write(arr.tobytes())
+    elif form == "xdr":
+        out_fp.write(arr.byteswap().tobytes())
+
+    if close_after:
+        file_fp.close()

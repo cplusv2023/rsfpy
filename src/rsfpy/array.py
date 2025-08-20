@@ -1,6 +1,40 @@
+"""
+  RsfPy - Python tools for Madagascar RSF data file reading/writing and scientific array handling.
+
+  Copyright (C) 2025 Jilin University
+
+  This program is free software; you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation; either version 2 of the License, or
+  (at your option) any later version.
+  
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+  
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+"""
+
+
+
 import numpy as np
-import os, io, warnings
-from .io import read_rsf
+import os, io, warnings, re
+from .io import read_rsf, write_rsf
+
+defaults = {
+    "d1": 4.0e-3, "o1": 0., "label1": "Time", "unit1":"s",
+    "d2": 8.0e-3, "o2": 0., "label2": "Distance", "unit2":"km",
+    "d3": 8.0e-3, "o3": 0., "label3": "Distance", "unit3":"km",
+    "d4": 1, "o4": 0.,
+    "d5": 1, "o5": 0.,
+    "d6": 1, "o6": 0.,
+    "d7": 1, "o7": 0.,
+    "d8": 1, "o8": 0.,
+    "d9": 1, "o9": 0.,
+}
 
 class Rsfdata(np.ndarray):
     def __new__(cls, input_array=None, header=None, history=""):
@@ -74,9 +108,7 @@ class Rsfdata(np.ndarray):
         self.history = getattr(obj, 'history', "")
 
         # Update n#
-        for idim in range(self.ndim):
-            n_key = f"n{idim + 1}"
-            self.header.update({n_key: self.shape[idim]})
+        self.update({})
 
     def read(self, file):
         """
@@ -102,8 +134,72 @@ class Rsfdata(np.ndarray):
             self.header = result.header
             self.history = result.history
         return self
-    
-    def axis(self, axis: int)-> np.ndarray:
+
+    def write(self, file, **kargs):
+        """
+        Write RSF data to a file or file-like object.
+
+        Parameters
+        ----------
+        file : str or file-like object
+            The RSF file to write.
+        header : dict
+            The header information to write.
+        out : str, optional
+            The output file path (if different from `file`).
+        form : str, optional
+            The data format (default is "native").
+            native: little-endian
+            xdr: network (big-endian) byte order
+            ascii: plain text
+        """
+        self.update(kargs.get('header', {}))
+        history = self.history + '\n' + kargs.get('history', '')
+        kargs.pop('header', None)
+        kargs.pop('history', None)
+        write_rsf(self, file, self.header, history, **kargs)
+
+    def update(self, new_header):
+        """
+        Update the header information.
+        Ensure n# matches shape.
+
+        Parameters
+        ----------
+        new_header : dict
+            The new header information to update.
+        """
+        self.header.update(new_header)
+        # Update n#
+        for idim in range(self.ndim):
+            n_key = f"n{idim + 1}"
+            self.header.update({n_key: self.shape[idim]})
+            if self.d(idim) == 0.:
+                dkey = f"d{idim + 1}"
+                self.header.update({dkey: defaults.get(dkey, 4.e-3)})
+
+
+    def put(self, header_str: str):
+        """
+        Modify header information.
+
+        Parameters
+        ----------
+        header_str : str
+            The header information to add or modify.
+        """
+        split_pattern = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)'
+        tokens = re.split(split_pattern, header_str.strip())
+        header = {}
+        for token in tokens:
+            if "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            header[k] = v.strip('"').strip("'")
+        print(header)
+        self.update(header)
+
+    def axis(self, axis: int) -> np.ndarray:
         """
         Get the regular sampling of specific axis.
 
@@ -118,11 +214,111 @@ class Rsfdata(np.ndarray):
             The regular sampling of specific axis.
         """
         if axis < self.ndim:
-            n = self.header.get(f"n{axis+1}", 0)
-            o = self.header.get(f"o{axis+1}", 0.0)
-            d = self.header.get(f"d{axis+1}", 1.0e-4)
+            n = self.n(axis)
+            o = self.o(axis)
+            d = self.d(axis)
             return np.arange(n) * d + o
     
+    def n(self, axis):
+        """
+        Get the number of samples along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        int
+            The number of samples along the specified axis.
+        """
+        return self.header.get(f"n{axis+1}", 1 if self.data else 0)
+
+    def d(self, axis):
+        """
+        Get the sampling interval along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        float
+            The sampling interval along the specified axis.
+        """
+        return float(self.header.get(f"d{axis+1}", defaults.get(f"d{axis+1}", 4.e-3)))
+    
+    def o(self, axis):
+        """
+        Get the offset along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        float
+            The offset along the specified axis.
+        """
+        return self.header.get(f"o{axis+1}", defaults.get(f"o{axis+1}", 0.0))
+
+    def label(self, axis: int) -> str:
+        """
+        Get the label along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        str
+            The label along the specified axis.
+        """
+        return self.header.get(f"label{axis+1}", defaults.get(f"label{axis+1}", ""))
+    
+    def unit(self, axis:int) -> str:
+        """
+        Get the unit along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        str
+            The unit along the specified axis.
+        """
+        return self.header.get(f"unit{axis+1}", defaults.get(f"unit{axis+1}", ""))
+
+    def label_unit(self, axis: int) -> str:
+        """
+        Get the 'label (unit)' along a specific axis.
+
+        Parameters
+        ----------
+        axis : int
+            The axis along which to get the data.
+
+        Returns
+        -------
+        str
+            The 'label (unit)' along the specified axis.
+        """
+        label = self.label(axis)
+        unit = self.unit(axis)
+        if unit:
+            return f"{label} ({unit})"
+        return label
+
     def transpose(self, axes=None):
         """
         Transpose array and update RSF header accordingly
@@ -138,10 +334,8 @@ class Rsfdata(np.ndarray):
         else:
             axes = tuple(axes)
 
-        # 先用 ndarray 的 transpose 得到新对象
         obj = super().transpose(axes)
 
-        # ---- 更新 header ----
         keys_per_dim = ("n", "o", "d", "label", "unit")
         new_header = {}
 
@@ -153,7 +347,6 @@ class Rsfdata(np.ndarray):
                 if old_key in self.header:
                     new_header[new_key] = self.header[old_key]
 
-        # 保留其它非维度信息
         for k, v in self.header.items():
             if not any(k.startswith(p) and k[len(p):].isdigit() for p in keys_per_dim):
                 new_header[k] = v
@@ -163,7 +356,9 @@ class Rsfdata(np.ndarray):
     
     @property
     def T(self):
-        """像 NumPy 一样的转置快捷属性，但会同步 header 元数据"""
+        """
+        Transpose like NumPy with header synchronization.
+        """
         return self.transpose()
     
     def window(self, cmd=None, **kwargs):
@@ -203,7 +398,6 @@ class Rsfdata(np.ndarray):
         params.update({f'f{i+1}': None for i in range(nd)})
         params.update({f'j{i+1}': None for i in range(nd)})
 
-        # 覆盖填充
         for k, v in raw_params.items():
             if k in params:
                 params[k] = v
@@ -211,18 +405,18 @@ class Rsfdata(np.ndarray):
         new_meta = self.header.copy()
 
         for ax in range(nd):
-            n = params[f'n{ax+1}'] if params[f'n{ax+1}'] is not None else self.shape[ax]
+            n = params[f'n{ax+1}'] if params[f'n{ax+1}'] is not None else self.n(ax)
             j = params[f'j{ax+1}'] if params[f'j{ax+1}'] is not None else 1
             f = params[f'f{ax+1}'] if params[f'f{ax+1}'] is not None else 0
-            if n < 0: n = self.shape[ax] 
-            if f < 0: f += self.shape[ax]
+            if n < 0: n = self.n(ax)
+            if f < 0: f += self.n(ax)
             slices = np.arange(f, f + n * j, j, dtype=int)
-            slices = slices[np.where((slices >= 0) & (slices < self.shape[ax]))]
+            slices = slices[np.where((slices >= 0) & (slices < self.n(ax)))]
             self = np.take(self, slices, axis=ax)
 
             new_meta[f'n{ax+1}'] = len(slices)
-            new_meta[f'o{ax+1}'] = f * self.header.get(f'd{ax+1}', 4.0e-3) + self.header.get(f'o{ax+1}', 0.0)
-            new_meta[f'd{ax+1}'] = (self.header.get(f'd{ax+1}', 4.0e-3) * j)
+            new_meta[f'o{ax+1}'] = f * self.d(ax) + self.o(ax)
+            new_meta[f'd{ax+1}'] = (self.d(ax) * j)
 
         self.header = new_meta
         return self
@@ -245,6 +439,16 @@ class Rsfdata(np.ndarray):
         self.header[f'd{axis+1}'] = -d
 
         return self
+
+# add some properties for convenience
+for idim in range(9):
+    setattr(Rsfdata, f'n{idim+1}', property(lambda self, i=idim: self.n(i)))
+    setattr(Rsfdata, f'o{idim+1}', property(lambda self, i=idim: self.o(i)))
+    setattr(Rsfdata, f'd{idim+1}', property(lambda self, i=idim: self.d(i)))
+    setattr(Rsfdata, f'label{idim+1}', property(lambda self, i=idim: self.label(i)))
+    setattr(Rsfdata, f'unit{idim+1}', property(lambda self, i=idim: self.unit(i)))
+    setattr(Rsfdata, f'axis{idim+1}', property(lambda self, i=idim: self.axis(i)))
+
 
 class Rsfarray(np.ndarray):
     """
