@@ -1,7 +1,7 @@
 # rsfpy
 
-**rsfpy** is a Python toolkit for reading, writing, and manipulating *Madagascar RSF* (Regularly Sampled Format) scientific datasets.  
-Built on top of NumPy, it supports efficient slicing, transposing, and subsampling, while automatically updating metadata (e.g., n#/o#/d#/label#/unit#) to keep axis descriptions consistent with data transformations.
+**rsfpy** is a Python toolkit for reading, writing, and manipulating [*Madagascar*](https://ahay.org "Madagascar Main Page") [<ins>*RSF* (Regularly Sampled Format) </ins>](https://ahay.org/wiki/Guide_to_RSF_file_format "RSF data format")  scientific datasets.  
+Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scientific computing with Python"), it supports efficient slicing, transposing, and subsampling, while automatically updating metadata (e.g., n#/o#/d#/label#/unit#) to keep axis descriptions consistent with data transformations.
 
 ## ✨ Features
 
@@ -20,7 +20,8 @@ Built on top of NumPy, it supports efficient slicing, transposing, and subsampli
 ### 🚀 Quick start 
 Not implemented yet.
 ### 📚 Requirements
-Not implemented yet.
+- Python >= 3
+- Numpy
 ### 📄 License
 GNU GPLv2
 ### 🤝 Contributing

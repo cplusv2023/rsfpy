@@ -23,7 +23,7 @@ import sys, os, io
 import numpy as np 
 
 path = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(path + "/../src/")
+# sys.path.append(path + "/../src/")
 from rsfpy.array import Rsfdata
 
 

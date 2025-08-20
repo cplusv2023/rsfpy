@@ -1,0 +1,17 @@
+# MANIFEST.in
+
+# 包含许可证、README 和依赖列表
+include LICENSE
+include README.md
+include requirements
+include test/dat.test
+
+# 包含所有源代码（.py），以及可能的配置文件
+recursive-include src/rsfpy *.py
+
+# 包含测试文件
+recursive-include test *.py
+
+# 排除虚拟环境文件
+global-exclude *.py[cod]
+global-exclude __pycache__/*

@@ -1,0 +1,36 @@
+# setup.py
+import io
+from setuptools import setup, find_packages
+
+# 读取 requirements 文件
+with io.open("requirements", encoding="utf-8") as f:
+    install_requires = [
+        line.strip() for line in f
+        if line.strip() and not line.startswith("#")
+    ]
+
+# 读取 README 作为 long_description
+with io.open("README.md", encoding="utf-8") as f:
+    long_description = f.read()
+
+setup(
+    name="rsfpy",
+    version="0.1.0",
+    description="A Python toolkit for RSF operations",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    author="Your Name",
+    author_email="you@example.com",
+    url="https://github.com/cplusv2023/rsfpy",
+    license="GPLv2",
+    python_requires=">=3",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    include_package_data=True,
+    install_requires=install_requires,
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: GPLv2 License",
+        "Operating System :: OS Independent",
+    ],
+)

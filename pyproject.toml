@@ -1,17 +1,3 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "pyrsf"
-version = "0.1.0"
-description = "Python tools for RSF file reading/writing and scientific array handling"
-authors = [
-    { name="Jiawei", email="you@example.com" }
-]
-readme = "README.md"
-license = { file="LICENSE" }
-requires-python = ">=3.8"
-dependencies = [
-    "numpy>=1.20"
-]

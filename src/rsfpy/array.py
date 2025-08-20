@@ -129,11 +129,7 @@ class Rsfdata(np.ndarray):
         """
         result = read_rsf(file)
         if isinstance(result, list) and len(result) == 3:
-            result = Rsfdata(*result)
-            self[:] = result.data
-            self.header = result.header
-            self.history = result.history
-        return self
+            self = Rsfdata(*result)
 
     def write(self, file, **kargs):
         """
