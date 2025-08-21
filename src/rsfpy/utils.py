@@ -20,11 +20,9 @@
 
 
 
-import os
-import io
-import warnings
+import io, re, warnings
 
-def check_input_source(src, mode='rb'):
+def _check_input_source(src, mode='rb'):
     """
     Check if src is a valid readable/writable file path or IOBase object.
     """
@@ -40,3 +38,17 @@ def check_input_source(src, mode='rb'):
     else:
         warnings.warn(f"Invalid input type: {type(src)}")
         return None
+
+
+def _str_match_re(str_in: str, pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', strip: str | None = None) -> dict:
+    """
+    Match strings in the input using the specified regex pattern.
+    """
+    out_dict = {}
+    tokens = re.split(pattern, str_in.strip(strip))
+    for token in tokens:
+        if "=" not in token:
+            continue
+        k, v = token.split("=", 1)
+        out_dict[k] = v.strip('"').strip("'")
+    return out_dict

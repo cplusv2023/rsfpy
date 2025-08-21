@@ -3,7 +3,7 @@ import io
 from setuptools import setup, find_packages
 
 # 读取 requirements 文件
-with io.open("requirements", encoding="utf-8") as f:
+with io.open("requirements.txt", encoding="utf-8") as f:
     install_requires = [
         line.strip() for line in f
         if line.strip() and not line.startswith("#")

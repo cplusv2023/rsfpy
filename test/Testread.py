@@ -23,7 +23,7 @@ import sys, os, io
 import numpy as np 
 
 path = os.path.dirname(os.path.abspath(__file__))
-# sys.path.append(path + "/../src/")
+sys.path.append(path + "/../src/")
 from rsfpy.array import Rsfdata
 
 
@@ -129,11 +129,9 @@ def main(file=sys.stderr):
         else: print(color_str(f'passed', 'green'), file=file)
         count += 1
     all += 1
-    print("?",file=file)
-    dat.put("d1=0.000")
-    print(dat.d1, file=file)
+
     # Summary
-    print(f"Summary:\t{all} tests {(color_str(f'{count} passed', 'green'))}, {color_str(f'{all - count} failed', 'red')}.", file=file)
+    print(f"Summary:\t{all} tests, {(color_str(f'{count} passed', 'green'))}, {color_str(f'{all - count} failed', 'red' if all - count > 0 else 'green')}." , file=file)
 
     if all - count > 0:
         sys.exit(1)

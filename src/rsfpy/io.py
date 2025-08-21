@@ -1,6 +1,6 @@
 import numpy as np
 import warnings, re, os, io, datetime, socket
-from .utils import check_input_source
+from .utils import _check_input_source, _str_match_re
 from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
@@ -22,7 +22,7 @@ def read_rsf(file):
     try:
         close_after = isinstance(file, str)
 
-        file_fp = check_input_source(file, 'rb')
+        file_fp = _check_input_source(file, 'rb')
         if file_fp is None:
             return None
 
@@ -40,15 +40,8 @@ def read_rsf(file):
                 break
 
         header_text = buf.rstrip(RSFHSPLITER).decode("utf-8", errors="ignore")
-        split_pattern = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)'
-        tokens = re.split(split_pattern, header_text.strip())
-
-        header = {}
-        for token in tokens:
-            if "=" not in token:
-                continue
-            k, v = token.split("=", 1)
-            header[k] = v.strip('"').strip("'")
+        
+        header = _str_match_re(header_text)
 
         # Format conversion
         for k, v in list(header.items()):
@@ -72,7 +65,7 @@ def read_rsf(file):
         if in_val == "stdin":
             data_file = file_fp
         else:
-            data_file = check_input_source(in_val, 'rb')
+            data_file = _check_input_source(in_val, 'rb')
             if data_file is None:
                 warnings.warn(f"Data file not accessible: {in_val}")
                 return None
@@ -164,14 +157,14 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
         xdr: network (big-endian) byte order
         ascii: plain text
     """
-    close_after = False
+    close_after = isinstance(file, str)
+
     outheader = {}
     outheader.update(header if isinstance(header, dict) else {})
     if not isinstance(arr, np.ndarray):
         raise TypeError(f"Expected ndarray, got {type(arr)}")
-    if isinstance(file, str):
-        close_after = True
-    file_fp = check_input_source(file, 'wb')
+
+    file_fp = _check_input_source(file, 'wb')
 
     if file_fp is None:
         raise ValueError(f"Cannot open file: {file}")
@@ -179,7 +172,7 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     if out is None or out == 'stdout':
         out_fp = file_fp
     elif isinstance(out, str) or isinstance(out, io.IOBase):
-        out_fp = check_input_source(out, 'wb')
+        out_fp = _check_input_source(out, 'wb')
         if out_fp is None:
             raise ValueError(f"Cannot open output file: {out}")
         outheader["in"] = os.path.abspath(out)

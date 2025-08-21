@@ -21,7 +21,8 @@
 
 
 import numpy as np
-import os, io, warnings, re
+import io, warnings
+from .utils import _str_match_re
 from .io import read_rsf, write_rsf
 
 defaults = {
@@ -37,9 +38,9 @@ defaults = {
 }
 
 class Rsfdata(np.ndarray):
-    def __new__(cls, input_array=None, header=None, history=""):
+    def __new__(cls, input_array: np.ndarray | None = None, header: dict | None = None, history: str = ""):
         """
-         Ndarray wrapper for Madagascar RSF data.
+         Ndarray wrapper for *Madagascar* RSF (regularly sampled format) data.
          RSF data format: https://www.ahay.org/wiki/Guide_to_RSF_file_format
 
          Parameters
@@ -108,9 +109,9 @@ class Rsfdata(np.ndarray):
         self.history = getattr(obj, 'history', "")
 
         # Update n#
-        self.update({})
+        self.update()
 
-    def read(self, file):
+    def read(self, file: str | io.IOBase):
         """
         Read RSF data from a file or file-like object.
         This will override the existing data and header information in the array.
@@ -131,7 +132,7 @@ class Rsfdata(np.ndarray):
         if isinstance(result, list) and len(result) == 3:
             self = Rsfdata(*result)
 
-    def write(self, file, **kargs):
+    def write(self, file: str | io.IOBase, **kargs):
         """
         Write RSF data to a file or file-like object.
 
@@ -155,7 +156,7 @@ class Rsfdata(np.ndarray):
         kargs.pop('history', None)
         write_rsf(self, file, self.header, history, **kargs)
 
-    def update(self, new_header):
+    def update(self, new_header: dict={}):
         """
         Update the header information.
         Ensure n# matches shape.
@@ -175,7 +176,7 @@ class Rsfdata(np.ndarray):
                 self.header.update({dkey: defaults.get(dkey, 4.e-3)})
 
 
-    def put(self, header_str: str):
+    def put(self, header_str: str = ''):
         """
         Modify header information.
 
@@ -184,18 +185,10 @@ class Rsfdata(np.ndarray):
         header_str : str
             The header information to add or modify.
         """
-        split_pattern = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)'
-        tokens = re.split(split_pattern, header_str.strip())
-        header = {}
-        for token in tokens:
-            if "=" not in token:
-                continue
-            k, v = token.split("=", 1)
-            header[k] = v.strip('"').strip("'")
-        print(header)
+        header = _str_match_re(header_str)
         self.update(header)
 
-    def axis(self, axis: int) -> np.ndarray:
+    def axis(self, axis: int = 0) -> np.ndarray:
         """
         Get the regular sampling of specific axis.
 
@@ -214,108 +207,128 @@ class Rsfdata(np.ndarray):
             o = self.o(axis)
             d = self.d(axis)
             return np.arange(n) * d + o
-    
-    def n(self, axis):
+
+    def n(self, axis: int | list | tuple | np.ndarray = 0) -> int | tuple:
         """
         Get the number of samples along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        int
+        int | tuple
             The number of samples along the specified axis.
         """
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
+            return [self.header.get(f"n{ax+1}", 1 if self.data else 0) for ax in axis]
         return self.header.get(f"n{axis+1}", 1 if self.data else 0)
 
-    def d(self, axis):
+    def d(self, axis: int | list | tuple | np.ndarray = 0) -> float | tuple:
         """
         Get the sampling interval along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        float
+        float | tuple
             The sampling interval along the specified axis.
         """
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
+            return [float(self.header.get(f"d{ax+1}", defaults.get(f"d{ax+1}", 4.e-3))) for ax in axis]
         return float(self.header.get(f"d{axis+1}", defaults.get(f"d{axis+1}", 4.e-3)))
-    
-    def o(self, axis):
+
+    def o(self, axis: int | list | tuple | np.ndarray = 0) -> float | tuple:
         """
         Get the offset along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        float
+        float | tuple
             The offset along the specified axis.
         """
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
+            return [self.header.get(f"o{ax+1}", defaults.get(f"o{ax+1}", 0.0)) for ax in axis]
         return self.header.get(f"o{axis+1}", defaults.get(f"o{axis+1}", 0.0))
 
-    def label(self, axis: int) -> str:
+    def label(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
         """
         Get the label along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        str
+        str | tuple
             The label along the specified axis.
         """
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
+            return [self.header.get(f"label{ax+1}", defaults.get(f"label{ax+1}", "")) for ax in axis]
         return self.header.get(f"label{axis+1}", defaults.get(f"label{axis+1}", ""))
-    
-    def unit(self, axis:int) -> str:
+
+    def unit(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
         """
         Get the unit along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        str
+        str | tuple
             The unit along the specified axis.
         """
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
+            return [self.header.get(f"unit{ax+1}", defaults.get(f"unit{ax+1}", "")) for ax in axis]
         return self.header.get(f"unit{axis+1}", defaults.get(f"unit{axis+1}", ""))
 
-    def label_unit(self, axis: int) -> str:
+    def label_unit(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
         """
         Get the 'label (unit)' along a specific axis.
 
         Parameters
         ----------
-        axis : int
+        axis : int | list | tuple | np.ndarray
             The axis along which to get the data.
 
         Returns
         -------
-        str
+        str | tuple
             The 'label (unit)' along the specified axis.
         """
         label = self.label(axis)
         unit = self.unit(axis)
+        labels = ()
+        if isinstance(label, (list, tuple, np.ndarray)):
+            for l, u in zip(label, unit):
+                labels += (f"{l} ({u})",) if u else (l,)
+            return labels
         if unit:
             return f"{label} ({unit})"
         return label
 
-    def transpose(self, axes=None):
+    def transpose(self, axes: tuple | list =None):
         """
         Transpose array and update RSF header accordingly
         (n#, o#, d#, label#, unit# will be permuted with axes).
@@ -365,8 +378,12 @@ class Rsfdata(np.ndarray):
         ----------
         cmd : str or None
             Command-line style, e.g. 'n1=100 j1=2'.
-        **kwargs : dict
-            Keyword-style, e.g. n1=100, j1=2.
+        n# : int
+            Number of samples along axis #.
+        j# : int
+            Jump factor along axis #.
+        f# : int
+            First sample along axis #.
 
         Returns
         -------
@@ -416,8 +433,8 @@ class Rsfdata(np.ndarray):
 
         self.header = new_meta
         return self
-    
-    def flip(self, axis=0):
+
+    def flip(self, axis: int = 0):
         """
         Flip the array along the specified axis.
 
@@ -436,6 +453,28 @@ class Rsfdata(np.ndarray):
 
         return self
 
+    def pclip(self, perc: float=99.)-> int | float | None:
+        """
+        Caculate the percentile clipping values.
+
+        Parameters
+        ----------
+        perc : float
+            The percentile value to clip the data.
+
+        Returns
+        -------
+        int | float | None
+            The clipped data value.
+        """
+        if not np.issubdtype(self.dtype, np.integer) and not np.issubdtype(self.dtype, np.floating):
+            return None
+        if not 0 <= perc <= 100:
+            warnings.warn("Clip percentile must be between 0 and 100. Use default pclip=99.")
+        # Compute the clipping values
+        clip = np.percentile(self, perc)
+        return clip
+
 # add some properties for convenience
 for idim in range(9):
     setattr(Rsfdata, f'n{idim+1}', property(lambda self, i=idim: self.n(i)))
@@ -444,6 +483,7 @@ for idim in range(9):
     setattr(Rsfdata, f'label{idim+1}', property(lambda self, i=idim: self.label(i)))
     setattr(Rsfdata, f'unit{idim+1}', property(lambda self, i=idim: self.unit(i)))
     setattr(Rsfdata, f'axis{idim+1}', property(lambda self, i=idim: self.axis(i)))
+setattr(Rsfdata, f'clip', property(lambda self: self.pclip()))
 
 
 class Rsfarray(np.ndarray):
