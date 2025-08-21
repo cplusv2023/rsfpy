@@ -118,7 +118,7 @@ def main(file=sys.stderr):
 
     # Write to file
     print(f"{all+1}:", end="\t", file=file)
-    file_io = path + "/dat.test.write"
+    file_io = path + "/dat.test.ignore"
     try:
         dat.write(file_io, header={"n1":3}, history="test write", form='xdr', fmt="%e")
     except Exception as e:

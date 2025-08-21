@@ -38,7 +38,7 @@ defaults = {
 }
 
 class Rsfdata(np.ndarray):
-    def __new__(cls, input_array: np.ndarray | None = None, header: dict | None = None, history: str = ""):
+    def __new__(cls, input_array: str | io.IOBase | np.ndarray | list | tuple |None = None, header: dict | None = None, history: str = ""):
         """
          Ndarray wrapper for *Madagascar* RSF (regularly sampled format) data.
          RSF data format: https://www.ahay.org/wiki/Guide_to_RSF_file_format
@@ -92,7 +92,11 @@ class Rsfdata(np.ndarray):
             obj.history += '\n' + history
             return obj
         
-        # Case 4: ndarray
+        # Case 4: ndarray or list or tuple
+        if isinstance(input_array, (list, tuple)):
+            input_array = np.asarray(input_array)
+            if not np.issubdtype(input_array.dtype, np.integer) and not np.issubdtype(input_array.dtype, np.floating) and not np.issubdtype(input_array.dtype, np.complexfloating):
+                return Rsfdata()
         if isinstance(input_array, np.ndarray):
             obj = np.asarray(input_array).view(cls)
             obj.header = {} if header is None else header
@@ -149,6 +153,8 @@ class Rsfdata(np.ndarray):
             native: little-endian
             xdr: network (big-endian) byte order
             ascii: plain text
+        fmt : str, optional
+            The data format for ascii (default is "%f").
         """
         self.update(kargs.get('header', {}))
         history = self.history + '\n' + kargs.get('history', '')
@@ -416,7 +422,8 @@ class Rsfdata(np.ndarray):
                 params[k] = v
 
         new_meta = self.header.copy()
-
+        new_data = self.view()
+        new_data.header = self.header.copy()
         for ax in range(nd):
             n = params[f'n{ax+1}'] if params[f'n{ax+1}'] is not None else self.n(ax)
             j = params[f'j{ax+1}'] if params[f'j{ax+1}'] is not None else 1
@@ -425,14 +432,14 @@ class Rsfdata(np.ndarray):
             if f < 0: f += self.n(ax)
             slices = np.arange(f, f + n * j, j, dtype=int)
             slices = slices[np.where((slices >= 0) & (slices < self.n(ax)))]
-            self = np.take(self, slices, axis=ax)
+            new_data = np.take(new_data, slices, axis=ax)
 
             new_meta[f'n{ax+1}'] = len(slices)
             new_meta[f'o{ax+1}'] = f * self.d(ax) + self.o(ax)
             new_meta[f'd{ax+1}'] = (self.d(ax) * j)
 
-        self.header = new_meta
-        return self
+        new_data.header = new_meta
+        return new_data
 
     def flip(self, axis: int = 0):
         """
@@ -443,15 +450,16 @@ class Rsfdata(np.ndarray):
         axis : int
             The axis along which to flip the array.
         """
-        self = np.flip(self, axis=axis)
+        new_data = np.flip(self.view(np.ndarray), axis=axis).view(type(self))
+        new_data.header = self.header.copy()
         o = self.header.get(f'o{axis+1}', 0.0)
         d = self.header.get(f'd{axis+1}', 4.0e-3)
         n = self.header.get(f'n{axis+1}', 1)
 
-        self.header[f'o{axis+1}'] = o + (n-1)*d
-        self.header[f'd{axis+1}'] = -d
+        new_data.header[f'o{axis+1}'] = o + (n-1)*d
+        new_data.header[f'd{axis+1}'] = -d
 
-        return self
+        return new_data
 
     def pclip(self, perc: float=99.)-> int | float | None:
         """

@@ -4,7 +4,7 @@ from .utils import _check_input_source, _str_match_re
 from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
-
+io.BytesIO()
 def read_rsf(file):
     """
     Read RSF file and return (data, header) or None.
@@ -138,7 +138,7 @@ def read_rsf(file):
 
 
 
-def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="native", fmt="%s"):
+def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="native", fmt="%f"):
     """
     Write RSF file with given header and data.
 

@@ -1,3 +1,4 @@
 *.py[cod]
+*.ignore
 __pycache__/
-*egg-info//
+rsfpy.egg-info/
