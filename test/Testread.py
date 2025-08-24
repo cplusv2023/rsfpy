@@ -130,6 +130,14 @@ def main(file=sys.stderr):
         count += 1
     all += 1
 
+    import matplotlib.pyplot as plt
+
+    fig=plt.figure()
+    ax1 = fig.add_axes(rect=[0.2, 0.2, 0.5, 0.5])
+    ax2 = fig.add_axes(rect=[0.8, 0.2, 0.05, 0.5])
+    dat.wiggle(min1=0.2, max1=0.6, colorbar=True, ax=ax1, cax=ax2, yreverse=True, xreverse=False, transp=True, zplot=3, clip=1e-5)  # test plot function
+    sys.stdin.read(1)  # pause to view the plot
+
     # Summary
     print(f"Summary:\t{all} tests, {(color_str(f'{count} passed', 'green'))}, {color_str(f'{all - count} failed', 'red' if all - count > 0 else 'green')}." , file=file)
 

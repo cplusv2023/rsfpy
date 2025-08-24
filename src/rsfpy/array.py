@@ -24,6 +24,7 @@ import numpy as np
 import io, warnings
 from .utils import _str_match_re
 from .io import read_rsf, write_rsf
+from .plot import grey, wiggle
 
 defaults = {
     "d1": 4.0e-3, "o1": 0., "label1": "Time", "unit1":"s",
@@ -482,6 +483,14 @@ class Rsfdata(np.ndarray):
         # Compute the clipping values
         clip = np.percentile(self, perc)
         return clip
+    
+    # Plot 
+    def grey(self, *args, **kargs):
+        return grey(self, *args, **kargs)
+
+    def wiggle(self, *args, **kargs):
+        return wiggle(self, *args, **kargs)
+
 
 # add some properties for convenience
 for idim in range(9):
