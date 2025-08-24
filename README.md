@@ -17,32 +17,40 @@ Below fancy descriptions are AI-generated. Actually you can use this package for
 pip install .
 ```
 
-### 🚀 Quick start 
+## 🚀 Quick start 
 
+### import 
 ```python
-# import 
-import io
-import numpy as np
 from rsfpy.array import Rsfarray
-
-# Read from RSF file (file path)
+```
+### Read
+```python
+### Read from RSF file (file path)
 rarray = Rsfarray("./data.test")
 
-# Read from fileio
+### Read from fileio
 with open("./test/data.test") as fp:
     rarray = Rsfarray(fp)
-
-# Initialize from ndarray
+```
+### Initialize from ndarray
+```python
+import numpy as np
 narray = np.array([1,2,3])
 rarray = Rsfarray(narray, 
                   header={'d1':1,'o1':0,'label1':'X', 'unit1':''},
                   history="Ndarray [1,2,3]"
                   )
+```
+
+### Empty array and override
+```python
 # Empty array
 empty = Rsfarray()
 # Override array
 empty.read("./data.test")
-
+```
+### Write
+```python
 # Write to file
 rarray.write("./saved.test", # header file
              out='stdin', # data path, 'stdin' or None: append header file
@@ -54,22 +62,23 @@ rarray.write("./saved.test", # header file
 meta = io.StringIO()
 dat = io.BytesIO()
 rarray.write(meta, out=dat)
-
-# Use Rsfarray properties
-## Axis
+```
+### Use Rsfarray properties
+```python
+# Axis
 data = Rsfarray("./data.test")
 taxis, xaxis = data.axis1, data.axis2
-### Or
+## Or
 taxis, xaixs = data.axis([0,1])
-## Sampling parameters
+# Sampling parameters
 nt, dt, ot, label1, unit1 = data.n1, data.d1, data.o1, data.label1, data.unit1
 nx, dx, ox, label2, unit2 = data.n2, data,d2, data.o2, data.label2, data.unit2
-### Or
+## Or
 nt, nx = data.n([0,1])
 dt, dx = data.d([0,1])
-### ...
+## ...
 
-## Try transpose
+# Try transpose
 print(f"before transpose: {data.label1, data.label2}")
 data = data.T
 print(f"after transpose: {data.label1, data.label2}")
@@ -87,6 +96,7 @@ print(f"after window: {data1.d1, data1.o1}")
 ### 📚 Requirements
 - Python >= 3
 - Numpy
+- Matplotlib
 ### 📄 License
 GNU GPLv2
 ### 🤝 Contributing
