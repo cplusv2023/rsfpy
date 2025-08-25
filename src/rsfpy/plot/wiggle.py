@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, Union
+import warnings
 
 def wiggle(
     data: Union[np.ndarray, "Rsfarray"],
@@ -54,7 +55,13 @@ def wiggle(
     plt.Axes
         The axes object with the wiggle plot.
     """
-    # 默认参数
+    # Check dimensions
+    if data.ndim < 2:
+        raise ValueError("Input data must be at least 2D.")
+    elif data.ndim > 2:
+        warnings.warn("Got data dimensions > 2, use first slice.")
+        data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+
     defaults = {
         'clip': None,
         'bias': 0,

@@ -20,7 +20,7 @@
 
 
 
-import io, re, warnings
+import io, re, warnings, os
 
 def _check_input_source(src, mode='rb'):
     """
@@ -52,3 +52,76 @@ def _str_match_re(str_in: str, pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)',
         k, v = token.split("=", 1)
         out_dict[k] = v.strip('"').strip("'")
     return out_dict
+
+
+def _get_datapath(cwd=os.getcwd()):
+
+    top = _datapath()
+    path = os.path.dirname(top)
+    if top[:2] != './':
+        # create a hierarchical structure
+        tree = _dirtree(cwd)
+        for level in tree:
+            if level:
+                path = os.path.join(path, level)
+        _mkdir(path)
+    path = os.path.join(path, os.path.basename(top))
+    return path
+
+def _datapath():
+    '''
+         Path for binary and temporary files.
+
+           Datapath rules:
+           1. check datapath= on the command line (Not applicable)
+           2. check .datapath file in the current directory
+           3. check DATAPATH environmental variable
+           4. check .datapath in the home directory
+           5. use '.' (not a SEPlib behavior)
+
+       Note that option 5 results in:
+       if you move the header to another directory then you must also move
+       the data to the same directory. Confusing consequence.
+
+        :return: str
+           datapath
+    '''
+    path = os.environ.get('DATAPATH')
+    if not path:
+        try:
+            pathfile = open('.datapath','r')
+        except:
+            try:
+                pathfile = open(os.path.join(os.environ.get('HOME'),
+                                             '.datapath'),'r')
+            except:
+                pathfile = None
+        if pathfile:
+            for line in pathfile.readlines():
+                check = re.match(r"(?:%s\s+)?datapath=(\S+)" % os.uname()[1],
+                                 line)
+                if check:
+                    path = check.group(1)
+            pathfile.close()
+    if not path:
+        path = './' # the ultimate fallback
+    return path
+
+def _dirtree(cwd=None):
+    'hierarcical directory structure'
+    if not cwd:
+        cwd = os.getcwd()
+    tree = (os.path.basename(os.path.dirname(os.path.dirname(cwd))),
+            os.path.basename(os.path.dirname(cwd)),
+            os.path.basename(cwd))
+    return tree
+
+
+def _mkdir(dir):
+    'Recursive directory making'
+    while os.path.basename(dir) == '.':
+        dir = os.path.dirname(dir)
+    if dir and not os.path.isdir(dir):
+        _mkdir(os.path.dirname(dir))
+        os.mkdir(dir)
+    return dir

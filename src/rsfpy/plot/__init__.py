@@ -20,6 +20,7 @@
 """
 
 from .grey import grey
+from .grey3 import grey3flat as grey3
 from .wiggle import wiggle
 
-__all__ = ["grey", "wiggle"]
+__all__ = ["grey", "wiggle", "grey3"]

@@ -24,7 +24,7 @@ import numpy as np
 import io, warnings
 from .utils import _str_match_re
 from .io import read_rsf, write_rsf
-from .plot import grey, wiggle
+from .plot import grey, wiggle, grey3
 
 defaults = {
     "d1": 4.0e-3, "o1": 0., "label1": "Time", "unit1":"s",
@@ -39,6 +39,14 @@ defaults = {
 }
 
 class Rsfdata(np.ndarray):
+
+    # Default properties:
+    header = {}
+    history = ""
+
+    # Higher priority
+    __array_priority__ = 10.0
+
     def __new__(cls, input_array: str | io.IOBase | np.ndarray | list | tuple |None = None, header: dict | None = None, history: str = ""):
         """
          Ndarray wrapper for *Madagascar* RSF (regularly sampled format) data.
@@ -102,9 +110,12 @@ class Rsfdata(np.ndarray):
             obj = np.asarray(input_array).view(cls)
             obj.header = {} if header is None else header
             obj.history = history
+            obj.update()
             return obj
 
         raise TypeError(f"Unsupported input type: {type(input_array)}")
+    
+
 
     def __array_finalize__(self, obj):
         """Ensure attributes are preserved in new views/slices."""
@@ -112,9 +123,38 @@ class Rsfdata(np.ndarray):
             return
         self.header = getattr(obj, 'header', {})
         self.history = getattr(obj, 'history', "")
-
         # Update n#
         self.update()
+    
+    def __array_function__(self, func, types, args, kwargs):
+        if not any(issubclass(t, Rsfdata) for t in types):
+            return NotImplemented
+
+        header_all = {}
+        def collect(obj):
+            if isinstance(obj, Rsfdata):
+                header_all.update(obj.header)
+            elif isinstance(obj, (list, tuple)):
+                for x in obj:
+                    collect(x)
+        for arg in args:
+            collect(arg)
+
+        base_args = [
+            [np.asarray(a) for a in arg] if isinstance(arg, (list, tuple))
+            else np.asarray(arg) if isinstance(arg, Rsfdata)
+            else arg
+            for arg in args
+        ]
+        res = func(*base_args, **kwargs)
+
+        if isinstance(res, np.ndarray):
+            res = np.asarray(res).view(type(self))
+            res.update(header_all)
+
+        return res
+       
+
 
     def read(self, file: str | io.IOBase):
         """
@@ -232,7 +272,8 @@ class Rsfdata(np.ndarray):
         if isinstance(axis, (list, tuple, np.ndarray)):
             axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
             return [self.header.get(f"n{ax+1}", 1 if self.data else 0) for ax in axis]
-        return self.header.get(f"n{axis+1}", 1 if self.data else 0)
+        # return self.header.get(f"n{axis+1}", 1 if self.data else 0)
+        return (self.shape[axis] if axis < self.ndim else 1) if self.size > 0 else 0
 
     def d(self, axis: int | list | tuple | np.ndarray = 0) -> float | tuple:
         """
@@ -490,6 +531,9 @@ class Rsfdata(np.ndarray):
 
     def wiggle(self, *args, **kargs):
         return wiggle(self, *args, **kargs)
+
+    def grey3(self, *args, **kargs):
+        return grey3(self, *args, **kargs)
 
 
 # add some properties for convenience

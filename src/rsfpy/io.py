@@ -1,6 +1,6 @@
 import numpy as np
 import warnings, re, os, io, datetime, socket
-from .utils import _check_input_source, _str_match_re
+from .utils import _check_input_source, _str_match_re, _get_datapath
 from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
@@ -146,11 +146,11 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     arr : ndarray
         The data array to write.
     file : str or file-like object
-        The output file or file-like object.
+        The output file (header) or file-like object.
     header : dict
         The header information to write.
     out : str, optional
-        The output file path (if different from `file`).
+        Data bytes output file or file-like object.
     form : str, optional
         The data format (default is "native").
         native: little-endian
@@ -169,13 +169,25 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     if file_fp is None:
         raise ValueError(f"Cannot open file: {file}")
     
-    if out is None or out == 'stdout':
+    if out is None:
+        if isinstance(file, str):
+            fname = os.path.basename(file)
+            fname = os.path.join(_get_datapath(), fname + '@')
+            out_fp = _check_input_source(fname, 'wb')
+            outheader["in"] = os.path.abspath(fname)
+        else:
+            out_fp = file_fp
+        
+    elif out == 'stdout':
         out_fp = file_fp
     elif isinstance(out, str) or isinstance(out, io.IOBase):
         out_fp = _check_input_source(out, 'wb')
         if out_fp is None:
             raise ValueError(f"Cannot open output file: {out}")
-        outheader["in"] = os.path.abspath(out)
+        if isinstance(out, str):
+            outheader["in"] = os.path.abspath(out)
+        else:
+            outheader["in"] = out
 
     dtype = arr.dtype.name
     dtype = ''.join([c for c in dtype if c.isalpha()])

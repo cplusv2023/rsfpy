@@ -131,11 +131,21 @@ def main(file=sys.stderr):
     all += 1
 
     import matplotlib.pyplot as plt
+    print(dat.n1, dat.n2, file=sys.stderr)
+
+    dat.put("label3=OK")
+    dat = np.dstack([dat, dat])
+    # dat = Rsfdata(dat)
+    print(dat.n1, dat.n2, file=sys.stderr)
+    dat = dat.reshape(dat.n1, dat.n2, 2) 
+    print(dat.label3, file=sys.stderr)
 
     fig=plt.figure()
     ax1 = fig.add_axes(rect=[0.2, 0.2, 0.5, 0.5])
     ax2 = fig.add_axes(rect=[0.8, 0.2, 0.05, 0.5])
-    dat.wiggle(min1=0.2, max1=0.6, colorbar=True, ax=ax1, cax=ax2, yreverse=True, xreverse=False, transp=True, zplot=3, clip=1e-5)  # test plot function
+    dat = Rsfdata(path + "/ltft.rsf")
+    # dat.wiggle(min1=0.2, max1=0.6, colorbar=True, ax=ax1, cax=ax2, yreverse=True, xreverse=False, transp=True, zplot=3, clip=1e-5)  # test plot function
+    dat.grey3(frame1=100,frame2=50, frame3=100,ax=ax1, cax=ax2, colorbar=True, cmap='jet', allpos=True, title="Spectra")
     sys.stdin.read(1)  # pause to view the plot
 
     # Summary
