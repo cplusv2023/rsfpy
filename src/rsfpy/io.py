@@ -5,7 +5,7 @@ from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
 io.BytesIO()
-def read_rsf(file):
+def read_rsf(file, order='F'):
     """
     Read RSF file and return (data, header) or None.
 
@@ -18,6 +18,8 @@ def read_rsf(file):
     -------
     list [ndarray, dict, str]
         A list containing the read data, header, and history information.
+    order : str
+        The order in which to read the data (default is 'F' for Fortran-style).
     """
     try:
         close_after = isinstance(file, str)
@@ -123,7 +125,7 @@ def read_rsf(file):
             if fmt_A == "xdr":
                 arr = arr.byteswap().newbyteorder()
 
-        arr = arr.reshape(shape)
+        arr = arr.reshape(shape, order='F')
 
         if in_val != "stdin":
             data_file.close()

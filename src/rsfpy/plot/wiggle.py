@@ -56,6 +56,7 @@ def wiggle(
         The axes object with the wiggle plot.
     """
     # Check dimensions
+    data = np.squeeze(data)
     if data.ndim < 2:
         raise ValueError("Input data must be at least 2D.")
     elif data.ndim > 2:
@@ -78,7 +79,7 @@ def wiggle(
     else:
         fig = ax.figure
 
-    data = data.T if transp else data
+    data = data if transp else data.T
     # 数据属性（Rsfarray 支持）
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", None)
@@ -89,7 +90,6 @@ def wiggle(
             label1 = data.label_unit(axis=1)
         if label2 is None and hasattr(data, "label_unit"):
             label2 = data.label_unit(axis=0)
-    print(label1, label2)
     if d1 is None or d1 == 0: d1 = 1.
     if d2 is None or d2 == 0: d2 = 1.
     if o1 is None: o1 = 0.
@@ -99,10 +99,9 @@ def wiggle(
 
     # 坐标范围
     if min1 is None: min1 = o1
-    if max1 is None: max1 = o1 + d1 * nt
+    if max1 is None: max1 = o1 + d1 * (nt-1)
     if min2 is None: min2 = o2
-    if max2 is None: max2 = o2 + d2 * nx
-        
+    if max2 is None: max2 = o2 + d2 * (nx-1)
 
     t = np.linspace(min1, max1, nt)  # 时间坐标
     x_positions = np.linspace(min2, max2, nx)  # 道位置
@@ -151,13 +150,11 @@ def wiggle(
         neg_mask = trace < 0
         ax.fill_betweenx(t, x_positions[i], wiggle_x, where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
 
-    # ---- 坐标 & 标签 ----
-    ax.set_xlim(min2, max2)
-    ax.set_ylim(max1, min1) 
+
     if label1:
-        ax.set_ylabel(label1)
+        ax.set_xlabel(label1)
     if label2:
-        ax.set_xlabel(label2)
+        ax.set_ylabel(label2)
     if title:
         ax.set_title(title)
     if yreverse:

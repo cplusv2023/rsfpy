@@ -146,7 +146,27 @@ class Rsfdata(np.ndarray):
             else arg
             for arg in args
         ]
-        res = func(*base_args, **kwargs)
+
+        if func is np.squeeze:
+            # 处理 axis
+            if len(base_args) > 1:
+                sq_axis = base_args[1]
+                if isinstance(sq_axis, int):
+                    sq_axis = (sq_axis,)
+            else:
+                sq_axis = tuple(i for i, s in enumerate(base_args[0].shape) if s == 1)
+
+            # 更新 header
+            sq_axis = sorted(sq_axis)
+            for iax in sq_axis:
+                for idim in range(base_args[0].ndim+ len(sq_axis)):
+                    if idim > iax:
+                        for key in ('d', 'o', 'label', 'unit'):
+                            header_all[f'{key}{idim}'] = header_all.get(f'{key}{idim+1}', defaults.get(f'{key}{idim+1}', None))
+            res = np.squeeze(*base_args, **kwargs)
+
+        else:
+            res = func(*base_args, **kwargs)
 
         if isinstance(res, np.ndarray):
             res = np.asarray(res).view(type(self))
@@ -222,8 +242,8 @@ class Rsfdata(np.ndarray):
                 dkey = f"d{idim + 1}"
                 self.header.update({dkey: defaults.get(dkey, 4.e-3)})
 
-
-    def put(self, header_str: str = ''):
+    
+    def sfput(self, header_str: str = '', **kargs):
         """
         Modify header information.
 
@@ -232,10 +252,11 @@ class Rsfdata(np.ndarray):
         header_str : str
             The header information to add or modify.
         """
+        self.update(kargs)
         header = _str_match_re(header_str)
         self.update(header)
 
-    def axis(self, axis: int = 0) -> np.ndarray:
+    def axis(self, axis: int | list | tuple | np.ndarray = 0) -> np.ndarray | tuple:
         """
         Get the regular sampling of specific axis.
 
@@ -249,7 +270,9 @@ class Rsfdata(np.ndarray):
         np.ndarray
             The regular sampling of specific axis.
         """
-        if axis < self.ndim:
+        if isinstance(axis, (list, tuple, np.ndarray)):
+            return [self.axis(ax) for ax in axis]
+        elif axis < self.ndim:
             n = self.n(axis)
             o = self.o(axis)
             d = self.d(axis)
@@ -311,7 +334,7 @@ class Rsfdata(np.ndarray):
         if isinstance(axis, (list, tuple, np.ndarray)):
             axis = axis[:len(axis)] if len(axis) < self.ndim else axis[:self.ndim]
             return [self.header.get(f"o{ax+1}", defaults.get(f"o{ax+1}", 0.0)) for ax in axis]
-        return self.header.get(f"o{axis+1}", defaults.get(f"o{axis+1}", 0.0))
+        return float(self.header.get(f"o{axis+1}", defaults.get(f"o{axis+1}", 0.0)))
 
     def label(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
         """
@@ -418,7 +441,7 @@ class Rsfdata(np.ndarray):
         """
         return self.transpose()
     
-    def window(self, cmd=None, **kwargs):
+    def window(self, cmd=None, squeeze=True, **kwargs):
         """
         Apply simple windowing with only n#, j#, f# parameters.
 
@@ -426,6 +449,8 @@ class Rsfdata(np.ndarray):
         ----------
         cmd : str or None
             Command-line style, e.g. 'n1=100 j1=2'.
+        squeeze : bool
+            Whether to squeeze the output array.
         n# : int
             Number of samples along axis #.
         j# : int
@@ -481,6 +506,7 @@ class Rsfdata(np.ndarray):
             new_meta[f'd{ax+1}'] = (self.d(ax) * j)
 
         new_data.header = new_meta
+        if squeeze: new_data = np.squeeze(new_data)
         return new_data
 
     def flip(self, axis: int = 0):

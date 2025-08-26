@@ -62,6 +62,7 @@ def grey(
         The axes object with the image plot.
     """
     # Check dimensions
+    data = np.squeeze(data)
     if data.ndim < 2:
         raise ValueError("Input data must be at least 2D.")
     elif data.ndim > 2:
@@ -88,6 +89,7 @@ def grey(
     else:
         fig = ax.figure
 
+    data = data if transp else data.T
     # ---- 2. 数据属性获取 ----
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", None)
@@ -107,19 +109,19 @@ def grey(
     ny, nx = data.shape
     if yreverse:
         params['origin'] = 'upper'
-        extent1 = (o1 + d1 * ny, o1)
+        extent1 = (o1 + d1 * (ny-1), o1)
     else:
         params['origin'] = 'lower'
-        extent1 = (o1, o1 + d1 * ny)
+        extent1 = (o1, o1 + d1 * (ny-1))
     if xreverse:
-        extent2 = (o2, o2 + d2 * nx)
+        extent2 = (o2 + d2 * (nx-1), o2)
     else:
-        extent2 = (o2 + d2 * nx, o2)
-    extent = extent2 + extent1 
+        extent2 = (o2, o2 + d2 * (nx-1))
+    extent = extent2 + extent1
     if min1 is None: min1 = o1
-    if max1 is None: max1 = o1 + d1 * ny
+    if max1 is None: max1 = o1 + d1 * (ny-1)
     if min2 is None: min2 = o2
-    if max2 is None: max2 = o2 + d2 * nx
+    if max2 is None: max2 = o2 + d2 * (nx-1)
 
     # ---- 4. 计算 vmin / vmax ----
     vmin = params['vmin']
@@ -169,7 +171,7 @@ def grey(
     imshow_kwargs.update({'vmin': vmin, 'vmax': vmax})
 
     # ---- 5. 绘制 ----
-    im = ax.imshow(data.T if transp else data, extent=extent, **imshow_kwargs)
+    im = ax.imshow(data, extent=extent, **imshow_kwargs)
 
     # ---- 6. colorbar ----
     if colorbar:
@@ -188,9 +190,9 @@ def grey(
 
     ax.set_xlim(min2, max2)
     if yreverse:
-        ax.set_ylim(min1, max1)
-    else: 
         ax.set_ylim(max1, min1)
+    else: 
+        ax.set_ylim(min1, max1)
     if xreverse:
         ax.set_xlim(max2, min2)
     else:

@@ -24,7 +24,7 @@ import numpy as np
 
 path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(path + "/../src/")
-from rsfpy.array import Rsfdata
+from rsfpy.array import Rsfarray
 
 
 def color_str(string, color='green'):
@@ -51,7 +51,7 @@ def main(file=sys.stderr):
     # None test
     print(f"{all+1}:", end="\t", file=file)
     try:
-        dat = Rsfdata()
+        dat = Rsfarray()
     except Exception as e:
         if verbose: print(color_str(f"Error creating empty Rsfdata: {e}", 'red'), file=file)
         else: print(color_str(f'failed', 'red'), file=file)
@@ -64,7 +64,7 @@ def main(file=sys.stderr):
     print(f"{all+1}:", end="\t", file=file)
     try:
         arr = np.array([1, 2, 3])
-        dat = Rsfdata(arr, header={"n1":3}, history="test")
+        dat = Rsfarray(arr, header={"n1":3}, history="test")
     except Exception as e:
         if verbose: print(color_str(f"Error creating Rsfdata from ndarray: {e}", 'red'), file=file)
         else: print(color_str(f'failed', 'red'), file=file)
@@ -78,7 +78,7 @@ def main(file=sys.stderr):
     print(f"{all+1}:", end="\t", file=file)
     try:
         # locate directory of __file__
-        dat = Rsfdata(path + "/dat.test")
+        dat = Rsfarray(path + "/dat.test")
     except Exception as e:
         if verbose: print(color_str(f"Error creating Rsfdata from file: {e}", 'red'), file=file)
         else: print(color_str(f'failed', 'red'), file=file)
@@ -91,7 +91,7 @@ def main(file=sys.stderr):
     # Rsfdata test
     print(f"{all+1}:", end="\t", file=file)
     try:
-        dat = Rsfdata(dat)
+        dat = Rsfarray(dat)
     except Exception as e:
         if verbose: print(color_str(f"Error creating Rsfdata from Rsfdata: {e}", 'red'), file=file)
         else: print(color_str(f'failed', 'red'), file=file)
@@ -131,22 +131,20 @@ def main(file=sys.stderr):
     all += 1
 
     import matplotlib.pyplot as plt
-    print(dat.n1, dat.n2, file=sys.stderr)
 
-    dat.put("label3=OK")
+    dat.sfput("label3=OK")
     dat = np.dstack([dat, dat])
-    # dat = Rsfdata(dat)
-    print(dat.n1, dat.n2, file=sys.stderr)
+    # dat = Rsfarray(dat)
     dat = dat.reshape(dat.n1, dat.n2, 2) 
-    print(dat.label3, file=sys.stderr)
-
-    fig=plt.figure()
-    ax1 = fig.add_axes(rect=[0.2, 0.2, 0.5, 0.5])
-    ax2 = fig.add_axes(rect=[0.8, 0.2, 0.05, 0.5])
-    dat = Rsfdata(path + "/ltft.rsf")
+    # dat.wiggle()
+    # fig=plt.figure()
+    # ax1 = fig.add_axes(rect=[0.2, 0.2, 0.5, 0.5])
+    # ax2 = fig.add_axes(rect=[0.8, 0.2, 0.05, 0.5])
+    dat = Rsfarray(path + "/ltft.rsf")
     # dat.wiggle(min1=0.2, max1=0.6, colorbar=True, ax=ax1, cax=ax2, yreverse=True, xreverse=False, transp=True, zplot=3, clip=1e-5)  # test plot function
-    dat.grey3(frame1=100,frame2=50, frame3=100,ax=ax1, cax=ax2, colorbar=True, cmap='jet', allpos=True, title="Spectra")
-    sys.stdin.read(1)  # pause to view the plot
+    dat.grey3(frame1=100,frame2=50, frame3=100, point1=0.6, point2=0.6, colorbar=True, cmap='jet', transp=True, yrevserse=True, allpos=True, title="Spectra", wig=True, zplot=2, pcolor='k')
+    import matplotlib.pyplot as plt
+    plt.show()
 
     # Summary
     print(f"Summary:\t{all} tests, {(color_str(f'{count} passed', 'green'))}, {color_str(f'{all - count} failed', 'red' if all - count > 0 else 'green')}." , file=file)
