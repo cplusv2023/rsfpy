@@ -129,23 +129,7 @@ def main(file=sys.stderr):
         else: print(color_str(f'passed', 'green'), file=file)
         count += 1
     all += 1
-
-    import matplotlib.pyplot as plt
-
-    dat.sfput("label3=OK")
-    dat = np.dstack([dat, dat])
-    # dat = Rsfarray(dat)
-    dat = dat.reshape(dat.n1, dat.n2, 2) 
-    # dat.wiggle()
-    # fig=plt.figure()
-    # ax1 = fig.add_axes(rect=[0.2, 0.2, 0.5, 0.5])
-    # ax2 = fig.add_axes(rect=[0.8, 0.2, 0.05, 0.5])
-    dat = Rsfarray(path + "/ltft.rsf")
-    # dat.wiggle(min1=0.2, max1=0.6, colorbar=True, ax=ax1, cax=ax2, yreverse=True, xreverse=False, transp=True, zplot=3, clip=1e-5)  # test plot function
-    dat.grey3(frame1=100,frame2=50, frame3=100, point1=0.6, point2=0.6, colorbar=True, cmap='jet', transp=True, yrevserse=True, allpos=True, title="Spectra", wig=True, zplot=2, pcolor='k')
-    import matplotlib.pyplot as plt
-    plt.show()
-
+    
     # Summary
     print(f"Summary:\t{all} tests, {(color_str(f'{count} passed', 'green'))}, {color_str(f'{all - count} failed', 'red' if all - count > 0 else 'green')}." , file=file)
 
