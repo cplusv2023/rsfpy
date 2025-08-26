@@ -1,6 +1,6 @@
 # rsfpy
 
-**rsfpy** is a Python toolkit for reading, writing, and manipulating [*Madagascar*](https://ahay.org "Madagascar Main Page") [<ins>*RSF* (Regularly Sampled Format) </ins>](https://ahay.org/wiki/Guide_to_RSF_file_format "RSF data format")  scientific datasets.  
+**rsfpy** is a Python toolkit for reading, writing, manipulating and plotting [*Madagascar*](https://ahay.org "Madagascar Main Page") [<ins>*RSF* (Regularly Sampled Format) </ins>](https://ahay.org/wiki/Guide_to_RSF_file_format "RSF data format")  scientific datasets.  
 Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scientific computing with Python"), it supports efficient slicing, transposing, and subsampling, while automatically updating metadata (e.g., n#/o#/d#/label#/unit#) to keep axis descriptions consistent with data transformations.
 
 ## ✨ Features
@@ -26,10 +26,10 @@ from rsfpy.array import Rsfarray
 ### Read
 ```python
 ### Read from RSF file (file path)
-rarray = Rsfarray("./data.test")
+rarray = Rsfarray("./dat.test")
 
 ### Read from fileio
-with open("./test/data.test") as fp:
+with open("./test/dat.test") as fp:
     rarray = Rsfarray(fp)
 ```
 ### Initialize from ndarray
@@ -47,12 +47,12 @@ rarray = Rsfarray(narray,
 # Empty array
 empty = Rsfarray()
 # Override array
-empty.read("./data.test")
+empty.read("./test/dat.test")
 ```
 ### Write
 ```python
 # Write to file
-rarray.write("./saved.test", # header file
+rarray.write("./test/saved.test", # header file
              out='stdin', # data path, 'stdin' or None: append header file
              form='ascii', # 'native' for binary 
              fmt='%.4e', # The data format for ascii (default is "%f").
@@ -66,7 +66,7 @@ rarray.write(meta, out=dat)
 ### Use Rsfarray properties
 ```python
 # Axis
-data = Rsfarray("./data.test")
+data = Rsfarray("./test/dat.test")
 taxis, xaxis = data.axis1, data.axis2
 ## Or
 taxis, xaixs = data.axis([0,1])
@@ -92,6 +92,20 @@ print(f"after window: {data1.d1, data1.o1}")
 
 ```
 
+### Plotting
+``` python
+# Grey/wiggle image
+## Support subplot mode
+import matplotlib.pyplot as plt
+
+data = Rsfarray("./test/dat.test")
+fig, ax = plt.subplots(2, 1, figsize=[6, 8])
+data.grey(cmap='seismic', show=False, ax=ax[0], colorbar=True, title='Grey plot')
+data.wiggle(transp=True, yreverse=True, show=False, ax=ax[1], colorbar=True, title='Wiggle Plot', zplot=2.)
+fig.set_tight_layout(True)
+fig.show()
+```
+![Grey/wiggle image plot](./img/figure1.png)
 
 ### 📚 Requirements
 - Python >= 3
