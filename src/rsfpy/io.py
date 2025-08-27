@@ -4,7 +4,7 @@ from .utils import _check_input_source, _str_match_re, _get_datapath
 from .version import __version__
 
 RSFHSPLITER = b"\x0c\x0c\x04"
-io.BytesIO()
+
 def read_rsf(file, order='F'):
     """
     Read RSF file and return (data, header) or None.
