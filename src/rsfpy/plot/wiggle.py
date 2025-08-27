@@ -95,16 +95,24 @@ def wiggle(
     if o1 is None: o1 = 0.
     if o2 is None: o2 = 0.
 
-    nt, nx = data.shape
+    n1, n2 = data.shape
+
+    if hasattr(data, "axis"):
+        axis1, axis2 = data.axis([0, 1])
+    else:
+        axis1 = np.arange(n1) * d1 + o1
+        axis2 = np.arange(n2) * d2 + o2
+
+
 
     # 坐标范围
     if min1 is None: min1 = o1
-    if max1 is None: max1 = o1 + d1 * (nt-1)
+    if max1 is None: max1 = o1 + d1 * (n1-1)
     if min2 is None: min2 = o2
-    if max2 is None: max2 = o2 + d2 * (nx-1)
+    if max2 is None: max2 = o2 + d2 * (n2-1)
 
-    t = np.linspace(min1, max1, nt)  # 时间坐标
-    x_positions = np.linspace(min2, max2, nx)  # 道位置
+    t = axis1 
+    x_positions = axis2 # 道位置
 
     # ---- 振幅裁剪 ----
     clip = params['clip']
@@ -131,13 +139,14 @@ def wiggle(
     if zplot == 0:
         zplot = 1.0
     # 默认最大幅度
-    default_amp = (max2 - min2) / nx / 2
+    default_amp = (max2 - min2) / n2 / 2
     scale = default_amp * abs(zplot) / clip
 
     # ---- 绘制每道 ----
-    for i in range(nx):
+    for i in range(n2):
+        if not x_positions[i] >= min2 and x_positions[i] <= max2:
+            continue
         trace = data[:, i] - bias
-        trace = np.clip(trace, vmin - bias, vmax - bias)  # 振幅限制
         wiggle_x = x_positions[i] + trace * scale
         # 画线
         ax.plot(wiggle_x, t, color=lcolor, linewidth=params['linewidth'])
@@ -150,6 +159,7 @@ def wiggle(
         neg_mask = trace < 0
         ax.fill_betweenx(t, x_positions[i], wiggle_x, where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
 
+    max2 + trace
 
     if label1:
         ax.set_xlabel(label1)

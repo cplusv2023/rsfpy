@@ -21,6 +21,7 @@
 
 
 import io, re, warnings, os
+from subprocess import Popen, PIPE, SubprocessError, run as Run
 
 def _check_input_source(src, mode='rb'):
     """
@@ -125,3 +126,47 @@ def _mkdir(dir):
         _mkdir(os.path.dirname(dir))
         os.mkdir(dir)
     return dir
+
+
+def flow(cmd, source=None, verb=False):
+    '''
+    RSF Flow
+    Usage:
+      > sfin = flow("sfmath n1=1 output='1' | sfin")\n
+      > print(sfin.read().decode())\n
+        in:
+            in="stdin"\n
+            esize=4 type=float form=native\n
+            n1=1           d1=1           o1=0\n
+            1 elements 4 bytes\n
+    :param source: str | BaseIO | None
+        Input data file
+    :param cmd: str
+    :return: BytesIO
+    '''
+    out = io.BytesIO()
+
+    if source is None:
+        fsrc = None
+    elif type(source) == str:
+        fsrc = open(source,'rb')
+    elif isinstance(source,io.IOBase):
+        fsrc = source
+    else: raise TypeError("Wrong type of source: %s"%type(source))
+
+    if fsrc is not None:
+        fsrc.seek(0)
+        subprc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True)
+        [sout, serr] = subprc.communicate(fsrc.read())
+        if subprc.returncode != 0:
+            raise SubprocessError("In Command: '%s':\n%s"%(cmd,serr.decode()))
+    else :
+        subprc = Run(cmd, stdin=None, stdout=PIPE, stderr=PIPE, shell=True, check=True)
+        sout = subprc.stdout
+        serr = subprc.stderr
+        if subprc.returncode != 0:
+            raise SubprocessError("In Command: '%s':\n"%(cmd,serr.read().decode()))
+
+    out.write(sout)
+    out.seek(0)
+    return out

@@ -230,8 +230,8 @@ def grey3cube(
 
 
     ny, nx, nz = data.shape
-    frame1 = min(nx-1, frame1)
-    frame2 = min(ny-1, frame2)
+    frame1 = min(ny-1, frame1)
+    frame2 = min(nx-1, frame2)
     frame3 = min(nz-1, frame3)
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", 1.0)
@@ -266,7 +266,6 @@ def grey3cube(
         slice1 = data[:, :, frame3]  # n1-n2
         slice2 = data[:, frame2, :]  # n1-n3
         slice3 = data[frame1, :, :]  # n2-n3
-
     allslice = np.concatenate([slice1.ravel(), slice2.ravel(), slice3.ravel()])
     if bias is None:
         bias = 0

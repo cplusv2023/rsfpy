@@ -123,7 +123,10 @@ def read_rsf(file, order='F'):
         else:
             arr = np.frombuffer(data_file.read(), dtype=dtype)
             if fmt_A == "xdr":
-                arr = arr.byteswap().newbyteorder()
+                swapped = arr.byteswap()
+                if hasattr(swapped, 'newbyteorder'):
+                    arr = swapped.newbyteorder()
+                else: arr = arr.view(swapped.dtype.newbyteorder())
 
         arr = arr.reshape(shape, order='F')
 

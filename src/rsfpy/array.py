@@ -22,7 +22,7 @@
 
 import numpy as np
 import io, warnings
-from .utils import _str_match_re
+from .utils import _str_match_re, flow
 from .io import read_rsf, write_rsf
 from .plot import grey, wiggle, grey3
 
@@ -255,6 +255,36 @@ class Rsfdata(np.ndarray):
         self.update(kargs)
         header = _str_match_re(header_str)
         self.update(header)
+
+    def flow(self, cmd: str, rsfarray=True, verb: bool = False):
+        """
+        Apply RSF flow command to the data.
+
+        Parameters
+        ----------
+        cmd : str
+            The RSF command to apply.
+        rsfarray : bool
+            Whether to return the output as an Rsfdata object (default is True).
+            If False, return a BytesIO object containing the raw output data.
+        verb : bool
+            Whether to print verbose output (default is False).
+        """
+        inp = io.BytesIO()
+        self.write(inp)
+        inp.seek(0)
+        out = flow(cmd, source=inp, verb=verb)
+        out.seek(0)
+        if rsfarray: 
+            rout =  Rsfdata(out)
+            if rout.size == 0:
+                warnings.warn("No RSF data read from flow output, use BytesIo instead.")
+                out.seek(0)
+                return out
+            return rout
+        else: return out
+
+
 
     def axis(self, axis: int | list | tuple | np.ndarray = 0) -> np.ndarray | tuple:
         """
