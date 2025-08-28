@@ -133,7 +133,7 @@ def main():
     clip = getfloat(par_dict, 'clip', None)
     pclip = getfloat(par_dict, 'pclip', 99.)
     bias = getfloat(par_dict, 'bias', 0.)
-    fig_width = getfloat(par_dict, 'screenwidth', 6.)
+    fig_width = getfloat(par_dict, 'screenwidth', 8.)
     fig_height = getfloat(par_dict, 'screenheight', 6.)
     facecolor = par_dict.get('bgcolor', 'w')
     dpi = getfloat(par_dict, 'dpi', 100.)
@@ -162,7 +162,7 @@ def main():
     label2loc = par_dict.get('wherexlabel', 'bottom').lower()
     tick1loc = par_dict.get('whereytick', label1loc).lower()
     tick2loc = par_dict.get('wherextick', label2loc).lower()
-    titleloc = par_dict.get('wheretitle', 'top').lower()
+    titleloc = getfloat(par_dict, 'wheretitle', None)
     format1 = par_dict.get('format1', None)
     format2 = par_dict.get('format2', None)
     formatbar = par_dict.get('formatbar', None)
@@ -277,12 +277,22 @@ def main():
 
 
     if title:
-        ax.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
-        if titleloc in ['bottom', 'top']:
-            ax.title.set_position([0.5, 1.05 if titleloc=='top' else -0.15])
-        else:
-            sf_warning(f"Warning: invalid wheretitle={titleloc}, use default top.")
-            ax.title.set_position([0.5, 1.05])
+        if titleloc:
+            try:ax.set_title(title,
+                        fontsize=titlesz,
+                        fontweight=titlefat,
+                        color=frame_color,
+                        y=titleloc)
+            except:
+                sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
+                ax.set_title(title,
+                        fontsize=titlesz,
+                        fontweight=titlefat,
+                        color=frame_color)
+        else:ax.set_title(title,
+                            fontsize=titlesz,
+                            fontweight=titlefat,
+                            color=frame_color)
     if label1loc in ['left', 'right']:
         ax.yaxis.set_label_position(label1loc)
     else:

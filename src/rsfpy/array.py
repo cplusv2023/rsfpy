@@ -22,6 +22,7 @@
 
 import numpy as np
 import io, warnings
+from typing import Optional, Union
 from .utils import _str_match_re, flow
 from .io import read_rsf, write_rsf
 from .plot import grey, wiggle, grey3
@@ -47,7 +48,7 @@ class Rsfdata(np.ndarray):
     # Higher priority
     __array_priority__ = 10.0
 
-    def __new__(cls, input_array: str | io.IOBase | np.ndarray | list | tuple |None = None, header: dict | None = None, history: str = ""):
+    def __new__(cls, input_array: Optional[Union[str, io.IOBase, np.ndarray, list, tuple]] = None, header: Optional[dict] = None, history: str = ""):
         """
          Ndarray wrapper for *Madagascar* RSF (regularly sampled format) data.
          RSF data format: https://www.ahay.org/wiki/Guide_to_RSF_file_format
@@ -176,7 +177,7 @@ class Rsfdata(np.ndarray):
        
 
 
-    def read(self, file: str | io.IOBase):
+    def read(self, file: Optional[Union[str, io.IOBase]]):
         """
         Read RSF data from a file or file-like object.
         This will override the existing data and header information in the array.
@@ -286,7 +287,7 @@ class Rsfdata(np.ndarray):
 
 
 
-    def axis(self, axis: int | list | tuple | np.ndarray = 0) -> np.ndarray | tuple:
+    def axis(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[np.ndarray, tuple]:
         """
         Get the regular sampling of specific axis.
 
@@ -308,7 +309,7 @@ class Rsfdata(np.ndarray):
             d = self.d(axis)
             return np.arange(n) * d + o
 
-    def n(self, axis: int | list | tuple | np.ndarray = 0) -> int | tuple:
+    def n(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[int, tuple]:
         """
         Get the number of samples along a specific axis.
 
@@ -328,7 +329,7 @@ class Rsfdata(np.ndarray):
         # return self.header.get(f"n{axis+1}", 1 if self.data else 0)
         return (self.shape[axis] if axis < self.ndim else 1) if self.size > 0 else 0
 
-    def d(self, axis: int | list | tuple | np.ndarray = 0) -> float | tuple:
+    def d(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[float, tuple]:
         """
         Get the sampling interval along a specific axis.
 
@@ -347,7 +348,7 @@ class Rsfdata(np.ndarray):
             return [float(self.header.get(f"d{ax+1}", defaults.get(f"d{ax+1}", 4.e-3))) for ax in axis]
         return float(self.header.get(f"d{axis+1}", defaults.get(f"d{axis+1}", 4.e-3)))
 
-    def o(self, axis: int | list | tuple | np.ndarray = 0) -> float | tuple:
+    def o(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[float, tuple]:
         """
         Get the offset along a specific axis.
 
@@ -366,7 +367,7 @@ class Rsfdata(np.ndarray):
             return [self.header.get(f"o{ax+1}", defaults.get(f"o{ax+1}", 0.0)) for ax in axis]
         return float(self.header.get(f"o{axis+1}", defaults.get(f"o{axis+1}", 0.0)))
 
-    def label(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
+    def label(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[str, tuple]:
         """
         Get the label along a specific axis.
 
@@ -385,7 +386,7 @@ class Rsfdata(np.ndarray):
             return [self.header.get(f"label{ax+1}", defaults.get(f"label{ax+1}", "")) for ax in axis]
         return self.header.get(f"label{axis+1}", defaults.get(f"label{axis+1}", ""))
 
-    def unit(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
+    def unit(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[str, tuple]:
         """
         Get the unit along a specific axis.
 
@@ -404,7 +405,7 @@ class Rsfdata(np.ndarray):
             return [self.header.get(f"unit{ax+1}", defaults.get(f"unit{ax+1}", "")) for ax in axis]
         return self.header.get(f"unit{axis+1}", defaults.get(f"unit{axis+1}", ""))
 
-    def label_unit(self, axis: int | list | tuple | np.ndarray = 0) -> str | tuple:
+    def label_unit(self, axis: Optional[Union[int, list, tuple, np.ndarray]] = 0) -> Union[str, tuple]:
         """
         Get the 'label (unit)' along a specific axis.
 
@@ -429,7 +430,7 @@ class Rsfdata(np.ndarray):
             return f"{label} ({unit})"
         return label
 
-    def transpose(self, axes: tuple | list =None):
+    def transpose(self, axes: Optional[Union[tuple, list]] = None):
         """
         Transpose array and update RSF header accordingly
         (n#, o#, d#, label#, unit# will be permuted with axes).
@@ -559,7 +560,7 @@ class Rsfdata(np.ndarray):
 
         return new_data
 
-    def pclip(self, perc: float=99.)-> int | float | None:
+    def pclip(self, perc: float=99.)-> Optional[Union[int, float]]:
         """
         Caculate the percentile clipping values.
 

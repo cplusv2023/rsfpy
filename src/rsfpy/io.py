@@ -128,7 +128,7 @@ def read_rsf(file, order='F'):
                     arr = swapped.newbyteorder()
                 else: arr = arr.view(swapped.dtype.newbyteorder())
 
-        arr = arr.reshape(shape, order='F')
+        arr = arr.reshape(shape, order=order)
 
         if in_val != "stdin":
             data_file.close()

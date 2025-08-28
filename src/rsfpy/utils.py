@@ -21,6 +21,7 @@
 
 
 import io, re, warnings, os
+from typing import Optional, Union
 from subprocess import Popen, PIPE, SubprocessError, run as Run
 
 def _check_input_source(src, mode='rb'):
@@ -41,7 +42,7 @@ def _check_input_source(src, mode='rb'):
         return None
 
 
-def _str_match_re(str_in: str, pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', strip: str | None = None) -> dict:
+def _str_match_re(str_in: str, pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', strip: Optional[Union[str, None]] = None) -> dict:
     """
     Match strings in the input using the specified regex pattern.
     """
