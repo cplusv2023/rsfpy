@@ -185,6 +185,7 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
         
     elif out == 'stdout':
         out_fp = file_fp
+        outheader["in"] = 'stdin'
     elif isinstance(out, str) or isinstance(out, io.IOBase):
         out_fp = _check_input_source(out, 'wb')
         if out_fp is None:

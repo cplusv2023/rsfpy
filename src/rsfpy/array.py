@@ -236,12 +236,15 @@ class Rsfdata(np.ndarray):
         """
         self.header.update(new_header)
         # Update n#
-        for idim in range(self.ndim):
+        for idim in range(9):
             n_key = f"n{idim + 1}"
-            self.header.update({n_key: self.shape[idim]})
-            if self.d(idim) == 0.:
-                dkey = f"d{idim + 1}"
-                self.header.update({dkey: defaults.get(dkey, 4.e-3)})
+            if idim < self.ndim:
+                self.header.update({n_key: self.shape[idim]})
+                if self.d(idim) == 0.:
+                    dkey = f"d{idim + 1}"
+                    self.header.update({dkey: defaults.get(dkey, 4.e-3)})
+            else:
+                self.header.pop(n_key, None)
 
     
     def sfput(self, header_str: str = '', **kargs):
@@ -256,6 +259,14 @@ class Rsfdata(np.ndarray):
         self.update(kargs)
         header = _str_match_re(header_str)
         self.update(header)
+        for idim in range(9):
+            d_key = f"d{idim + 1}"
+            o_key = f"o{idim + 1}"
+            if idim < self.ndim:
+                self.header.update({
+                    d_key: self.d(idim),
+                    o_key: self.o(idim)
+                })
 
     def flow(self, cmd: str, rsfarray=True, verb: bool = False):
         """
@@ -538,6 +549,7 @@ class Rsfdata(np.ndarray):
 
         new_data.header = new_meta
         if squeeze: new_data = np.squeeze(new_data)
+        new_data.update()
         return new_data
 
     def flip(self, axis: int = 0):

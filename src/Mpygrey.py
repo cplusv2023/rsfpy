@@ -97,7 +97,7 @@ import sys, subprocess, ast, re
 from textwrap import dedent
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re
-from matplotlib.ticker import MaxNLocator, FormatStrFormatter
+from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 
 DOC = dedent(__doc__)
 VERB = True
@@ -170,14 +170,84 @@ def main():
     barlabelfat = par_dict.get('barlabelfat', fontweight)
     barlabelsz = getfloat(par_dict, 'barlabelsz', fontsz)
     pformat = par_dict.get('format', 'pdf')
-    wig = par_dict.get('wig', 'n').lower().startswith('y')
+    
+    # Check plot type
+    plottype = par_dict.get('plottype', 'grey').lower()
+    if plottype.startswith('w'):
+        plottype = 'wiggle'
+    elif plottype.startswith('gra'):
+        plottype = 'graph'
+    else:
+        plottype = 'grey'
+    sf_warning(f"Plot type: {plottype}, data size: {data.shape}.", verb=VERB)
 
-    if wig:
+    if plottype == 'wiggle':
+        # Parameters for wiggle plot
         scalebar = False
         zplot = getfloat(par_dict, 'zplot', 1.0)
         ncolor = par_dict.get('ncolor', 'none')
         lcolor = par_dict.get('lcolor', 'k')
         pcolor = par_dict.get('pcolor', lcolor)
+        plotfat = getfloat(par_dict, 'linewidth', 
+                           getfloat(par_dict, 'plotfat', frame_width))
+    elif plottype == 'graph':
+        # Parameters for graph plot
+        transp = par_dict.get('transp', 'n').lower().startswith('y')
+        yreverse = par_dict.get('yreverse', 'n').lower().startswith('y')
+        lcolors = par_dict.get('lcolors', None)
+        lstyles = par_dict.get('lstyles', None)
+        plotfat = getfloat(par_dict, 'linewidth', 
+                           getfloat(par_dict, 'plotfat', frame_width))
+        legendon = par_dict.get('legend', 'n').lower().startswith('y')
+        legends = par_dict.get('legends', None)
+        wherelegend = par_dict.get('wherelegend', 'best')
+        legendbox = par_dict.get('legendbox', 'n').lower().startswith('y')
+        legendsize = getfloat(par_dict, 'legendsize', fontsz)
+        legendfat = par_dict.get('legendfat', fontweight)
+        legendalpha = getfloat(par_dict, 'legendalpha', 0.8)
+        legendncol = getfloat(par_dict, 'legendncol', 1)
+        logx = par_dict.get('logx', 'n').lower().startswith('y')
+        logy = par_dict.get('logy', 'n').lower().startswith('y')
+        logxbase = getfloat(par_dict, 'logxbase', 10.)
+        logybase = getfloat(par_dict, 'logybase', 10.)
+
+        # Unpack legends
+        if legendon:
+            if legends is not None:
+                legends = re.split(r'[ ,;]+', legends)
+                if len(legends) != data.n2:
+                    sf_warning(f"Warning: number of legends {len(legends)} != number of traces {data.n2}, ignore legends.")
+                    legends = None
+            if legends is None:
+                if data.ndim > 1: legends = [f'{data.label2}={ia}' for ia in data.axis2]
+                else: legends = None
+        else:
+            legends = None
+        # Unpack lcolors
+        if lcolors is not None:
+            lcolors = re.split(r'[ ,;]+', lcolors)
+            while len(lcolors) < data.n2:
+                lcolors.append(lcolor)
+        else:
+            lcolors = ['k', 'r', 'g', 'b', 'c', 'm', 'y']
+            while len(lcolors) < data.n2:
+                lcolors += lcolors
+            lcolors = lcolors[:data.n2]
+
+        # Unpack lstyles
+        if lstyles is not None:
+            lstyles = re.split(r'[ ,;]+', lstyles)
+            while len(lstyles) < data.n2:
+                lstyles.append('-')
+        else:
+            lstyles = ['-','--','-.',':']
+            while len(lstyles) < data.n2:
+                lstyles += lstyles
+            lstyles = lstyles[:data.n2]
+
+
+        scalebar = False
+    
 
     # Check some parameters could cause errors
     fontfats = ['light', 'normal', 'medium', 'semibold', 'demibold', 'bold', 'heavy', 'ultralight', 'black', 'regular', 'book',  'black']
@@ -214,20 +284,81 @@ def main():
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
     ax = fig.add_subplot(1, 1, 1)
 
-    if not wig:
+    if plottype == 'grey':
         
         data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
                 allpos=allpos, clip=clip, pclip=pclip, bias=bias, cmap=color, 
                 min1=min1, max1=max1, min2=min2, max2=max2,
                 colorbar=False, label1=label1, label2=label2, show=False)
-    else:
+    elif plottype == 'wiggle':
         data.wiggle(ax=ax, 
                 transp=transp, yreverse=yreverse, xreverse=xreverse,
                 min1=min1, max1=max1, min2=min2, max2=max2,
                 label1=label1, label2=label2, 
                 zplot=zplot, bias=bias, clip=clip, pclip=pclip,
                 ncolor=ncolor, pcolor=pcolor, lcolor=lcolor,
+                linewidth=plotfat,
                 show=False)
+    elif plottype == 'graph':
+        if data.ndim < 2:
+            data = data.reshape((data.n1, 1))
+        for itrace in range(data.n2):
+            if transp:
+                x = data[:, itrace].squeeze()
+                y = data.axis1
+            else:
+                x = data.axis1
+                y = data[:, itrace].squeeze()
+            
+            ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
+                    linestyle=lstyles[itrace],                    
+                    label=legends[itrace] if legends else None)
+
+        amin1, amax1 = ax.get_xlim()
+        amin2, amax2 = ax.get_ylim()
+        min1 = min1 if min1 is not None else amin1
+        max1 = max1 if max1 is not None else amax1
+        min2 = min2 if min2 is not None else amin2
+        max2 = max2 if max2 is not None else amax2
+
+        if logx and logxbase <= 0.:
+            sf_warning(f"Warning: invalid logxbase={logxbase}, use default 10.")
+            logxbase = 10.
+        if logy and logybase <= 0.:
+            sf_warning(f"Warning: invalid logybase={logybase}, use default 10.")
+            logybase = 10.
+        if logx and min1 <= 0.:
+            sf_warning(f"Warning: logx but min2={min1} <= 0, use normal x axis.")
+            logx = False
+        if logy and min2 <= 0.:
+            sf_warning(f"Warning: logy but min1={min2} <= 0, use normal y axis.")
+            logy = False
+        
+        if logx:
+            ax.set_xscale('log', base=logxbase)
+            ax.xaxis.set_major_locator(LogLocator(base=logxbase, numticks=ntic2))
+        if logy:
+            ax.set_yscale('log', base=logybase)
+            ax.yaxis.set_major_locator(LogLocator(base=logybase, numticks=ntic1))
+        if xreverse:
+            ax.set_xlim(max1, min1)
+        else:
+            ax.set_xlim(min1, max1)
+        if yreverse:
+            ax.set_ylim(max2, min2)
+        else:
+            ax.set_ylim(min2, max2)
+        if legendon:
+            legend = ax.legend(loc=wherelegend, fontsize=legendsize, 
+                            frameon=legendbox, ncol=legendncol)
+            for text in legend.get_texts():
+                text.set_fontweight(legendfat)
+            if legendbox:
+                legend.get_frame().set_alpha(legendalpha)
+                # legend.get_frame().set_linewidth(frame_width)
+                # legend.get_frame().set_edgecolor(frame_color)
+        ax.set_xlabel(label1 if label1 else data.label_unit(0))
+        ax.set_ylabel(label2 if label2 else data.label_unit(1))
 
     ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 
@@ -241,8 +372,12 @@ def main():
             ax.xaxis.set_major_formatter(FormatStrFormatter(format2))
         except:
             sf_warning(f"Warning: invalid format2={format2}, ignored.")
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+    if plottype == 'graph':
+        if not logx: ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+        if not logy: ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+    else:
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
 
     label1 = ax.yaxis.get_label()
     label2 = ax.xaxis.get_label()

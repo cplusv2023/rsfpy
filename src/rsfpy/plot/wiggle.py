@@ -79,7 +79,7 @@ def wiggle(
     else:
         fig = ax.figure
 
-    data = data if transp else data.T
+    # data = data if transp else data.T
     # 数据属性（Rsfarray 支持）
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", None)
@@ -87,9 +87,9 @@ def wiggle(
         o1 = o1 if o1 is not None else getattr(data, "o1", None)
         o2 = o2 if o2 is not None else getattr(data, "o2", None)
         if label1 is None and hasattr(data, "label_unit"):
-            label1 = data.label_unit(axis=1)
+            label1 = data.label_unit(axis=0)
         if label2 is None and hasattr(data, "label_unit"):
-            label2 = data.label_unit(axis=0)
+            label2 = data.label_unit(axis=1)
     if d1 is None or d1 == 0: d1 = 1.
     if d2 is None or d2 == 0: d2 = 1.
     if o1 is None: o1 = 0.
@@ -110,7 +110,7 @@ def wiggle(
     if max1 is None: max1 = o1 + d1 * (n1-1)
     if min2 is None: min2 = o2
     if max2 is None: max2 = o2 + d2 * (n2-1)
-
+    
     t = axis1 
     x_positions = axis2 # 道位置
 
@@ -146,20 +146,32 @@ def wiggle(
     for i in range(n2):
         if not x_positions[i] >= min2 and x_positions[i] <= max2:
             continue
+
         trace = data[:, i] - bias
         wiggle_x = x_positions[i] + trace * scale
         # 画线
-        ax.plot(wiggle_x, t, color=lcolor, linewidth=params['linewidth'])
+        if not transp:
+            ax.plot(t, wiggle_x, color=lcolor, linewidth=params['linewidth'])
+        else:
+            ax.plot(wiggle_x, t, color=lcolor, linewidth=params['linewidth'])
 
         # 填充正值区
         pos_mask = trace > 0
-        ax.fill_betweenx(t, x_positions[i], wiggle_x, where=pos_mask, facecolor=pcolor, interpolate=params['interpolate'])
+        if not transp:
+            ax.fill_between(t, x_positions[i], wiggle_x, where=pos_mask, facecolor=pcolor, interpolate=params['interpolate'])
+        else:
+            ax.fill_betweenx(t, x_positions[i], wiggle_x, where=pos_mask, facecolor=pcolor, interpolate=params['interpolate'])
 
         # 填充负值区
         neg_mask = trace < 0
-        ax.fill_betweenx(t, x_positions[i], wiggle_x, where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
+        if not transp:
+            ax.fill_between(t, wiggle_x, x_positions[i], where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
+        else:
+            ax.fill_betweenx(t, x_positions[i], wiggle_x, where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
 
-    max2 + trace
+    # max2 + trace
+    if not transp:
+        min1, max1, min2, max2 = min2, max2, min1, max1
 
     if label1:
         ax.set_xlabel(label1)
