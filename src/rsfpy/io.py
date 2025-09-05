@@ -182,6 +182,7 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
             outheader["in"] = os.path.abspath(fname)
         else:
             out_fp = file_fp
+            outheader["in"] = 'stdin'
         
     elif out == 'stdout':
         out_fp = file_fp
