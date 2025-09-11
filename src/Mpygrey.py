@@ -93,15 +93,15 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import sys, subprocess, ast, re
+import sys, subprocess, os, re
 from textwrap import dedent
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 
-DOC = dedent(__doc__)
+__progname__ = os.path.basename(sys.argv[0])
+DOC = dedent(__doc__.replace('Mpygrey.py', __progname__))
 VERB = True
-
 
 def main():
     if len(sys.argv) < 2 and sys.stdin.isatty():
@@ -583,7 +583,7 @@ def sf_warning(*args, **kwargs):
         if args[-1].endswith('.'): endl = '\n' 
         if args[-1].endswith(';'): endl = '\r'
     endl = kwargs.pop('end', endl)
-    if verb: print(f'{__file__}:', *args, file=file, end=endl, **kwargs)
+    if verb: print(f'{__progname__}:', *args, file=file, end=endl, **kwargs)
 
 
 def sf_error(*args, **kwargs):

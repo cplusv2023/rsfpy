@@ -28,6 +28,9 @@ setup(
     package_dir={"": "src"},
     include_package_data=True,
     install_requires=install_requires,
+    extra_require={
+        "rsfsvgpen": ["lxml"],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: GPLv2 License",

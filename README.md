@@ -11,14 +11,29 @@ Below fancy descriptions are AI-generated. Actually you can use this package for
 - 🛠 **Clean API**: Intuitive interface for research workflows
 - 🌍 **Applications**: Geophysics, signal processing, seismic imaging, and more
 
-## 📦 Installation
+### 📚 Requirements
+- Python >= 3
+- Numpy
+- Matplotlib
+- (*optional*) lxml 
 
+## 📦 Installation
+**Strongly recommended to use a virtual Python environment** to isolate dependencies and ensure reproducibility.
 ```bash
-pip install .
+pip install -e . # editable (development) mode
 ```
 
 ## 🚀 Quick start 
+### Command-line tools
+```bash
+# Command Line
+rsfgrey < test/dat.test > test1.svg
+rsfwiggle < test/dat.test pcolor=r ncolor=b transp=y zplot=2 > test2.svg
+rsfsvgpen < test1.svg test2.svg mode=overlay bgcolor=w > overlay.svg
 
+rsfsvgpen < test1.svg test2.svg mode=grid ncol=1 > rows.svg
+rsfsvgpen < test1.svg test2.svg mode=grid nrow=1 > cols.svg
+```
 ### import 
 ```python
 from rsfpy.array import Rsfarray
@@ -107,10 +122,6 @@ fig.show()
 ```
 ![Grey/wiggle image plot](./img/figure1.png)
 
-### 📚 Requirements
-- Python >= 3
-- Numpy
-- Matplotlib
 ### 📄 License
 GNU GPLv2
 ### 🤝 Contributing
