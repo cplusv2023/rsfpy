@@ -108,7 +108,6 @@ def main():
         subprocess.run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
     par_dict = _str_match_re(' '.join(sys.argv[1:]))
-    print(par_dict)
 
     # Check stdin
     if sys.stdin.isatty():
@@ -169,10 +168,18 @@ def main():
     barlabel = par_dict.get('barlabel', '')
     barlabelfat = par_dict.get('barlabelfat', fontweight)
     barlabelsz = getfloat(par_dict, 'barlabelsz', fontsz)
-    pformat = par_dict.get('format', 'pdf')
+    pformat = par_dict.get('format', 'svg')
     
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
+    # command line support
+    if sys.argv[0].endswith('grey'):
+        plottype = 'grey'
+    elif sys.argv[0].endswith('wiggle'):
+        plottype = 'wiggle'
+    elif sys.argv[0].endswith('graph'):
+        plottype = 'graph'
+
     if plottype.startswith('w'):
         plottype = 'wiggle'
     elif plottype.startswith('gra'):
@@ -188,6 +195,9 @@ def main():
         ncolor = par_dict.get('ncolor', 'none')
         lcolor = par_dict.get('lcolor', 'k')
         pcolor = par_dict.get('pcolor', lcolor)
+        if par_dict.get('fill', 'y').lower().startswith('n'):
+            ncolor = 'none'
+            pcolor = 'none'
         plotfat = getfloat(par_dict, 'linewidth', 
                            getfloat(par_dict, 'plotfat', frame_width))
     elif plottype == 'graph':
@@ -355,8 +365,6 @@ def main():
                 text.set_fontweight(legendfat)
             if legendbox:
                 legend.get_frame().set_alpha(legendalpha)
-                # legend.get_frame().set_linewidth(frame_width)
-                # legend.get_frame().set_edgecolor(frame_color)
         ax.set_xlabel(label1 if label1 else data.label_unit(0))
         ax.set_ylabel(label2 if label2 else data.label_unit(1))
 
@@ -491,15 +499,12 @@ def main():
                 sf_warning(f"Warning: invalid arrow{iarrow+1}={arrowpar}, ignored.")
                 continue
 
-            # 起点与位移
             y0, x0, dy, dx = [float(v) for v in arrow_vals[:4]]
 
-            # 样式参数（可选）
             arrow_color = par_dict.get(f'arrow{iarrow+1}color', par_dict.get('arrowcolor', frame_color))
             arrow_width = getfloat(par_dict, f'arrow{iarrow+1}width', getfloat(par_dict, 'arrowwidth', 0.1))
             arrow_alpha = par_dict.get(f'arrow{iarrow+1}alpha', par_dict.get('arrowalpha', 1.0))
 
-            # 创建 Arrow（默认 transData 坐标系）
             arr = plt.Arrow(x0, y0, dx, dy,
                             width=arrow_width,
                             color=arrow_color,
@@ -517,16 +522,14 @@ def main():
             continue
         try:
             txt_vals = txtpar.split(',')
-            if not (3 <= len(txt_vals)):  # 至少要有 x, y, 文本内容
+            if not (3 <= len(txt_vals)): 
                 sf_warning(f"Warning: invalid text{itxt+1}={txtpar}, ignored.")
                 continue
 
-            # 必需参数
             x0 = float(txt_vals[1])
             y0 = float(txt_vals[0])
             text_str = str(txt_vals[2])
 
-            # 可选参数
             text_color = par_dict.get(f'text{itxt+1}color', par_dict.get('textcolor', frame_color))
             text_size  = getfloat(par_dict, f'text{itxt+1}size', getfloat(par_dict, 'textsize', fontsz))
             text_weight = par_dict.get(f'text{itxt+1}weight', par_dict.get('textweight', fontweight))
@@ -534,7 +537,6 @@ def main():
             text_edgecolor = par_dict.get(f'text{itxt+1}edgecolor', par_dict.get('textedgecolor', 'none'))
             text_alpha = getfloat(par_dict, f'text{itxt+1}alpha', getfloat(par_dict, 'textalpha', 1.0))
 
-            # 添加文本
             ax.text(x0, y0, text_str,
                     color=text_color,
                     fontsize=text_size, 
@@ -555,7 +557,7 @@ def main():
         plt.show()
     else:
         outfile = sys.stdout.buffer
-        fig.savefig(outfile, bbox_inches='tight', format=pformat, dpi=dpi)
+        fig.savefig(outfile, bbox_inches='tight', format=pformat, dpi=dpi, transparent=(not facecolor or facecolor=='none'))
         outfile.flush()
         outfile.close()
     plt.close(fig)

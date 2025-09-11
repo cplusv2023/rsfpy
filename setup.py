@@ -33,4 +33,12 @@ setup(
         "License :: OSI Approved :: GPLv2 License",
         "Operating System :: OS Independent",
     ],
+    entry_points={
+        'console_scripts': [
+            'rsfgrey = Mpygrey:main',
+            'rsfgraph = Mpygrey:main',
+            'rsfwiggle = Mpygrey:main',
+            'rsfsvgpen = Msvgpen:main',
+        ]
+    },
 )
