@@ -21,6 +21,7 @@
 
 
 import io, re, warnings, os
+import sys
 from typing import Optional, Union
 from subprocess import Popen, PIPE, SubprocessError, run as Run
 
@@ -42,17 +43,28 @@ def _check_input_source(src, mode='rb'):
         return None
 
 
-def _str_match_re(str_in: str, pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', strip: Optional[Union[str, None]] = None) -> dict:
+def _str_match_re(str_in: Optional[Union[str, dict]],
+                  pattern: str = r'\s+(?=(?:[^"]*"[^"]*")*[^"]*$)',
+                  strip: Optional[Union[str, None]] = None) -> dict:
     """
-    Match strings in the input using the specified regex pattern.
+    Parse key=val pairs from input string.
+    If '=' is present, everything after the first '=' is treated as val.
+    If val is wrapped in matching quotes, remove them.
     """
     out_dict = {}
-    tokens = re.split(pattern, str_in.strip(strip))
+    if isinstance(str_in, str):
+        tokens = re.split(pattern, str_in.strip(strip))
+    else:
+        tokens = str_in
     for token in tokens:
-        if "=" not in token:
-            continue
-        k, v = token.split("=", 1)
-        out_dict[k] = v.strip('"').strip("'")
+        if "=" in token:
+            k, v = token.split("=", 1)
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            if k == 'title':
+                print(v, str_in, file=sys.stderr)
+            out_dict[k] = v
     return out_dict
 
 

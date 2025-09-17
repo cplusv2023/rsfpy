@@ -42,14 +42,16 @@ px2pt = 4./3.  # 1px = 0.75pt
 try:
     from lxml import etree
 except ImportError:
-    sf_error(f"lxml is required for rsfsvgpen. Please install it via 'pip install lxml'.")
+    print(f"lxml is required for rsfsvgpen. Please install it via 'pip install lxml'.", file=sys.stderr)
+    exit(1)
+
 def main():
     
 
     if len(sys.argv) < 2 and sys.stdin.isatty():
         subprocess.run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
-    par_dict = _str_match_re(' '.join(sys.argv[1:]))
+    par_dict = _str_match_re(sys.argv[1:])
     # Check stdin
     if sys.stdin.isatty():
         inputs = []
@@ -210,37 +212,37 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
             if loc == "north west":
                 offset_x += margin
-                offset_y += margin
+                offset_y += labelsz * px2pt
             elif loc == "north east":
-                offset_x += target_w - margin
-                offset_y += margin
+                offset_x += (target_w - margin)*px2pt
+                offset_y += labelsz * px2pt
             elif loc == "south west":
                 offset_x += margin
-                offset_y += target_h - margin
+                offset_y += (target_h - labelsz/2) * px2pt
             elif loc == "south east":
-                offset_x += target_w - margin
-                offset_y += target_h - margin
+                offset_x += (target_w - margin) * px2pt
+                offset_y += (target_h - labelsz/2) * px2pt
             elif loc == "north":
-                offset_x += target_w / 2
+                offset_x += target_w / 2 * px2pt
                 offset_y += margin
             elif loc == "south":
-                offset_x += target_w / 2
-                offset_y += target_h - margin
+                offset_x += target_w / 2 * px2pt
+                offset_y += (target_h - labelsz/2) * px2pt
             elif loc == "west":
                 offset_x += margin
-                offset_y += target_h / 2
+                offset_y += target_h / 2 * px2pt
             elif loc == "east":
                 offset_x += target_w - margin
-                offset_y += target_h / 2
+                offset_y += target_h / 2 * px2pt
 
             text = etree.Element("text", {
                 "x": str(offset_x),
                 "y": str(offset_y),
                 "fill": labelcolor,
+                "font-family": "DejaVu Sans" if labelfont is None else labelfont,
                 "font-weight": labelfat,
                 "font-size": f'{labelsz}pt',
                 "text-anchor": "start" if "west" in loc else ("end" if "east" in loc else "middle"),
-                "dominant-baseline": "hanging" if "north" in loc else ("auto" if "south" in loc else "central"),
             })
             if labelfont:
                 text.attrib["font-family"] = labelfont

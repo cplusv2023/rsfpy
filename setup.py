@@ -42,6 +42,7 @@ setup(
             'rsfgraph = Mpygrey:main',
             'rsfwiggle = Mpygrey:main',
             'rsfsvgpen = Msvgpen:main',
+            'rsfgrey3 = Mpygrey:main',
         ]
     },
 )

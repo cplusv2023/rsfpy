@@ -107,12 +107,12 @@ def main():
     if len(sys.argv) < 2 and sys.stdin.isatty():
         subprocess.run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
-    par_dict = _str_match_re(' '.join(sys.argv[1:]))
+    par_dict = _str_match_re(sys.argv[1:])
 
     # Check stdin
     if sys.stdin.isatty():
         sf_error("Error: no input data?")
-    
+    sf_warning(sys.argv)
     # Read data
     data = Rsfarray(sys.stdin.buffer)
     if data.size == 0:
@@ -169,7 +169,9 @@ def main():
     barlabelfat = par_dict.get('barlabelfat', fontweight)
     barlabelsz = getfloat(par_dict, 'barlabelsz', fontsz)
     pformat = par_dict.get('format', 'svg')
-    
+    wantlabel1 = par_dict.get('wantlabel1', 'y').lower().startswith('y')
+    wantlabel2 = par_dict.get('wantlabel2', 'y').lower().startswith('y')
+
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
     # command line support
@@ -179,14 +181,8 @@ def main():
         plottype = 'wiggle'
     elif sys.argv[0].endswith('graph'):
         plottype = 'graph'
-
-    if plottype.startswith('w'):
-        plottype = 'wiggle'
-    elif plottype.startswith('gra'):
-        plottype = 'graph'
-    else:
-        plottype = 'grey'
-    sf_warning(f"Plot type: {plottype}, data size: {data.shape}.", verb=VERB)
+    elif sys.argv[0].endswith('grey3'):
+        plottype = 'grey3'
 
     if plottype == 'wiggle':
         # Parameters for wiggle plot
@@ -254,10 +250,38 @@ def main():
             while len(lstyles) < data.n2:
                 lstyles += lstyles
             lstyles = lstyles[:data.n2]
-
-
         scalebar = False
-    
+    elif plottype == 'grey3':
+        frame1 = int(getfloat(par_dict, 'frame1', 0.0))
+        frame2 = int(getfloat(par_dict, 'frame2', 0.0))
+        frame3 = int(getfloat(par_dict, 'frame3', 0.0))
+        if frame1 > data.n1: frame1 = data.n1
+        elif frame1 < 0: frame1 = 0
+        if frame2 > data.n2: frame2 = data.n2
+        elif frame2 < 0: frame2 = 0
+        if frame3 > data.n3: frame3 = data.n3
+        elif frame3 < 0: frame3 = 0
+        point1 = getfloat(par_dict, 'point1', 0.8)
+        point2 = getfloat(par_dict, 'point2', 0.4)
+        isflat = par_dict.get('flat', 'y').lower().startswith('y')
+        label3 = par_dict.get('label3', None)
+        wantlabel3 = par_dict.get('wantlabel3', 'y').lower().startswith('y')
+
+
+    # Colormap
+    cmapper = {
+        'j':'jet',
+        'J':'jet_r',
+        'i':'gray',
+        'I':'gray',
+        's':'seismic',
+        'S':'seismic_r',
+    }
+    if color in cmapper.keys():
+        color = cmapper[color]
+
+    if not wantlabel1: label1 = " "
+    if not wantlabel2: label2 = " "
 
     # Check some parameters could cause errors
     fontfats = ['light', 'normal', 'medium', 'semibold', 'demibold', 'bold', 'heavy', 'ultralight', 'black', 'regular', 'book',  'black']
@@ -368,101 +392,115 @@ def main():
         ax.set_xlabel(label1 if label1 else data.label_unit(0))
         ax.set_ylabel(label2 if label2 else data.label_unit(1))
 
+    elif plottype == 'grey3':
+        if not wantlabel3: label3 = " "
+        plt.rcParams['font.size'] = fontsz
+        plt.rcParams['font.weight'] = fontweight
+        plt.rcParams['axes.titlesize'] = labelsz
+        plt.rcParams['axes.titleweight'] = labelfat
+
+        data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
+                   point1=point1, point2=point2, colorbar=scalebar, cmap=color,
+                   label1=label1, label2=label2, label3=label3,
+                   clip=clip, pclip=pclip,bias=bias, allpos=allpos,
+                   flat=isflat)
+
     ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 
-    if format1 is not None:
-        try:
-            ax.yaxis.set_major_formatter(FormatStrFormatter(format1))
-        except:
-            sf_warning(f"Warning: invalid format1={format1}, ignored.")
-    if format2 is not None:
-        try:
-            ax.xaxis.set_major_formatter(FormatStrFormatter(format2))
-        except:
-            sf_warning(f"Warning: invalid format2={format2}, ignored.")
-    if plottype == 'graph':
-        if not logx: ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-        if not logy: ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-    else:
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-
-    label1 = ax.yaxis.get_label()
-    label2 = ax.xaxis.get_label()
-    ax.set_ylabel(label1.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
-    ax.set_xlabel(label2.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
-    
-    if scalebar:
-        cbar = fig.colorbar(ax.images[0], ax=ax)
-        cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
-        for ticklabel in cbar.ax.get_yticklabels():
-            ticklabel.set_fontweight(tickfat)
-        if barlabel:
-            cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
-        for spine in cbar.ax.spines.values():
-            spine.set_edgecolor(frame_color)
-            spine.set_linewidth(frame_width)
-
-        if formatbar is not None:
+    if plottype != 'grey3':
+        if format1 is not None:
             try:
-                cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                ax.yaxis.set_major_formatter(FormatStrFormatter(format1))
             except:
-                sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
-        if maxval is not None or minval is not None:
-            vmin, vmax = ax.images[0].get_clim()
-            if minval is None: minval = vmin
-            if maxval is None: maxval = vmax
-            cbar.ax.set_ylim(minval, maxval)
-        offset = cbar.ax.yaxis.get_offset_text()
-        offset.set_color(frame_color)
-        offset.set_fontsize(ticksz)
-        offset.set_fontweight(tickfat)
+                sf_warning(f"Warning: invalid format1={format1}, ignored.")
+        if format2 is not None:
+            try:
+                ax.xaxis.set_major_formatter(FormatStrFormatter(format2))
+            except:
+                sf_warning(f"Warning: invalid format2={format2}, ignored.")
+        if plottype == 'graph':
+            if not logx: ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+            if not logy: ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+        else:
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+
+        label1 = ax.yaxis.get_label()
+        label2 = ax.xaxis.get_label()
+        ax.set_ylabel(label1.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
+        ax.set_xlabel(label2.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
+    
+        if scalebar:
+            cbar = fig.colorbar(ax.images[0], ax=ax)
+            cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
+            for ticklabel in cbar.ax.get_yticklabels():
+                ticklabel.set_fontweight(tickfat)
+            if barlabel:
+                cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
+            for spine in cbar.ax.spines.values():
+                spine.set_edgecolor(frame_color)
+                spine.set_linewidth(frame_width)
+
+            if formatbar is not None:
+                try:
+                    cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                except:
+                    sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
+            if maxval is not None or minval is not None:
+                vmin, vmax = ax.images[0].get_clim()
+                if minval is None: minval = vmin
+                if maxval is None: maxval = vmax
+                cbar.ax.set_ylim(minval, maxval)
+            offset = cbar.ax.yaxis.get_offset_text()
+            offset.set_color(frame_color)
+            offset.set_fontsize(ticksz)
+            offset.set_fontweight(tickfat)
 
 
-    if title:
-        if titleloc:
-            try:ax.set_title(title,
-                        fontsize=titlesz,
-                        fontweight=titlefat,
-                        color=frame_color,
-                        y=titleloc)
-            except:
-                sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
-                ax.set_title(title,
-                        fontsize=titlesz,
-                        fontweight=titlefat,
-                        color=frame_color)
-        else:ax.set_title(title,
+        if title:
+            if titleloc:
+                try:ax.set_title(title,
+                            fontsize=titlesz,
+                            fontweight=titlefat,
+                            color=frame_color,
+                            y=titleloc)
+                except:
+                    sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
+                    ax.set_title(title,
                             fontsize=titlesz,
                             fontweight=titlefat,
                             color=frame_color)
-    if label1loc in ['left', 'right']:
-        ax.yaxis.set_label_position(label1loc)
-    else:
-        sf_warning(f"Warning: invalid whereylabel={label1loc}, use default left.")
-    if label2loc in ['top', 'bottom']:
-        ax.xaxis.set_label_position(label2loc)
-    else:
-        sf_warning(f"Warning: invalid wherexlabel={label2loc}, use default bottom.")
-    if tick1loc in ['left', 'right']:
-        ax.yaxis.set_ticks_position(tick1loc)
-    else:
-        sf_warning(f"Warning: invalid whereytick={tick1loc}, use default left.")
-    if tick2loc in ['top', 'bottom']:
-        ax.xaxis.set_ticks_position(tick2loc)
-    else:
-        sf_warning(f"Warning: invalid wherextick={tick2loc}, use default bottom.")
+            else:ax.set_title(title,
+                                fontsize=titlesz,
+                                fontweight=titlefat,
+                                color=frame_color)
+        if label1loc in ['left', 'right']:
+            ax.yaxis.set_label_position(label1loc)
+        else:
+            sf_warning(f"Warning: invalid whereylabel={label1loc}, use default left.")
+        if label2loc in ['top', 'bottom']:
+            ax.xaxis.set_label_position(label2loc)
+        else:
+            sf_warning(f"Warning: invalid wherexlabel={label2loc}, use default bottom.")
+        if tick1loc in ['left', 'right']:
+            ax.yaxis.set_ticks_position(tick1loc)
+        else:
+            sf_warning(f"Warning: invalid whereytick={tick1loc}, use default left.")
+        if tick2loc in ['top', 'bottom']:
+            ax.xaxis.set_ticks_position(tick2loc)
+        else:
+            sf_warning(f"Warning: invalid wherextick={tick2loc}, use default bottom.")
 
-        
-    for ticklabel in (ax.get_xticklabels()+ax.get_yticklabels()):
-        ticklabel.set_fontweight(tickfat)
 
-    if gridon:
-        ax.grid(visible=True, color=frame_color, linestyle=gridstyle, linewidth=frame_width, alpha=0.5)
-    
-    for spine in ax.spines.values():
-        spine.set_edgecolor(frame_color)
-        spine.set_linewidth(frame_width)
+        for ticklabel in (ax.get_xticklabels()+ax.get_yticklabels()):
+            ticklabel.set_fontweight(tickfat)
+
+        if gridon:
+            ax.grid(visible=True, color=frame_color, linestyle=gridstyle, linewidth=frame_width, alpha=0.5)
+
+        for spine in ax.spines.values():
+            spine.set_edgecolor(frame_color)
+            spine.set_linewidth(frame_width)
 
 
     # Addon elements
@@ -579,7 +617,7 @@ def sf_warning(*args, **kwargs):
     verb = kwargs.pop('verb', VERB)
     endl = ''
     file = kwargs.pop('file', sys.stderr)
-    if args[-1] is not None:
+    if isinstance(args, str) and args[-1] is not None:
         if args[-1].endswith('.'): endl = '\n' 
         if args[-1].endswith(';'): endl = '\r'
     endl = kwargs.pop('end', endl)
