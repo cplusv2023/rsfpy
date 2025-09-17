@@ -62,8 +62,6 @@ def _str_match_re(str_in: Optional[Union[str, dict]],
             v = v.strip()
             if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                 v = v[1:-1]
-            if k == 'title':
-                print(v, str_in, file=sys.stderr)
             out_dict[k] = v
     return out_dict
 
