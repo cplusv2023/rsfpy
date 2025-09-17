@@ -79,6 +79,7 @@ def main():
     labelformat = par_dict.get('labelformat', '(%s)')
     labelsz = getfloat(par_dict, 'labelsz', getfloat(par_dict, 'labelsize', 12))
     labelmargin = int(getfloat(par_dict, 'labelmargin', 10))
+    order = par_dict.get('order', None)
 
     
     colortable={
@@ -102,7 +103,7 @@ def main():
         'm': '#FF00FF',
     }
     if bgcolor in colortable: bgcolor = colortable[bgcolor]
-    if label:
+    if label and mode == 'grid':
         if labelcolor in colortable: labelcolor = colortable[labelcolor]
         if loc not in ('north west', 'north east', 'south west', 'south east', 'north', 'south', 'west', 'east'):
             sf_warning(f"Warning: invalid loc={loc}, use default 'north west'.")
@@ -113,7 +114,11 @@ def main():
         if '%s' not in labelformat:
             sf_warning(f"Warning: invalid labelformat={labelformat}, use default '(%s)'.")
             labelformat = '(%s)'
-
+    try:
+        order = [int(ind) for ind in order.split(',')]
+        inputs = [inputs[ind] for ind in order]
+    except:
+        sf_warning(f"Invalid order={order}, use default input order.")
 
     if mode == 'grid':
         outtree = grid(inputs, ncol=ncol, nrow=nrow, stretchx=stretchx, stretchy=stretchy, bgcolor=bgcolor, label=label, loc=loc, labeltype=labeltype, labelformat=labelformat, labelmargin=labelmargin,

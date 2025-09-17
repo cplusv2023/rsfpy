@@ -400,8 +400,13 @@ def main():
                 text.set_fontweight(legendfat)
             if legendbox:
                 legend.get_frame().set_alpha(legendalpha)
-        ax.set_xlabel(label1 if label1 else data.label_unit(0))
-        ax.set_ylabel(label2 if label2 else data.label_unit(1))
+        if not transp:
+            ax.set_xlabel(label1 if label1 else data.label_unit(0))
+            ax.set_ylabel(label2 if label2 else data.label_unit(1))
+        else:
+            ax.set_ylabel(label1 if label1 else data.label_unit(0))
+            ax.set_xlabel(label2 if label2 else data.label_unit(1))
+
 
     elif plottype == 'grey3':
         if not wantlabel3: label3 = " "
