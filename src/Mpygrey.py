@@ -93,6 +93,8 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import sys, subprocess, os, re
 from textwrap import dedent
 from rsfpy import Rsfarray
@@ -112,7 +114,7 @@ def main():
     # Check stdin
     if sys.stdin.isatty():
         sf_error("Error: no input data?")
-    sf_warning(sys.argv)
+
     # Read data
     data = Rsfarray(sys.stdin.buffer)
     if data.size == 0:
@@ -186,7 +188,6 @@ def main():
 
     if plottype == 'wiggle':
         # Parameters for wiggle plot
-        scalebar = False
         zplot = getfloat(par_dict, 'zplot', 1.0)
         ncolor = par_dict.get('ncolor', 'none')
         lcolor = par_dict.get('lcolor', 'k')
@@ -200,7 +201,9 @@ def main():
         # Parameters for graph plot
         transp = par_dict.get('transp', 'n').lower().startswith('y')
         yreverse = par_dict.get('yreverse', 'n').lower().startswith('y')
+        lcolor = par_dict.get('lcolor', 'k')
         lcolors = par_dict.get('lcolors', None)
+        lstyle = par_dict.get('lstyle', None)
         lstyles = par_dict.get('lstyles', None)
         plotfat = getfloat(par_dict, 'linewidth', 
                            getfloat(par_dict, 'plotfat', frame_width))
@@ -234,6 +237,10 @@ def main():
             lcolors = re.split(r'[ ,;]+', lcolors)
             while len(lcolors) < data.n2:
                 lcolors.append(lcolor)
+        elif lcolor is not None:
+            lcolors = []
+            while len(lcolors) < data.n2:
+                lcolors.append(lcolor)
         else:
             lcolors = ['k', 'r', 'g', 'b', 'c', 'm', 'y']
             while len(lcolors) < data.n2:
@@ -245,12 +252,16 @@ def main():
             lstyles = re.split(r'[ ,;]+', lstyles)
             while len(lstyles) < data.n2:
                 lstyles.append('-')
+        elif lstyle is not None:
+            lstyles = []
+            while len(lstyles) < data.n2:
+                lstyles.append(lstyle)
         else:
             lstyles = ['-','--','-.',':']
             while len(lstyles) < data.n2:
                 lstyles += lstyles
             lstyles = lstyles[:data.n2]
-        scalebar = False
+        # scalebar = False
     elif plottype == 'grey3':
         frame1 = int(getfloat(par_dict, 'frame1', 0.0))
         frame2 = int(getfloat(par_dict, 'frame2', 0.0))
@@ -403,7 +414,7 @@ def main():
                    point1=point1, point2=point2, colorbar=scalebar, cmap=color,
                    label1=label1, label2=label2, label3=label3,
                    clip=clip, pclip=pclip,bias=bias, allpos=allpos,
-                   flat=isflat)
+                   flat=isflat, show=False)
 
     ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 
@@ -431,26 +442,48 @@ def main():
         ax.set_xlabel(label2.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
     
         if scalebar:
-            cbar = fig.colorbar(ax.images[0], ax=ax)
-            cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
-            for ticklabel in cbar.ax.get_yticklabels():
-                ticklabel.set_fontweight(tickfat)
-            if barlabel:
-                cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
-            for spine in cbar.ax.spines.values():
-                spine.set_edgecolor(frame_color)
-                spine.set_linewidth(frame_width)
+            if plottype in ['graph', 'wiggle']:
+                # Create empty cmap
+                empty_map = [[0,0,0,0],[0,0,0,0],[0,0,0,0]]
+                norm = mcolors.Normalize(vmin=0, vmax=1)
+                sm = cm.ScalarMappable(norm=norm, cmap=mcolors.ListedColormap(empty_map))
+                sm.set_array([])
+                cbar = fig.colorbar(sm, ax=ax)
+                cbar.ax.patch.set_alpha(0.0)
+                if maxval is not None or minval is not None:
+                    cbar.ax.set_ylim(minval, maxval)
+                # Hide it
+                cbar.ax.tick_params(labelsize=ticksz, width=frame_width,colors=[0,0,0,0])  # 或 'white', 'transparent'
+                for clabel in cbar.ax.get_yticklabels():
+                    clabel.set_fontweight(tickfat)
+                    clabel.set_color([0,0,0,0])
+                for spine in cbar.ax.spines.values():
+                    spine.set_edgecolor([0,0,0,0])
+                    spine.set_linewidth(frame_width)
+                if barlabel:
+                    cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
+            else:
+                cbar = fig.colorbar(ax.images[0], ax=ax)
+                if maxval is not None or minval is not None:
+                    vmin, vmax = ax.images[0].get_clim()
+                    if minval is None: minval = vmin
+                    if maxval is None: maxval = vmax
+                    cbar.ax.set_ylim(minval, maxval)
+                cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
+                for ticklabel in cbar.ax.get_yticklabels():
+                    ticklabel.set_fontweight(tickfat)
+                if barlabel:
+                    cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
+                for spine in cbar.ax.spines.values():
+                    spine.set_edgecolor(frame_color)
+                    spine.set_linewidth(frame_width)
 
             if formatbar is not None:
                 try:
                     cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                 except:
                     sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
-            if maxval is not None or minval is not None:
-                vmin, vmax = ax.images[0].get_clim()
-                if minval is None: minval = vmin
-                if maxval is None: maxval = vmax
-                cbar.ax.set_ylim(minval, maxval)
+
             offset = cbar.ax.yaxis.get_offset_text()
             offset.set_color(frame_color)
             offset.set_fontsize(ticksz)
