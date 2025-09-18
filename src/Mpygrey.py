@@ -5,60 +5,94 @@
     \tMpygrey.py
 \033[1mDESCRIPTION\033[0m
     \tdisplay RSF data as a grey or color image using matplotlib.
+    \tsupport multiple modes:
+    \t\033[1mmode=grey\033[0m\trsfgrey
+    \t\033[1mmode=graph\033[0m\trsfgraph
+    \t\033[1mmode=wiggle\033[0m\trsfwiggle
+    \t\033[1mmode=grey3\033[0m\trsfgrey3
 \033[1mSYNOPSIS\033[0m
-    \tMpygrey.py < in.rsf [> out.[pdf|png|jpg|...]] transp=y yreverse=y xreverse=n clip= pclip= allpos=n bias=0. verb=n scalebar=n color=gray bgcolor=w screenwidth=8. screenheight=6. dpi=100. label1= label2= title=
+    \tMpygrey.py < in.rsf [> out.[svg|pdf|png|jpg|...]] transp=y yreverse=y xreverse=n clip= pclip= allpos=n bias=0. verb=n scalebar=n color=gray bgcolor=w screenwidth=8. screenheight=6. dpi=100. label1= label2= title=
 \033[1mCOMMENTS\033[0m
     \tInput data is from stdin, output figure is to stdout.
 
-    \tIf output is not redirected to a file, the figure will be shown in a window.
+    \tIf output is not redirected to a file, the figure will be shown in a window (make sure you have graphic interface).
 
-    \tcolor is a matplotlib colormap name, e.g., gray, jet, seismic, hot, cool, etc.
+    \tcolor is a matplotlib colormap name, e.g., gray (or i), jet (or j), seismic (or s), hot, cool, etc. Explore: https://matplotlib.org/stable/users/explain/colors/colormaps.html#colormaps
 
-    \tfontfat is font weight: light, normal, medium, semibold, demibold, bold, heavy, ultralight, black, regular, book,  black
+    \tlcolor/pcolor/ncolor use simple color name, e.g., red (or r), blue (or b), black (or k),
+    \t\t or RGB/RGBA (HEX) string like #abc (#aabbcc), #abcdefab, #0f0f0f, or none, etc. Explore: https://matplotlib.org/stable/users/explain/colors/colors.html
+
+    \tfontfat is font weight, you can use numbers like 700, or: light, normal, medium, semibold, demibold, bold, heavy, ultralight, black, regular, book,  black
 \033[1mPARAMETERS\033[0m
     \t\033[4mbool\033[0m\t\033[1mallpos=n\033[0m [y/n] if y, assume positive data
     \t\033[4mstring\033[0m\t\033[1mbarlabel=\033[0m colorbar label
-    \t\033[4mstring\033[0m\t\033[1mbarlabelfat=normal\033[0m colorbar label font weight: normal, bold, light, etc.
-    \t\033[4mfloat\033[0m\t\033[1mbarlabelsz=12.\033[0m colorbar label font size
+    \t\033[4mstring\033[0m\t\033[1mbarlabelfat=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mbarlabelsz=12.\033[0m colorbar label font size (default 12)
     \t\033[4mfloat\033[0m\t\033[1mbgcolor=w\033[0m background color (w: white, k: black)
     \t\033[4mstring\033[0m\t\033[1mbias=0.\033[0m value mapped to the center of the color table
     \t\033[4mfloat\033[0m\t\033[1mclip=\033[0m data clip
-    \t\033[4mstring\033[0m\t\033[1mcolor=gray\033[0m color scheme (matplotlib colormap name, e.g., gray, jet, seismic, hot, cool, etc)
+    \t\033[4mstring\033[0m\t\033[1mcolor=gray\033[0m color scheme (matplotlib colormap name, e.g., gray (i), jet (j), seismic (or s), hot, cool, etc)
     \t\033[4mfloat\033[0m\t\033[1mdpi=100.\033[0m figure resolution in dots per inch
+    \t\033[4mbool\033[0m\t\033[1mflat=y\033[0m [y/n] if y, flatten the 3D data for grey3 plot
     \t\033[4mstring\033[0m\t\033[1mfont=sans-serif\033[0m font family
-    \t\033[4mstring\033[0m\t\033[1mformat=pdf\033[0m output figure format: pdf, png, jpg, etc
+    \t\033[4mstring\033[0m\t\033[1mformat=svg\033[0m output figure format: pdf, png, jpg, etc (Default is svg)
     \t\033[4mstring\033[0m\t\033[1mformat1=\033[0m format for axis 1 tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mformat2=\033[0m format for axis 2 tick labels, e.g., %.2f, %.3e, etc.
+    \t\033[4mstring\033[0m\t\033[1mformat3=\033[0m format for axis 3 tick labels, e.g., %.2f, %.3e, etc. (Grey3 mode only)
+    \t\033[4mint\033[0m\t\033[1mframe1=0\033[0m frame index along axis 1 (for grey3 plot)
+    \t\033[4mint\033[0m\t\033[1mframe2=0\033[0m frame index along axis 2 (for grey3 plot)
+    \t\033[4mint\033[0m\t\033[1mframe3=0\033[0m frame index along axis 3 (for grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mformatbar=\033[0m format for colorbar tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mframecolor=k\033[0m frame color
     \t\033[4mfloat\033[0m\t\033[1mframewidth=1.0\033[0m frame line width
-    \t\033[4mbool\033[0m\t\033[1mgrid=n\033[0m [y/n] if y, show grid
+    \t\033[4mbool\033[0m\t\033[1mgrid=n\033[0m [y/n] if y, show grid (Not working in grey3 mode)
     \t\033[4mstring\033[0m\t\033[1mgridstyle=--\033[0m grid line style
-    \t\033[4mstring\033[0m\t\033[1mlabelfat=normal\033[0m label font weight: normal, bold, light, etc.
-    \t\033[4mfloat\033[0m\t\033[1mlabelsz=12.\033[0m label font size
+    \t\033[4mstring\033[0m\t\033[1mlabel1=\033[0m label for axis 1
+    \t\033[4mstring\033[0m\t\033[1mlabel2=\033[0m label for axis 2
+    \t\033[4mstring\033[0m\t\033[1mlabel3=\033[0m label for axis 3 (grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1mlabelfat=normal\033[0m label font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mlabelsz=12.\033[0m label font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mlcolors=\033[0m line colors for multiple traces (comma/space/semicolon separated, only for graph plots)
+    \t\033[4mstring\033[0m\t\033[1mlstyles=\033[0m line styles for multiple traces (comma/space/semicolon separated, only for graph plots)
+    \t\033[4mfloat\033[0m\t\033[1mlegendncol=1\033[0m number of columns in legend (only for graph plots)
+    \t\033[4mfloat\033[0m\t\033[1mlegendalpha=0.8\033[0m legend transparency (only for graph plots)
+    \t\033[4mbool\033[0m\t\033[1mlogx=n\033[0m [y/n] if y, use logarithmic scale for x-axis (only for graph plots)
+    \t\033[4mbool\033[0m\t\033[1mlogy=n\033[0m [y/n] if y, use logarithmic scale for y-axis (only for graph plots)
+    \t\033[4mfloat\033[0m\t\033[1mlogxbase=10.\033[0m base of logarithmic x-axis (only for graph plots)
+    \t\033[4mfloat\033[0m\t\033[1mlogybase=10.\033[0m base of logarithmic y-axis (only for graph plots)
     \t\033[4mfloat\033[0m\t\033[1mmin1=\033[0m minimum value of axis 1 (overrides header d1 and o1)
     \t\033[4mfloat\033[0m\t\033[1mmin2=\033[0m minimum value of axis 2 (overrides header d2 and o2)
     \t\033[4mstring\033[0m\t\033[1mmax1=\033[0m maximum value of axis 1 (overrides header d1 and o1)
     \t\033[4mstring\033[0m\t\033[1mmax2=\033[0m maximum value of axis 2 (overrides header d2 and o2)
+    \t\033[4mstring\033[0m\t\033[1mncolor=\033[0m negative value fill-in color for wiggle plot
     \t\033[4mfloat\033[0m\t\033[1mntic1=5\033[0m max number of ticks on axis 1
     \t\033[4mfloat\033[0m\t\033[1mntic2=5\033[0m max number of ticks on axis 2
+    \t\033[4mfloat\033[0m\t\033[1mntic3=\033[0m max number of ticks on axis 3
     \t\033[4mfloat\033[0m\t\033[1mpclip=99.\033[0m data clip percentile (default is 99)
     \t\033[4mbool\033[0m\t\033[1mscalebar=n\033[0m [y/n] if y, draw scalebar
-    \t\033[4mfloat\033[0m\t\033[1mscreenheight=6.\033[0m figure height in inches
-    \t\033[4mfloat\033[0m\t\033[1mscreenwidth=8.\033[0m figure width in inches
-    \t\033[4mstring\033[0m\t\033[1mtickfat=normal\033[0m tick font weight: normal, bold, light, etc.
-    \t\033[4mfloat\033[0m\t\033[1mticksz=10.\033[0m tick font size
-    \t\033[4mstring\033[0m\t\033[1mtitlefat=bold\033[0m title font weight: normal, bold, light, etc.
-    \t\033[4mfloat\033[0m\t\033[1mtitlesz=14.\033[0m title font size
-    \t\033[4mbool\033[0m\t\033[1mtransp=y\033[0m [y/n] if y, transpose the display axes
+    \t\033[4mfloat\033[0m\t\033[1mscreenheight=6.\033[0m figure height in inches (default 6)
+    \t\033[4mfloat\033[0m\t\033[1mscreenwidth=8.\033[0m figure width in inches (default 8)
+    \t\033[4mstring\033[0m\t\033[1mtickfat=normal\033[0m tick font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mticksz=10.\033[0m tick font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mtitlefat=bold\033[0m title font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mtitlesz=14.\033[0m title font size (default 12)
+    \t\033[4mfloat\033[0m\t\033[1mplotfat/linewidth=1.0\033[0m line width for wiggle or graph plot
+    \t\033[4mstring\033[0m\t\033[1mpcolor=\033[0m positive value fill-in color for wiggle plot
+    \t\033[4mfloat\033[0m\t\033[1mpoint1=0.8\033[0m vertical aspect (for grey3 plot)
+    \t\033[4mfloat\033[0m\t\033[1mpoint2=0.4\033[0m horizontal aspect (for grey3 plot)
+    \t\033[4mbool\033[0m\t\033[1mtransp=y\033[0m [y/n] if y, transpose the display axes (Not working in grey3 plot)
     \t\033[4mbool\033[0m\t\033[1mverb=n\033[0m [y/n] verbosity flag
-    \t\033[4mbool\033[0m\t\033[1mwheretitle=top\033[0m title position: top, bottom
-    \t\033[4mstring\033[0m\t\033[1mwhereylabel=left\033[0m axis 1 label position: left, right
-    \t\033[4mstring\033[0m\t\033[1mwherexlabel=bottom\033[0m axis 2 label position: top, bottom
-    \t\033[4mstring\033[0m\t\033[1mwherextick=bottom\033[0m horizontal axis tick position: top, bottom
-    \t\033[4mstring\033[0m\t\033[1mwhereytick=left\033[0m vertical axis tick position: left, right
-    \t\033[4mbool\033[0m\t\033[1mxreverse=n\033[0m [y/n] if y, reverse the horizontal axis
-    \t\033[4mbool\033[0m\t\033[1myreverse=y\033[0m [y/n] if y, reverse the vertical axis
+    \t\033[4mbool\033[0m\t\033[1mwantlabel1=y\033[0m [y/n] if y, show label for axis 1
+    \t\033[4mbool\033[0m\t\033[1mwantlabel2=y\033[0m [y/n] if y, show label for axis 2
+    \t\033[4mbool\033[0m\t\033[1mwantlabel3=y\033[0m [y/n] if y, show label for axis 3 (Grey3 plot only)
+    \t\033[4mbool\033[0m\t\033[1mwheretitle=top\033[0m title position: top, bottom (Not working in grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1mwhereylabel=left\033[0m axis 1 label position: left, right (Not working in grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1mwherexlabel=bottom\033[0m axis 2 label position: top, bottom (Not working in grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1mwherextick=bottom\033[0m horizontal axis tick position: top, bottom (Not working in grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1mwhereytick=left\033[0m vertical axis tick position: left, right (Not working in grey3 plot)
+    \t\033[4mbool\033[0m\t\033[1mxreverse=n\033[0m [y/n] if y, reverse the horizontal axis (Not working in grey3 plot)
+    \t\033[4mbool\033[0m\t\033[1myreverse=y\033[0m [y/n] if y, reverse the vertical axis (Not working in grey3 plot)
+    \t\033[4mfloat\033[0m\t\033[1mzplot=1.0\033[0m vertical exaggeration factor for wiggle plot
 
 \033[1mPARAMETERS FOR EXTRA ELEMENTS\033[0m
     \tYou can add rectangles, arrows, and texts to the figure using parameters below. At most 10 rectangles, arrows, and texts can be added.
@@ -80,13 +114,17 @@
     \t\033[4mstring\033[0m\t\033[1mtext#=x,y,string\033[0m text #=1,2,... (up to text10), (x,y) is the position, string is the text content
     \t\033[4mstring\033[0m\t\033[1mtext#color=k\033[0m text color (default is framecolor)
     \t\033[4mfloat\033[0m\t\033[1mtext#size=12.\033[0m text font size (default is fontsz)
-    \t\033[4mstring\033[0m\t\033[1mtext#weight=normal\033[0m text font weight: normal, bold, light, etc. (default is fontfat)
+    \t\033[4mstring\033[0m\t\033[1mtext#weight=normal\033[0m text font weight: normal, bold, light, etc. (Can be numbers like 700) (default is fontfat)
     \t\033[4mstring\033[0m\t\033[1mtext#facecolor=none\033[0m text box face color (default is none)
     \t\033[4mstring\033[0m\t\033[1mtext#edgecolor=none\033[0m text box edge color (default is none)
     \t\033[4mfloat\033[0m\t\033[1mtext#alpha=0.5\033[0m text box alpha (default is 0.5)
 
-
-    
+\033[1mMORE INFO\033[0m
+    \tAuthor:\tauthor_label
+    \tEmail:\temail_label
+    \tSource:\tgithub_label
+\033[1mVERSION\033[0m
+    \tversion_label
 """
 
 
@@ -95,6 +133,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import mpl_toolkits.axisartist as artist
 import sys, subprocess, os, re
 from textwrap import dedent
 
@@ -102,11 +141,24 @@ from webencodings import labels
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re
+from rsfpy.version import __version__, __email__, __author__, __github__
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 
 __progname__ = os.path.basename(sys.argv[0])
+DESCRIPTION = {
+    "rsfgrey": "display RSF data as a grey or color image using matplotlib.",
+    "rsfgraph": "display RSF data trace(s) as a 1-D graph image using matplotlib.",
+    "rsfwiggle": "display RSF data as a wiggle image using matplotlib.",
+    "rsfgrey3": "display RSF data as a 3-D cube plot using matplotlib.",
+}
+__description__ = DESCRIPTION.get(__progname__, DESCRIPTION["rsfgrey"])
+__doc__ = __doc__.replace(DESCRIPTION["rsfgrey"],DESCRIPTION[__progname__])
+__doc__ = __doc__.replace("author_label",__author__)
+__doc__ = __doc__.replace("email_label",__email__)
+__doc__ = __doc__.replace("github_label",__github__)
+__doc__ = __doc__.replace("version_label",__version__)
+
 DOC = dedent(__doc__.replace('Mpygrey.py', __progname__))
-VERB = True
 
 def main():
     if len(sys.argv) < 2 and sys.stdin.isatty():
@@ -128,7 +180,7 @@ def main():
     yreverse = par_dict.get('yreverse', 'y').lower().startswith('y')
     xreverse = par_dict.get('xreverse', 'n').lower().startswith('y')
     allpos = par_dict.get('allpos', 'n').lower().startswith('y')
-    VERB = par_dict.get('verb', 'n').lower().startswith('y')
+    verb = par_dict.get('verb', 'n').lower().startswith('y')
     scalebar = par_dict.get('scalebar', 'n').lower().startswith('y')
     color = par_dict.get('color', 'gray')
     label1 = par_dict.get('label1', None)
@@ -280,7 +332,12 @@ def main():
         isflat = par_dict.get('flat', 'y').lower().startswith('y')
         label3 = par_dict.get('label3', None)
         wantlabel3 = par_dict.get('wantlabel3', 'y').lower().startswith('y')
+        format3 = par_dict.get('format3', None)
+        ntic3 = par_dict.get('ntic3', None)
 
+
+    # Verbose Message
+    if verb: sf_warning(par_dict, '.')
 
     # Colormap
     cmapper = {
@@ -418,18 +475,34 @@ def main():
                    point1=point1, point2=point2, colorbar=scalebar, cmap=color,
                    label1=label1, label2=label2, label3=label3,
                    clip=clip, pclip=pclip,bias=bias, allpos=allpos,
-                           title=title,
+                           title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
+                           format1=format1, format2=format2, format3=format3,
                    flat=isflat, show=False)
-        gattr.set_title(title, fontsize=titlesz, fontweight=titlefat)
+        gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
         gattr.set_lines(color=frame_color,width=frame_width)
         gattr.set_spines(color=frame_color,width=frame_width)
-        gattr.set_ticklabels(color=frame_color,fontsize=ticksz, weight=tickfat)
-        gattr.set_labels(color=frame_color,fontsize=labelsz, weight=labelfat)
-        gattr.cax.tick_params(axis='both', which='major',
-                              width=frame_width, colors=frame_color)
-        for iblabel in gattr.cax.yaxis.get_ticklabels():
-            iblabel.set_fontweight(tickfat)
-            iblabel.set_fontsize(ticksz)
+        gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
+        gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
+        if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
+        if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
+        if format3 is not None:
+            gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
+            gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
+        if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+        if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+        if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+        if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+
+        if scalebar:
+            gattr.cax.tick_params(axis='both', which='major',
+                                  width=frame_width, colors=frame_color)
+            if formatbar is not None:
+                gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+            # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
+
+            for iblabel in gattr.cax.yaxis.get_ticklabels():
+                iblabel.set_fontweight(tickfat)
+                iblabel.set_fontsize(ticksz)
 
     ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 
@@ -662,14 +735,19 @@ def getfloat(par_dict, parname, default):
     return val
 
 def sf_warning(*args, **kwargs):
-    verb = kwargs.pop('verb', VERB)
+    verb = kwargs.pop('verb', False)
     endl = ''
     file = kwargs.pop('file', sys.stderr)
-    if isinstance(args, str) and args[-1] is not None:
-        if args[-1].endswith('.'): endl = '\n' 
+    try:
+        if args[-1].endswith('.'): endl = '\n'
         if args[-1].endswith(';'): endl = '\r'
+    except:
+        if isinstance(args, str):
+            if args.endswith('.'): endl = '\n'
+            if args.endswith(';'): endl = '\r'
     endl = kwargs.pop('end', endl)
-    if verb: print(f'{__progname__}:', *args, file=file, end=endl, **kwargs)
+    sep = kwargs.pop('sep', '')
+    if verb: print(f'{__progname__}:', *args, sep=sep, file=file, end=endl, **kwargs)
 
 
 def sf_error(*args, **kwargs):

@@ -1,4 +1,4 @@
-import sys
+
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -49,7 +49,7 @@ class Grey3Attributes:
         for ilabel in labels:
             setters = {
                 'fontsize': ilabel.set_fontsize,
-                'weight': ilabel.set_weight,
+                'fontweight': ilabel.set_weight,
                 'color': ilabel.set_color,
                 'alpha': ilabel.set_alpha,
                 'rotation': ilabel.set_rotation,
@@ -86,6 +86,11 @@ class Grey3Attributes:
             for iax in [self.ax1, self.ax2, self.ax3, self.cax]:
                 if iax is None: continue
                 iax.tick_params(axis="both", which="major", width=ww)
+        if "color" in spines_kwargs:
+            cw = spines_kwargs.get("color")
+            for iax in [self.ax1, self.ax2, self.ax3, self.cax]:
+                if iax is None: continue
+                iax.tick_params(axis="both", which="major", color=cw)
 
     def set_lines(self, **lines_kwargs):
         for iline in self.vlines + self.hlines:
@@ -311,9 +316,10 @@ def grey3flat(
     gattr.hlines.append(ax3.hlines(y=axis3[frame3], xmin=axis2[0], xmax=axis2[-1], color=lcol))
     gattr.vlines.append(ax3.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol))
 
-    gattr.ticklabels.append(ax2.text(x=axis3[-1]+d3, y=axis1[frame1], s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90))
-    gattr.ticklabels.append(ax2.text(x=axis3[frame3], y=axis1[0]-d1, s=f"{axis3[frame3]:.3g}", ha="center", va="bottom", color=lcol, rotation=0))
-    gattr.ticklabels.append(ax3.text(x=axis2[frame2], y=axis3[-1]+d3, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0))
+    tlabelpad = 0.01
+    gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
+    gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=f"{axis3[frame3]:.3g}", ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
+    gattr.ticklabels.append(ax3.text(x=frame3/nx, y=1+tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
 
     ticks1 = ax1.get_yticks()
     ticks2 = ax3.get_yticks()
@@ -437,7 +443,7 @@ def grey3cube(
 
 
     n1tic, n2tic, n3tic = plot_params.get("n1tic", 5), plot_params.get("n2tic", 5), plot_params.get("n3tic", 5)
-
+    format1, format2, format3 = plot_params.get("format1", None), plot_params.get("format2", None), plot_params.get("format3", None)
     
     amax1, amax2, amax3 = axis1[-1], axis2[-1], axis3[-1]
     len1, len2, len3 = amax1 - o1, amax2 - o2, amax3 - o3
@@ -506,14 +512,17 @@ def grey3cube(
          [ayshear, 1, ayshift],
          [0, 0, 1]])
     )
+
     grid_helper = artist.floating_axes.GridHelperCurveLinear(atrans1,
                                         extremes=[o2, amax2, o3, amax3],
                                         grid_locator1=artist.grid_finder.MaxNLocator(nbins=n2tic),
-                                        grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic))
+                                        grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic),
+                                         tick_formatter2 = mticker.FormatStrFormatter(format3) if format3 is not None else None,
+                                                             )
     grid_helper1 = artist.floating_axes.GridHelperCurveLinear(atrans2,
                                          extremes=[o3, amax3, o1, amax1],
                                          grid_locator1=artist.grid_finder.MaxNLocator(nbins=n1tic),
-                                         grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic)
+                                         grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic),
                                          )
 
     topmargin = 0.05
@@ -614,6 +623,9 @@ def grey3cube(
     ax3.axis[:].major_ticklabels.set(visible=False)
     ax3.axis[:].major_ticks.set(visible=False)
     ax3.axis["right"].major_ticks.set(visible=False)
+
+    if format1 is not None: ax1.xaxis.set_major_formatter(mticker.FormatStrFormatter(format1))
+    if format2 is not None: ax1.yaxis.set_major_formatter(mticker.FormatStrFormatter(format2))
 
     # Labels
     ax1.set_xlabel(label2)

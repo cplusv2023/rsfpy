@@ -20,3 +20,6 @@
 
 
 __version__ = "0.1.0"
+__author__ = "Jiawei Chen"
+__email__ = "chenjw22@mails.jlu.edu.cn"
+__github__ = "https://github.com/cplusv2023/rsfpy"
