@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
@@ -11,6 +13,138 @@ import matplotlib.transforms as transforms
 # from mpl_toolkits.axisartist.grid_finder import MaxNLocator
 import mpl_toolkits.axisartist as artist
 from matplotlib.ticker import MaxNLocator as MaxNLocator1
+
+
+class Grey3Attributes:
+    '''
+     Feel so hard to manage all details.
+     This is for all the chaos
+    '''
+    fig = None
+    # Axes
+    main_ax = None  # The base ax
+    ax1 = None      # First ax
+    ax2 = None      # Second ax
+    ax3 = None      # Third ax
+    cax = None      # Colorbar ax (can be None)
+    title_ax = None # Title ax
+
+    # Graph elements
+    im1 = None
+    im2 = None
+    im3 = None
+    cbar = None
+
+    # Others
+    title_text = None
+    vlines = []
+    hlines = []
+    ticklabels = []
+    labels = []
+
+    def set_ticklabels(self, **tick_kwargs):
+        labels = []
+        labels += self.ticklabels
+
+        for ilabel in labels:
+            setters = {
+                'fontsize': ilabel.set_fontsize,
+                'weight': ilabel.set_weight,
+                'color': ilabel.set_color,
+                'alpha': ilabel.set_alpha,
+                'rotation': ilabel.set_rotation,
+            }
+            for key, setter in setters.items():
+                if key in tick_kwargs and tick_kwargs[key] is not None:
+                    setter(tick_kwargs[key])
+
+
+    def set_spines(self, **spines_kwargs):
+        spines = []
+        for iax in [self.ax1, self.ax2, self.ax3, self.cax]:
+            if iax is None: continue
+            try:
+                tmp = iax.axis["left"]
+                spines += [iax.axis["left"].line, iax.axis["right"].line, iax.axis["top"].line, iax.axis["bottom"].line]
+            except:
+                spines += iax.spines.values()
+        for spine in spines:
+
+            setters = {
+                'width': spine.set_linewidth,
+                'color': spine.set_color,
+                'linestyle': spine.set_linestyle,
+                'alpha': spine.set_alpha,
+                # 'visible': spine.set_visible,
+            }
+
+            for key, setter in setters.items():
+                if key in spines_kwargs and spines_kwargs[key] is not None:
+                    setter(spines_kwargs[key])
+        if "width" in spines_kwargs:
+            ww = spines_kwargs.get("width")
+            for iax in [self.ax1, self.ax2, self.ax3, self.cax]:
+                if iax is None: continue
+                iax.tick_params(axis="both", which="major", width=ww)
+
+    def set_lines(self, **lines_kwargs):
+        for iline in self.vlines + self.hlines:
+            if type(iline) is list:
+                iline = iline[0]
+            setters = {
+                'color': iline.set_color,
+                'linestyle': iline.set_linestyle,
+                'alpha': iline.set_alpha,
+                'width': iline.set_linewidths if hasattr(iline, 'set_linewidths') else iline.set_linewidth,
+            }
+            for key, setter in setters.items():
+                if key in lines_kwargs and lines_kwargs[key] is not None:
+                    setter(lines_kwargs[key])
+
+
+    def set_labels(self, **font_kwargs):
+        # labels = []
+        for ilabel in self.labels:
+            setters = {
+                'fontsize': ilabel.set_fontsize,
+                'fontweight': ilabel.set_fontweight,
+                'color': ilabel.set_color,
+                'alpha': ilabel.set_alpha,
+                'ha': ilabel.set_ha,
+                'va': ilabel.set_va,
+                'rotation': ilabel.set_rotation,
+            }
+            for key, setter in setters.items():
+                if key in font_kwargs and font_kwargs[key] is not None:
+                    setter(font_kwargs[key])
+
+    def set_title(self, text, **font_kwargs):
+        '''
+        Parameters
+        ----------
+        text : str
+            Title text
+        '''
+        if self.title_text is None:
+            return
+
+        self.title_text.set_text(text)
+
+        setters = {
+            'fontsize': self.title_text.set_fontsize,
+            'fontweight': self.title_text.set_fontweight,
+            'color': self.title_text.set_color,
+            'alpha': self.title_text.set_alpha,
+            'ha': self.title_text.set_ha,
+            'va': self.title_text.set_va,
+            'rotation': self.title_text.set_rotation,
+
+        }
+
+        for key, setter in setters.items():
+            if key in font_kwargs and font_kwargs[key] is not None:
+                setter(font_kwargs[key])
+
 
 def grey3flat(
     data: Union[np.ndarray, "Rsfarray"],
@@ -33,10 +167,11 @@ def grey3flat(
     **plot_params
 ) -> plt.Figure:
     """
-    三视图灰度/彩色绘制，框架与 grey 一致
+    grey3
     """
+    gattr = Grey3Attributes()
+
     data = np.squeeze(data)
-    # ---- 1. 数据检查 ----
     if data.ndim < 3:
         raise ValueError(f"Input data must be at least 3D, got shape {data.shape}")
     elif data.ndim > 3:
@@ -48,7 +183,6 @@ def grey3flat(
     frame2 = min(max(0, int(frame2)), nx - 1)
     frame3 = min(max(0, int(frame3)), nz - 1)
 
-    # ---- 2. 从 Rsfarray 读取属性 ----
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", 1.0)
         d2 = d2 if d2 is not None else getattr(data, "d2", 1.0)
@@ -74,7 +208,6 @@ def grey3flat(
         axis2 = np.linspace(o2, o2 + d2 * nx, nx)
         axis3 = np.linspace(o3, o3 + d3 * nz, nz)
 
-    # ---- 3. 数据切片 ----
     if hasattr(data, "window"):
         slice1 = data.window(n3=1, f3=frame3)
         slice2 = data.window(n2=1, f2=frame2)
@@ -84,7 +217,6 @@ def grey3flat(
         slice2 = data[:, frame2, :]  # n1-n3
         slice3 = data[frame1, :, :]  # n2-n3
 
-    # ---- 4. 颜色范围计算（与 grey 一致）----
     allslice = np.concatenate([slice1.ravel(), slice2.ravel(), slice3.ravel()])
     if bias is None:
         bias = 0
@@ -105,13 +237,14 @@ def grey3flat(
         if vmax is None: vmax = -vmin
         if vmin > vmax: vmin, vmax = vmax, vmin
 
-    # ---- 5. 创建 Figure 和布局 ----
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
     ax_main = ax
     ax_main.axis("off")
+    gattr.fig = fig
+    gattr.main_ax = ax_main
 
     if title: 
         height = 0.9
@@ -120,20 +253,16 @@ def grey3flat(
 
     if colorbar and cax is None and not wig:
         # Stole colorbar axes
-        width = 0.9
+        width = 0.875
     else: width = 1.
 
-    # 三个 inset_axes
     ax1 = ax_main.inset_axes([0.0, 0.0, point2 * width, point1 * height])
     ax2 = ax_main.inset_axes([point2*width, 0.0, (1 - point2) * width, point1 * height], sharey=ax1)
     ax3 = ax_main.inset_axes([0.0, point1 * height, point2 * width, (1 - point1) * height], sharex=ax1)
+    gattr.ax1 = ax1
+    gattr.ax2 = ax2
+    gattr.ax3 = ax3
 
-    # # ---- 6. extent 计算 ----
-    # extent1 = (o2, o2 + d2 * nx, o1 + d1 * ny, o1)  # slice1
-    # extent2 = (o3, o3 + d3 * nz, o1 + d1 * ny, o1)  # slice2
-    # extent3 = (o2, o2 + d2 * nx, o3, o3 + d3 * nz)  # slice3
-
-    # ---- 7. 绘制 ----
     if wig:
         wigparas = {
             'zplot': plot_params.get('zplot', 1),
@@ -153,23 +282,38 @@ def grey3flat(
         im1 = ax1.images[0]
         im2 = ax2.images[0]
         im3 = ax3.images[0]
+        gattr.im1 = im1
+        gattr.im2 = im2
+        gattr.im3 = im3
+        gattr.labels.append(ax1.xaxis.label)
+        gattr.labels.append(ax2.xaxis.label)
+        gattr.labels.append(ax1.yaxis.label)
+        gattr.labels.append(ax3.yaxis.label)
 
 
 
     ax2.yaxis.set_visible(False)
     ax3.xaxis.set_visible(False)
 
-    lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
-    ax1.hlines(y=axis1[frame1], xmin=axis2[0], xmax=axis2[-1], color=lcol)
-    ax1.vlines(x=axis2[frame2], ymin=axis1[0], ymax=axis1[-1], color=lcol)
-    ax2.hlines(y=axis1[frame1], xmin=axis3[0], xmax=axis3[-1], color=lcol)
-    ax2.vlines(x=axis3[frame3], ymin=axis1[0], ymax=axis1[-1], color=lcol)
-    ax3.hlines(y=axis3[frame3], xmin=axis2[0], xmax=axis2[-1], color=lcol)
-    ax3.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol)
+    for itklabel in ax1.xaxis.get_ticklabels() +\
+        ax1.yaxis.get_ticklabels() + \
+        ax2.xaxis.get_ticklabels() + \
+        ax2.yaxis.get_ticklabels() + \
+        ax3.xaxis.get_ticklabels() + \
+        ax3.yaxis.get_ticklabels():
+        gattr.ticklabels.append(itklabel)
 
-    ax2.text(x=axis3[-1]+d3, y=axis1[frame1], s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90)
-    ax2.text(x=axis3[frame3], y=axis1[0]-d1, s=f"{axis3[frame3]:.3g}", ha="center", va="bottom", color=lcol, rotation=0)
-    ax3.text(x=axis2[frame2], y=axis3[-1]+d3, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0)
+    lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
+    gattr.hlines.append(ax1.hlines(y=axis1[frame1], xmin=axis2[0], xmax=axis2[-1], color=lcol))
+    gattr.vlines.append(ax1.vlines(x=axis2[frame2], ymin=axis1[0], ymax=axis1[-1], color=lcol))
+    gattr.hlines.append(ax2.hlines(y=axis1[frame1], xmin=axis3[0], xmax=axis3[-1], color=lcol))
+    gattr.vlines.append(ax2.vlines(x=axis3[frame3], ymin=axis1[0], ymax=axis1[-1], color=lcol))
+    gattr.hlines.append(ax3.hlines(y=axis3[frame3], xmin=axis2[0], xmax=axis2[-1], color=lcol))
+    gattr.vlines.append(ax3.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol))
+
+    gattr.ticklabels.append(ax2.text(x=axis3[-1]+d3, y=axis1[frame1], s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90))
+    gattr.ticklabels.append(ax2.text(x=axis3[frame3], y=axis1[0]-d1, s=f"{axis3[frame3]:.3g}", ha="center", va="bottom", color=lcol, rotation=0))
+    gattr.ticklabels.append(ax3.text(x=axis2[frame2], y=axis3[-1]+d3, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0))
 
     ticks1 = ax1.get_yticks()
     ticks2 = ax3.get_yticks()
@@ -184,20 +328,24 @@ def grey3flat(
     # ---- 8. colorbar ----
     if colorbar:
         if cax is not None:
-            fig.colorbar(im1, cax=cax)
+            gattr.cbar = fig.colorbar(im1, cax=cax)
         else:
             cwidth = (1 - width)/3
             cax = ax_main.inset_axes([width+cwidth, 0.0, cwidth, height])
-            fig.colorbar(im1, cax=cax)
+            gattr.cbar = fig.colorbar(im1, cax=cax)
+        gattr.cax = cax
 
     if title:
         ax_title = ax_main.inset_axes([0.0, height, 1, 1 - height])
-        ax_title.text(0.5, 0.5, title, ha="center", va="center", fontsize=12)
+        gattr.title_text = ax_title.text(0.5, 0.5, title, ha="center", va="bottom", fontsize=12)
         ax_title.axis("off")
+        gattr.title_ax = ax_title
+
     if plot_params.get('show', True):
         plt.show()
 
-    return fig
+    # return fig
+    return gattr
 
 
 def grey3cube(
@@ -220,7 +368,7 @@ def grey3cube(
     **plot_params
 ) -> plt.Figure:
    
-     # ---- 1. 数据检查 ----
+    gattr = Grey3Attributes()
     data = np.squeeze(data)
     if data.ndim < 3:
         raise ValueError(f"Input data must be at least 3D, got shape {data.shape}")
@@ -257,7 +405,7 @@ def grey3cube(
         axis1 = np.linspace(o1, o1 + d1 * ny, ny)
         axis2 = np.linspace(o2, o2 + d2 * nx, nx)
         axis3 = np.linspace(o3, o3 + d3 * nz, nz)
-    # ---- 3. 数据切片 ----
+
     if hasattr(data, "window"):
         slice1 = data.window(n3=1, f3=frame3)
         slice2 = data.window(n2=1, f2=frame2)
@@ -376,6 +524,8 @@ def grey3cube(
     else:
         fig = ax.figure
     axbase0 = ax
+    gattr.fig = fig
+    gattr.main_ax = axbase0
 
     axbase0.axis('off')
     axbase0.set_label("Base axes")
@@ -383,12 +533,13 @@ def grey3cube(
     if title:
         title_pos = [0, 1 - topmargin, 1, topmargin]
         ax_title = axbase0.inset_axes(title_pos)
+        gattr.title_ax = ax_title
         ax_title.set_frame_on(False)
         ax_title.get_xaxis().set_visible(False)
         ax_title.get_yaxis().set_visible(False)
         ax_title.set_xlim([0, 1])
         ax_title.set_ylim([0, 1])
-        ax_title.text(0.5, 1, title, va='bottom', ha='center')
+        gattr.title_text = ax_title.text(0.5, 1, title, va='bottom', ha='center')
         axbase0.add_child_axes(ax_title)
     else:
         topmargin = 0.
@@ -397,7 +548,9 @@ def grey3cube(
 
     if colorbar and cax is None:
         axbase = axbase0.inset_axes(bounds=[0, 0, 0.85, 1 - topmargin], facecolor="none")
+        gattr.main_ax = axbase
         axbar = axbase0.inset_axes(bounds=[0.90, 0, 0.05, 1 - topmargin], facecolor="none")
+        gattr.cax = axbar
         axbase.set_label("Base axes with bar")
     else:
         axbase = axbase0
@@ -405,9 +558,11 @@ def grey3cube(
 
     ax1 = axbase.inset_axes(bounds=[0, 0, point2, point1*hei_ax], facecolor="none")
     ax1.set_label("Axes 1 [n1, n2]")
+    gattr.ax1 = ax1
 
     im0 = ax1.imshow(slice1, aspect="auto", extent=extents[0],
                      cmap=cmap, vmin=vmin, vmax=vmax)
+    gattr.im1 = im0
 
     ax1.yaxis.set_major_locator(MaxNLocator1(nbins=n1tic))
     ax1.set_xlim(axis_xlims[0])
@@ -417,9 +572,11 @@ def grey3cube(
                             axes_class=artist.Axes, grid_helper=grid_helper,
                             facecolor="none")
     ax2.set_label("Axes 3 [n1, n3]")
+    gattr.ax2 = ax2
 
     im1 = ax2.imshow(slice3.T, aspect="auto", extent=extents[1],
                      cmap=cmap, vmin=vmin, vmax=vmax)
+    gattr.im2 = im1
  
     im1.set_transform(dtrans1 + ax2.transAxes)
 
@@ -432,10 +589,12 @@ def grey3cube(
                             axes_class=artist.Axes, grid_helper=grid_helper1,
                             facecolor="none")
     ax3.set_label("Axes 2 [n2, n3]")
+    gattr.ax3 = ax3
 
     im2 = ax3.imshow(slice2, aspect="auto", extent=extents[2],
                      cmap=cmap, vmin=vmin, vmax=vmax)
     im2.set_transform(dtrans2 + ax3.transAxes)
+    gattr.im3 = im2
     #
     ax3.set_xlim(axis_xlims[2])
     ax3.set_ylim(axis_ylims[2])
@@ -462,11 +621,26 @@ def grey3cube(
 
     ax2.axis["left"].label.set(text=label3)
 
+    gattr.labels.append(ax1.xaxis.label)
+    gattr.labels.append(ax1.yaxis.label)
+    gattr.labels.append(ax2.axis["left"].label)
+
+    for itklabel in ax1.xaxis.get_ticklabels() +\
+        ax1.yaxis.get_ticklabels():
+        gattr.ticklabels.append(itklabel)
+    gattr.ticklabels.append(ax2.axis["left"].major_ticklabels)
+
+    # Z-order
+    ax1.spines[:].set_zorder(10)
+    ax2.axis[:].line.set_zorder(10)
+    ax3.axis[:].line.set_zorder(10)
+
 
     # Colorbar
     if colorbar and cax is None:
         # cbar = fig.colorbar(im0, cax=axbar, label=bartitle, orientation=barpos)
         cbar = fig.colorbar(im0, cax=axbar, cmap=cmap, label=plot_params.get('bartitle', ''),)
+        gattr.cbar = cbar
 
     # Indicating lines
 
@@ -479,13 +653,13 @@ def grey3cube(
 
     lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
 
-    ax1.hlines(l11*hei_ax,0,point2, color=lcol,transform=axbase.transAxes)
-    ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes)
-    ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes)
-    ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes)
-    ax3.vlines(1, (1-point1)*hei_ax, 1*hei_ax, color=lcol, transform=axbase.transAxes)
-    ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes)
-    ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes)
+    gattr.hlines.append(ax1.hlines(l11*hei_ax,0,point2, color=lcol,transform=axbase.transAxes))
+    gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes))
+    gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes))
+    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes))
+    gattr.vlines.append(ax3.vlines(1, (1-point1)*hei_ax, 1*hei_ax, color=lcol, transform=axbase.transAxes))
+    gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes))
+    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes))
 
     # Indicating labels
     lab1 = str(axis2[frame2])
@@ -497,12 +671,14 @@ def grey3cube(
     lab3 = str(axis3[frame3])
     lab31 = "%.2f" % axis3[frame3]
     lab3 = lab31 if len(lab31) < len(lab3) else lab3
-    axbase.text(l221, 1*hei_ax, "%s" % lab1, va='bottom',
-                ha='center', color=lcol)
-    axbase.text(1, l31*hei_ax, "%s" % lab2, va='center',
-                ha='left', color=lcol, rotation=-90)
-    axbase.text(l22, loff1*hei_ax,
-                "%s" % lab3, va='top', ha='left', color=lcol)
+    gattr.ticklabels.append(axbase.text(l221, 1*hei_ax, "%s" % lab1, va='bottom',
+                ha='center', color=lcol))
+    gattr.ticklabels.append(axbase.text(1, l31*hei_ax, "%s" % lab2, va='center',
+                ha='left', color=lcol, rotation=-90))
+    gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
+                "%s" % lab3, va='top', ha='left', color=lcol))
+
+    return gattr
 
 
 def grey3(*args, **kargs):

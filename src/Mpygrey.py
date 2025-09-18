@@ -97,6 +97,9 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import sys, subprocess, os, re
 from textwrap import dedent
+
+from webencodings import labels
+
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
@@ -410,16 +413,23 @@ def main():
 
     elif plottype == 'grey3':
         if not wantlabel3: label3 = " "
-        plt.rcParams['font.size'] = fontsz
-        plt.rcParams['font.weight'] = fontweight
-        plt.rcParams['axes.titlesize'] = labelsz
-        plt.rcParams['axes.titleweight'] = labelfat
 
-        data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
+        gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
                    point1=point1, point2=point2, colorbar=scalebar, cmap=color,
                    label1=label1, label2=label2, label3=label3,
                    clip=clip, pclip=pclip,bias=bias, allpos=allpos,
+                           title=title,
                    flat=isflat, show=False)
+        gattr.set_title(title, fontsize=titlesz, fontweight=titlefat)
+        gattr.set_lines(color=frame_color,width=frame_width)
+        gattr.set_spines(color=frame_color,width=frame_width)
+        gattr.set_ticklabels(color=frame_color,fontsize=ticksz, weight=tickfat)
+        gattr.set_labels(color=frame_color,fontsize=labelsz, weight=labelfat)
+        gattr.cax.tick_params(axis='both', which='major',
+                              width=frame_width, colors=frame_color)
+        for iblabel in gattr.cax.yaxis.get_ticklabels():
+            iblabel.set_fontweight(tickfat)
+            iblabel.set_fontsize(ticksz)
 
     ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 
