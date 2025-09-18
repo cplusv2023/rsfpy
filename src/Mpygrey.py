@@ -133,6 +133,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import matplotlib.font_manager as font_manager
 import mpl_toolkits.axisartist as artist
 import sys, subprocess, os, re
 from textwrap import dedent
@@ -381,10 +382,25 @@ def main():
         except:
             sf_warning(f"Warning: invalid barlabelfat={barlabelfat}, use default {fontweight}.")
             barlabelfat = fontweight
- 
 
-
-    plt.rcParams['font.family'] = font_family
+    easy_font_name = {
+        'Times': 'Nimbus Roman', #Embrace open source
+        '-1': 'Sans-serif',
+        '1': 'Sans-serif',
+        '2': 'Nimbus Roman',
+        '3': 'Courier New',
+        '4': 'Noto Sans CJK',
+        '0': 'Arial',
+        'Chinese': 'Noto Sans CJK',
+    }
+    if font_family in easy_font_name.keys():
+        plt.rcParams['font.family'] = [easy_font_name.get(font_family, 'Sans-serif'), 'Sans-serif']
+    elif os.path.exists(font_family):
+        font_manager.fontManager.addfont(font_family)
+        new_font = font_manager.FontProperties(fname=font_family)
+        plt.rcParams['font.family'] = [new_font.get_name(), 'Sans-serif']
+    else: plt.rcParams['font.family'] = [font_family, 'Sans-serif']
+    plt.rcParams['axes.unicode_minus'] = False
 
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
     ax = fig.add_subplot(1, 1, 1)
@@ -735,7 +751,6 @@ def getfloat(par_dict, parname, default):
     return val
 
 def sf_warning(*args, **kwargs):
-    verb = kwargs.pop('verb', False)
     endl = ''
     file = kwargs.pop('file', sys.stderr)
     try:
@@ -747,7 +762,7 @@ def sf_warning(*args, **kwargs):
             if args.endswith(';'): endl = '\r'
     endl = kwargs.pop('end', endl)
     sep = kwargs.pop('sep', '')
-    if verb: print(f'{__progname__}:', *args, sep=sep, file=file, end=endl, **kwargs)
+    print(f'{__progname__}:', *args, sep=sep, file=file, end=endl, **kwargs)
 
 
 def sf_error(*args, **kwargs):
