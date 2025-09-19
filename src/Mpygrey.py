@@ -28,6 +28,7 @@
     \t\033[4mstring\033[0m\t\033[1mbarlabel=\033[0m colorbar label
     \t\033[4mstring\033[0m\t\033[1mbarlabelfat=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mbarlabelsz=12.\033[0m colorbar label font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mbackend=default\033[0m matplotlib backend (default: let matplotlib decide)
     \t\033[4mfloat\033[0m\t\033[1mbgcolor=w\033[0m background color (w: white, k: black)
     \t\033[4mstring\033[0m\t\033[1mbias=0.\033[0m value mapped to the center of the color table
     \t\033[4mfloat\033[0m\t\033[1mclip=\033[0m data clip
@@ -129,21 +130,18 @@
 
 
 
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.font_manager as font_manager
-import mpl_toolkits.axisartist as artist
+from matplotlib import use as use_backend
+from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 import sys, subprocess, os, re
 from textwrap import dedent
 
-from webencodings import labels
-
 from rsfpy import Rsfarray
-from rsfpy.utils import _str_match_re
+from rsfpy.utils import _str_match_re, _get_stdname
 from rsfpy.version import __version__, __email__, __author__, __github__
-from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 
 __progname__ = os.path.basename(sys.argv[0])
 DESCRIPTION = {
@@ -167,6 +165,22 @@ def main():
         sys.exit(1)
     par_dict = _str_match_re(sys.argv[1:])
 
+    stdname = _get_stdname()
+    suffix = os.path.splitext(stdname[1])[1].lower()
+    if suffix not in [
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".webp",
+        ".webm",
+        ".eps",
+        ".ps",
+        ".pgf"
+    ]: suffix = ".svg"
     # Check stdin
     if sys.stdin.isatty():
         sf_error("Error: no input data?")
@@ -177,32 +191,43 @@ def main():
         sf_error("Failed read RSF data from input.")
     
     # Get parameters
+    backend = par_dict.get('backend', 'default')
+    if backend.lower() != 'default': use_backend(backend)
     transp = par_dict.get('transp', 'y').lower().startswith('y')
     yreverse = par_dict.get('yreverse', 'y').lower().startswith('y')
     xreverse = par_dict.get('xreverse', 'n').lower().startswith('y')
     allpos = par_dict.get('allpos', 'n').lower().startswith('y')
     verb = par_dict.get('verb', 'n').lower().startswith('y')
-    scalebar = par_dict.get('scalebar', 'n').lower().startswith('y')
-    color = par_dict.get('color', 'gray')
+    scalebar = par_dict.get('scalebar',
+                            par_dict.get('colorbar', 'n')
+                            ).lower().startswith('y')
+    color = par_dict.get('color', par_dict.get('cmap', 'gray'))
     label1 = par_dict.get('label1', None)
     label2 = par_dict.get('label2', None)
     title = par_dict.get('title', data.header.get('title', ''))
     clip = getfloat(par_dict, 'clip', None)
     pclip = getfloat(par_dict, 'pclip', 99.)
     bias = getfloat(par_dict, 'bias', 0.)
-    fig_width = getfloat(par_dict, 'screenwidth', 8.)
-    fig_height = getfloat(par_dict, 'screenheight', 6.)
-    facecolor = par_dict.get('bgcolor', 'w')
+    fig_width = getfloat(par_dict, 'screenwidth',
+                         getfloat(par_dict, 'width', 8.))
+    fig_height = getfloat(par_dict, 'screenheight',
+                          getfloat(par_dict, 'screenheight', 6.))
+    facecolor = par_dict.get('bgcolor', par_dict.get('facecolor', 'w'))
     dpi = getfloat(par_dict, 'dpi', 100.)
-    fontsz = getfloat(par_dict, 'fontsz', 12.)
+    fontsz = getfloat(par_dict, 'fontsz',
+                      getfloat(par_dict, 'fontsize', 12.))
     font_family = par_dict.get('font', 'sans-serif')
-    fontweight = par_dict.get('fontfat', 'normal')
-    labelsz = getfloat(par_dict, 'labelsz', fontsz)
-    titlesz = getfloat(par_dict, 'titlesz', fontsz)
+    fontweight = par_dict.get('fontfat', par_dict.get('fontweight', 'normal'))
+    labelsz = getfloat(par_dict, 'labelsz',
+                       getfloat(par_dict, 'labelsize', fontsz)
+                       )
+
+    titlesz = getfloat(par_dict, 'titlesz',
+                       getfloat(par_dict, 'titlesize', fontsz))
     ticksz = getfloat(par_dict, 'ticksz', fontsz)
-    labelfat = par_dict.get('labelfat', fontweight)
-    titlefat = par_dict.get('titlefat', fontweight)
-    tickfat = par_dict.get('tickfat', fontweight)
+    labelfat = par_dict.get('labelfat', par_dict.get('labelweight', fontweight))
+    titlefat = par_dict.get('titlefat', par_dict.get('titleweight', fontweight))
+    tickfat = par_dict.get('tickfat', par_dict.get('tickweight', fontweight))
     gridon = par_dict.get('grid', 'n').lower().startswith('y')
     gridstyle = par_dict.get('gridstyle', '--')
     frame_color = par_dict.get('framecolor', 'k')
@@ -223,10 +248,11 @@ def main():
     format1 = par_dict.get('format1', None)
     format2 = par_dict.get('format2', None)
     formatbar = par_dict.get('formatbar', None)
-    barlabel = par_dict.get('barlabel', '')
-    barlabelfat = par_dict.get('barlabelfat', fontweight)
-    barlabelsz = getfloat(par_dict, 'barlabelsz', fontsz)
-    pformat = par_dict.get('format', 'svg')
+    barlabel = par_dict.get('barlabel', par_dict.get('bartitle', ''))
+    barlabelfat = par_dict.get('barlabelfat', par_dict.get('barlabelweight', fontweight))
+    barlabelsz = getfloat(par_dict, 'barlabelsz',
+                          getfloat(par_dict, 'barlabelsize', fontsz))
+    pformat = par_dict.get('format', suffix[1:])
     wantlabel1 = par_dict.get('wantlabel1', 'y').lower().startswith('y')
     wantlabel2 = par_dict.get('wantlabel2', 'y').lower().startswith('y')
 

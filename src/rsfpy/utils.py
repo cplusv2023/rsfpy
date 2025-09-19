@@ -65,6 +65,26 @@ def _str_match_re(str_in: Optional[Union[str, dict]],
             out_dict[k] = v
     return out_dict
 
+def _get_stdname():
+    pid = os.getpid()
+    result = Run(['lsof', '-p', str(pid)], capture_output=True, text=True)
+    stdout_file = None
+    stdin_file = None
+    stderr_file = None
+
+    for line in result.stdout.splitlines():
+        parts = re.split(r'\s+', line.strip())
+        if len(parts) < 9:
+            continue
+        fd, ftype, name = parts[3], parts[4], parts[-1]
+
+        if fd.startswith('0') and ftype != 'CHR':
+            stdin_file = name
+        elif fd.startswith('1') and ftype != 'CHR':
+            stdout_file = name
+        elif fd.startswith('2') and ftype != 'CHR':
+            stderr_file = name
+    return stdin_file, stdout_file, stderr_file
 
 def _get_datapath(cwd=os.getcwd()):
 
