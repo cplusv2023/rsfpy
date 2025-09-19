@@ -66,6 +66,9 @@ svgviewer < rows.svg cols.svg
 
 ```
 You can also use the python API.
+
+![svgviewer](./img/rows.png)
+![svgviewer](./img/cols.png)
 ### import 
 ```python
 from rsfpy.array import Rsfarray

@@ -21,7 +21,7 @@ from rsfpy.utils import _get_stdname
 
 svgviewer_path = importlib.resources.files(bin).joinpath("svgviewer")
 __progname__ = os.path.basename(sys.argv[0])
-DOC = dedent(__doc__.replace('Msvgpen.py', __progname__))
+DOC = dedent(__doc__.replace('Msvgviewer.py', __progname__))
 
 
 
