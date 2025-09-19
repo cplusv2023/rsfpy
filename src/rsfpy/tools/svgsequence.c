@@ -150,13 +150,13 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
 
     // 内容区域尺寸
     int content_h = win_h - toolbar_h - hintbar_h;
-    double sx = (double)win_w / f->width;
-    double sy = (double)content_h / f->height;
+    double sx = (double)win_w / (f->width * PXPT_TRANS);
+    double sy = (double)content_h / (f->height * PXPT_TRANS);
     double s = sx < sy ? sx : sy;
 
     // 缩放后尺寸与偏移
-    double dst_w = f->width * s;
-    double dst_h = f->height * s;
+    double dst_w = (f->width * PXPT_TRANS)* s;
+    double dst_h = (f->height * PXPT_TRANS) * s;
     double ox = (win_w - dst_w) / 2;
     double oy = (content_h - dst_h) / 2;
 

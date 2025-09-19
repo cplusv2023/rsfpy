@@ -4,6 +4,8 @@
 #include <glib.h>
 
 #define MAX_FRAMES 200
+
+#define PXPT_TRANS 1.066667f /* 96/90 */
 #define SPLIT_MARKER "<!-- RSFPY_SPLIT -->"
 
 
