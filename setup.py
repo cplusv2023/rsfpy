@@ -16,22 +16,6 @@ with io.open("requirements.txt", encoding="utf-8") as f:
 with io.open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
-# class CustomInstall(install):
-#     def run(self):
-#         target_dir = os.path.join(self.install_lib, "rsfpy", "bin")
-#         os.makedirs(target_dir, exist_ok=True)
-#         subprocess.check_call(["scons",
-#                                f"install_dir={target_dir}"], shell=True)
-#         super().run()
-#
-# class CustomDevelop(develop):
-#     def run(self):
-#         target_dir = os.path.join(self.install_dir, "rsfpy", "bin")
-#         os.makedirs(target_dir, exist_ok=True)
-#         subprocess.check_call(["scons",
-#                                f"install_dir={target_dir}"], shell=True)
-#         super().run()
-
 class CustomInstall(install):
     def run(self):
         target_dir = os.path.join(self.install_lib, "rsfpy", "bin")
@@ -51,7 +35,7 @@ class CustomDevelop(develop):
         super().run()
 setup(
     name="rsfpy",
-    version="0.1.0",
+    version="0.1.1",
     description="A Python toolkit for RSF data IO",
     long_description=long_description,
     long_description_content_type="text/markdown",

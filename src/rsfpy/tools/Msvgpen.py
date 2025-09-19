@@ -15,7 +15,7 @@ __doc__ = """
     \t\033[4mint\033[0m\t\033[1mnrow=-1\033[0m number of rows (default is -1, which means auto)
     \t\033[4mbool\033[0m\t\033[1mstretchx=n\033[0m [y/n] if y, stretch subplots to have the same width (only in grid mode)
     \t\033[4mbool\033[0m\t\033[1mstretchy=y\033[0m [y/n] if y, stretch subplots to have the same height (only in grid mode)
-    \t\033[4mstring\033[0m\t\033[1mmode=grid\033[0m arrangement mode: grid or overlay
+    \t\033[4mstring\033[0m\t\033[1mmode=grid\033[0m arrangement mode: grid, overlay or movie
     \t\033[4mstring\033[0m\t\033[1mbgcolor=\033[0m background color (w: white, k: black, etc.)
     \t\033[4mbool\033[0m\t\033[1mlabel=y\033[0m [y/n] if y, add subplot labels (only in grid mode)
     \t\033[4mstring\033[0m\t\033[1mlabelfont=\033[0m label font family
@@ -32,6 +32,7 @@ __doc__ = """
 import math, sys, os, subprocess
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
+from rsfpy.version import __SVG_SPLITTER
 
 
 __progname__ = os.path.basename(sys.argv[0])
@@ -125,10 +126,40 @@ def main():
                        labelfont=labelfont, labelcolor=labelcolor, labelsz=labelsz, labelfat=labelfat)
     elif mode == 'overlay':
         outtree = overlay(inputs, bgcolor=bgcolor)
+
+    elif mode == 'movie':
+         sys.stdout.write(movie(inputs))
+         outtree = None
     else:
         sf_error(f"Error: unsupported mode={mode}.")
-    outtree.write(sys.stdout.buffer, pretty_print=True, xml_declaration=True, encoding='utf-8')
-    
+    if outtree is not None: outtree.write(sys.stdout.buffer, pretty_print=True, xml_declaration=True, encoding='utf-8')
+
+def movie(inputs):
+    """
+    将多个 SVG 文件拼接成自定义格式，每段之间用 <!-- RSFPY_SPLIT --> 分隔。
+    参数:
+        inputs: List[str | IO] - SVG 文件路径或文件指针
+    返回:
+        str - 拼接后的 SVG 内容
+    """
+    splitter = __SVG_SPLITTER
+    segments = []
+
+    for item in inputs:
+        if hasattr(item, "read"):  # 是文件指针
+            content = item.read()
+        elif isinstance(item, str):  # 是路径
+            with open(item, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            raise TypeError(f"Unsupported input type: {type(item)}")
+
+        content = content.strip()
+        if content:
+            segments.append(content)
+
+    return f"\n{splitter}\n".join(segments)
+
 
 def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,label=False, loc="north west",    labeltype="a", labelformat="(%s)", labelmargin=10,
          labelfont=None, labelcolor="#000", labelsz=12, labelfat="normal"):

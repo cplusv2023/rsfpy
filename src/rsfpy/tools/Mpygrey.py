@@ -135,6 +135,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.font_manager as font_manager
+from SCons.Tool import suffix
 from matplotlib import use as use_backend
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
 import sys, subprocess, os, re
@@ -142,7 +143,7 @@ from textwrap import dedent
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re, _get_stdname
-from rsfpy.version import __version__, __email__, __author__, __github__
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
 
 __progname__ = os.path.basename(sys.argv[0])
 DESCRIPTION = {
@@ -167,7 +168,8 @@ def main():
     par_dict = _str_match_re(sys.argv[1:])
 
     stdname = _get_stdname()
-    suffix = os.path.splitext(stdname[1])[1].lower()
+    if stdname[1] is not None: suffix = os.path.splitext(stdname[1])[1].lower()
+    else:suffix = '.svg'
     if suffix not in [
         ".png",
         ".jpg",
@@ -259,6 +261,8 @@ def main():
     barlabelsz = getfloat(par_dict, 'barlabelsz',
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
+    movie = par_dict.get('movie', 'n').endswith('y')
+    maxframe = int(getfloat(par_dict, 'maxframe', 10))
 
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
@@ -433,342 +437,408 @@ def main():
     else: plt.rcParams['font.family'] = [font_family, 'Sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
 
+    ################################################################################
+    # Support multiple frames
+    if plottype == 'grey3':
+        movie = getfloat(par_dict, 'movie', None)
+    databin = None
+    nframes = 1
+    frame_step = 1
+    frame_axis = None
+    frame_prefix = "Frame"
+    frame_suffix = ""
+    if pformat.lower() != 'svg':
+        movie = False
+    elif movie:
+        databin = data
+        dpi = getfloat(par_dict, 'dpi', 50)
+
+        # determine number of frames
+        if plottype == 'grey':
+            databin = data.reshape((data.n1, data.n2, -1))
+            nframes = databin.n3
+            if nframes > maxframe:
+                frame_step = int(round(nframes / maxframe))
+            frame_axis = databin.axis3
+            frame_prefix = databin.label3 if databin.label3 is not None else "Frame"
+            frame_suffix = f" ({databin.unit3})" if databin.unit3 is not None else ""
+            if nframes == 1:
+                movie = False
+
+    if not movie: maxframe = 1
+
+
+
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
     ax = fig.add_subplot(1, 1, 1)
 
-    if plottype == 'grey':
-        
-        data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
-                allpos=allpos, clip=clip, pclip=pclip, bias=bias, cmap=color, 
-                min1=min1, max1=max1, min2=min2, max2=max2,
-                colorbar=False, show=False)
-    elif plottype == 'wiggle':
-        data.wiggle(ax=ax, 
-                transp=transp, yreverse=yreverse, xreverse=xreverse,
-                min1=min1, max1=max1, min2=min2, max2=max2,
-                zplot=zplot, bias=bias, clip=clip, pclip=pclip,
-                ncolor=ncolor, pcolor=pcolor, lcolor=lcolor,
-                linewidth=plotfat,
-                show=False)
-    elif plottype == 'graph':
-        if data.ndim < 2:
-            data = data.reshape((data.n1, 1))
-        for itrace in range(data.n2):
-            if transp:
-                x = data[:, itrace].squeeze()
-                y = data.axis1
+    for iframe in range(min(nframes, maxframe)):
+
+        if plottype == 'grey':
+            if movie: data = databin.window(n3=1, f3=iframe*frame_step)
+            if iframe==0:
+                data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
+                    allpos=allpos, clip=clip, pclip=pclip, bias=bias, cmap=color,
+                    min1=min1, max1=max1, min2=min2, max2=max2,
+                    colorbar=False, show=False, interpolation="none")
             else:
-                x = data.axis1
-                y = data[:, itrace].squeeze()
-            
-            ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
-                    linestyle=lstyles[itrace],                    
-                    label=legends[itrace] if legends else None)
+                ax.images[0].set_data(data)
+                if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                # save or show figure
+                if not sys.stdout.isatty():
+                    fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                                transparent=None)
+                    sys.stdout.flush()
+                    # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
+                    if movie:
+                        splitter = (__SVG_SPLITTER[:-3] +
+                                f"framelabel=\"{frame_prefix}{frame_suffix}: "+
+                                f"{frame_axis[iframe*frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
+                                __SVG_SPLITTER[-3:])
+                        sys.stdout.write(f"\n{splitter}\n")
+                        sys.stdout.flush()
 
-        amin1, amax1 = ax.get_xlim()
-        amin2, amax2 = ax.get_ylim()
-        min1 = min1 if min1 is not None else amin1
-        max1 = max1 if max1 is not None else amax1
-        min2 = min2 if min2 is not None else amin2
-        max2 = max2 if max2 is not None else amax2
+                else:
+                    plt.pause(0.01)
+                continue
+        elif plottype == 'wiggle':
+            data.wiggle(ax=ax,
+                    transp=transp, yreverse=yreverse, xreverse=xreverse,
+                    min1=min1, max1=max1, min2=min2, max2=max2,
+                    zplot=zplot, bias=bias, clip=clip, pclip=pclip,
+                    ncolor=ncolor, pcolor=pcolor, lcolor=lcolor,
+                    linewidth=plotfat,
+                    show=False)
+        elif plottype == 'graph':
+            if data.ndim < 2:
+                data = data.reshape((data.n1, 1))
+            for itrace in range(data.n2):
+                if transp:
+                    x = data[:, itrace].squeeze()
+                    y = data.axis1
+                else:
+                    x = data.axis1
+                    y = data[:, itrace].squeeze()
 
-        if logx and logxbase <= 0.:
-            sf_warning(f"Warning: invalid logxbase={logxbase}, use default 10.")
-            logxbase = 10.
-        if logy and logybase <= 0.:
-            sf_warning(f"Warning: invalid logybase={logybase}, use default 10.")
-            logybase = 10.
-        if logx and min1 <= 0.:
-            sf_warning(f"Warning: logx but min2={min1} <= 0, use normal x axis.")
-            logx = False
-        if logy and min2 <= 0.:
-            sf_warning(f"Warning: logy but min1={min2} <= 0, use normal y axis.")
-            logy = False
-        
-        if logx:
-            ax.set_xscale('log', base=logxbase)
-            ax.xaxis.set_major_locator(LogLocator(base=logxbase, numticks=ntic2))
-        if logy:
-            ax.set_yscale('log', base=logybase)
-            ax.yaxis.set_major_locator(LogLocator(base=logybase, numticks=ntic1))
-        if xreverse:
-            ax.set_xlim(max1, min1)
-        else:
-            ax.set_xlim(min1, max1)
-        if yreverse:
-            ax.set_ylim(max2, min2)
-        else:
-            ax.set_ylim(min2, max2)
-        if legendon:
-            legend = ax.legend(loc=wherelegend, fontsize=legendsize, 
-                            frameon=legendbox, ncol=legendncol)
-            for text in legend.get_texts():
-                text.set_fontweight(legendfat)
-            if legendbox:
-                legend.get_frame().set_alpha(legendalpha)
-        if not transp:
-            ax.set_xlabel(label1 if label1 else data.label_unit(0))
-            ax.set_ylabel(label2 if label2 else data.label_unit(1))
-        else:
-            ax.set_ylabel(label1 if label1 else data.label_unit(0))
-            ax.set_xlabel(label2 if label2 else data.label_unit(1))
+                ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
+                        linestyle=lstyles[itrace],
+                        label=legends[itrace] if legends else None)
 
+            amin1, amax1 = ax.get_xlim()
+            amin2, amax2 = ax.get_ylim()
+            min1 = min1 if min1 is not None else amin1
+            max1 = max1 if max1 is not None else amax1
+            min2 = min2 if min2 is not None else amin2
+            max2 = max2 if max2 is not None else amax2
 
-    elif plottype == 'grey3':
+            if logx and logxbase <= 0.:
+                sf_warning(f"Warning: invalid logxbase={logxbase}, use default 10.")
+                logxbase = 10.
+            if logy and logybase <= 0.:
+                sf_warning(f"Warning: invalid logybase={logybase}, use default 10.")
+                logybase = 10.
+            if logx and min1 <= 0.:
+                sf_warning(f"Warning: logx but min2={min1} <= 0, use normal x axis.")
+                logx = False
+            if logy and min2 <= 0.:
+                sf_warning(f"Warning: logy but min1={min2} <= 0, use normal y axis.")
+                logy = False
 
-        data.sfput(label3=label3, unit3=unit3)
-
-        gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
-                   point1=point1, point2=point2, colorbar=scalebar, cmap=color,
-                   clip=clip, pclip=pclip,bias=bias, allpos=allpos,
-                           title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
-                           format1=format1, format2=format2, format3=format3,
-                   flat=isflat, show=False)
-        gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
-        gattr.set_lines(color=frame_color,width=frame_width)
-        gattr.set_spines(color=frame_color,width=frame_width)
-        gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
-        gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
-        if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
-        if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
-        if format3 is not None:
-            gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
-            gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
-        if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-        if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-        if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
-        if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
-
-        if scalebar:
-            gattr.cax.tick_params(axis='both', which='major',
-                                  width=frame_width, colors=frame_color)
-            gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
-                                 fontsize=barlabelsz, fontweight=barlabelfat)
-            if formatbar is not None:
-                gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
-            # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
-
-            for iblabel in gattr.cax.yaxis.get_ticklabels():
-                iblabel.set_fontweight(tickfat)
-                iblabel.set_fontsize(ticksz)
-
-    ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
-
-    if plottype != 'grey3':
-        if format1 is not None:
-            try:
-                ax.yaxis.set_major_formatter(FormatStrFormatter(format1))
-            except:
-                sf_warning(f"Warning: invalid format1={format1}, ignored.")
-        if format2 is not None:
-            try:
-                ax.xaxis.set_major_formatter(FormatStrFormatter(format2))
-            except:
-                sf_warning(f"Warning: invalid format2={format2}, ignored.")
-        if plottype == 'graph':
-            if not logx: ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-            if not logy: ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-        else:
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-
-        label1 = ax.yaxis.get_label()
-        label2 = ax.xaxis.get_label()
-        ax.set_ylabel(label1.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
-        ax.set_xlabel(label2.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
-    
-        if scalebar:
-            if plottype in ['graph', 'wiggle']:
-                # Create empty cmap
-                empty_map = [[0,0,0,0],[0,0,0,0],[0,0,0,0]]
-                norm = mcolors.Normalize(vmin=0, vmax=1)
-                sm = cm.ScalarMappable(norm=norm, cmap=mcolors.ListedColormap(empty_map))
-                sm.set_array([])
-                cbar = fig.colorbar(sm, ax=ax)
-                cbar.ax.patch.set_alpha(0.0)
-                if maxval is not None or minval is not None:
-                    cbar.ax.set_ylim(minval, maxval)
-                # Hide it
-                cbar.ax.tick_params(labelsize=ticksz, width=frame_width,colors=[0,0,0,0])  # 或 'white', 'transparent'
-                for clabel in cbar.ax.get_yticklabels():
-                    clabel.set_fontweight(tickfat)
-                    clabel.set_color([0,0,0,0])
-                for spine in cbar.ax.spines.values():
-                    spine.set_edgecolor([0,0,0,0])
-                    spine.set_linewidth(frame_width)
-                if barlabel:
-                    cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
-                                   fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
+            if logx:
+                ax.set_xscale('log', base=logxbase)
+                ax.xaxis.set_major_locator(LogLocator(base=logxbase, numticks=ntic2))
+            if logy:
+                ax.set_yscale('log', base=logybase)
+                ax.yaxis.set_major_locator(LogLocator(base=logybase, numticks=ntic1))
+            if xreverse:
+                ax.set_xlim(max1, min1)
             else:
-                cbar = fig.colorbar(ax.images[0], ax=ax)
-                if maxval is not None or minval is not None:
-                    vmin, vmax = ax.images[0].get_clim()
-                    if minval is None: minval = vmin
-                    if maxval is None: maxval = vmax
-                    cbar.ax.set_ylim(minval, maxval)
-                cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
-                for ticklabel in cbar.ax.get_yticklabels():
-                    ticklabel.set_fontweight(tickfat)
-                if barlabel:
-                    cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
-                                   fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
-                for spine in cbar.ax.spines.values():
-                    spine.set_edgecolor(frame_color)
-                    spine.set_linewidth(frame_width)
+                ax.set_xlim(min1, max1)
+            if yreverse:
+                ax.set_ylim(max2, min2)
+            else:
+                ax.set_ylim(min2, max2)
+            if legendon:
+                legend = ax.legend(loc=wherelegend, fontsize=legendsize,
+                                frameon=legendbox, ncol=legendncol)
+                for text in legend.get_texts():
+                    text.set_fontweight(legendfat)
+                if legendbox:
+                    legend.get_frame().set_alpha(legendalpha)
+            if not transp:
+                ax.set_xlabel(label1 if label1 else data.label_unit(0))
+                ax.set_ylabel(label2 if label2 else data.label_unit(1))
+            else:
+                ax.set_ylabel(label1 if label1 else data.label_unit(0))
+                ax.set_xlabel(label2 if label2 else data.label_unit(1))
 
-            if formatbar is not None:
+
+        elif plottype == 'grey3':
+
+            data.sfput(label3=label3, unit3=unit3)
+
+            gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
+                       point1=point1, point2=point2, colorbar=scalebar, cmap=color,
+                       clip=clip, pclip=pclip,bias=bias, allpos=allpos,
+                               title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
+                               format1=format1, format2=format2, format3=format3,
+                       flat=isflat, show=False)
+            gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
+            gattr.set_lines(color=frame_color,width=frame_width)
+            gattr.set_spines(color=frame_color,width=frame_width)
+            gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
+            gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
+            if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
+            if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
+            if format3 is not None:
+                gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
+                gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
+            if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+            if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+            if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+            if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+
+            if scalebar:
+                gattr.cax.tick_params(axis='both', which='major',
+                                      width=frame_width, colors=frame_color)
+                gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                     fontsize=barlabelsz, fontweight=barlabelfat)
+                if formatbar is not None:
+                    gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
+
+                for iblabel in gattr.cax.yaxis.get_ticklabels():
+                    iblabel.set_fontweight(tickfat)
+                    iblabel.set_fontsize(ticksz)
+
+        ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
+
+        if plottype != 'grey3':
+            if format1 is not None:
                 try:
-                    cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                    ax.yaxis.set_major_formatter(FormatStrFormatter(format1))
                 except:
-                    sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
-
-            offset = cbar.ax.yaxis.get_offset_text()
-            offset.set_color(frame_color)
-            offset.set_fontsize(ticksz)
-            offset.set_fontweight(tickfat)
-
-
-        if title:
-            if titleloc:
-                try:ax.set_title(title,
-                            fontsize=titlesz,
-                            fontweight=titlefat,
-                            color=frame_color,
-                            y=titleloc)
+                    sf_warning(f"Warning: invalid format1={format1}, ignored.")
+            if format2 is not None:
+                try:
+                    ax.xaxis.set_major_formatter(FormatStrFormatter(format2))
                 except:
-                    sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
-                    ax.set_title(title,
-                            fontsize=titlesz,
-                            fontweight=titlefat,
-                            color=frame_color)
-            else:ax.set_title(title,
+                    sf_warning(f"Warning: invalid format2={format2}, ignored.")
+            if plottype == 'graph':
+                if not logx: ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+                if not logy: ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+            else:
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+
+            label1 = ax.yaxis.get_label()
+            label2 = ax.xaxis.get_label()
+            ax.set_ylabel(label1.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
+            ax.set_xlabel(label2.get_text(), fontsize=labelsz, fontweight=labelfat, color=frame_color)
+
+            if scalebar:
+                if plottype in ['graph', 'wiggle']:
+                    # Create empty cmap
+                    empty_map = [[0,0,0,0],[0,0,0,0],[0,0,0,0]]
+                    norm = mcolors.Normalize(vmin=0, vmax=1)
+                    sm = cm.ScalarMappable(norm=norm, cmap=mcolors.ListedColormap(empty_map))
+                    sm.set_array([])
+                    cbar = fig.colorbar(sm, ax=ax)
+                    cbar.ax.patch.set_alpha(0.0)
+                    if maxval is not None or minval is not None:
+                        cbar.ax.set_ylim(minval, maxval)
+                    # Hide it
+                    cbar.ax.tick_params(labelsize=ticksz, width=frame_width,colors=[0,0,0,0])  # 或 'white', 'transparent'
+                    for clabel in cbar.ax.get_yticklabels():
+                        clabel.set_fontweight(tickfat)
+                        clabel.set_color([0,0,0,0])
+                    for spine in cbar.ax.spines.values():
+                        spine.set_edgecolor([0,0,0,0])
+                        spine.set_linewidth(frame_width)
+                    if barlabel:
+                        cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                       fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
+                else:
+                    cbar = fig.colorbar(ax.images[0], ax=ax)
+                    if maxval is not None or minval is not None:
+                        vmin, vmax = ax.images[0].get_clim()
+                        if minval is None: minval = vmin
+                        if maxval is None: maxval = vmax
+                        cbar.ax.set_ylim(minval, maxval)
+                    cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
+                    for ticklabel in cbar.ax.get_yticklabels():
+                        ticklabel.set_fontweight(tickfat)
+                    if barlabel:
+                        cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                       fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
+                    for spine in cbar.ax.spines.values():
+                        spine.set_edgecolor(frame_color)
+                        spine.set_linewidth(frame_width)
+
+                if formatbar is not None:
+                    try:
+                        cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                    except:
+                        sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
+
+                offset = cbar.ax.yaxis.get_offset_text()
+                offset.set_color(frame_color)
+                offset.set_fontsize(ticksz)
+                offset.set_fontweight(tickfat)
+
+
+            if title:
+                if titleloc:
+                    try:ax.set_title(title,
+                                fontsize=titlesz,
+                                fontweight=titlefat,
+                                color=frame_color,
+                                y=titleloc)
+                    except:
+                        sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
+                        ax.set_title(title,
                                 fontsize=titlesz,
                                 fontweight=titlefat,
                                 color=frame_color)
-        if label1loc in ['left', 'right']:
-            ax.yaxis.set_label_position(label1loc)
-        else:
-            sf_warning(f"Warning: invalid whereylabel={label1loc}, use default left.")
-        if label2loc in ['top', 'bottom']:
-            ax.xaxis.set_label_position(label2loc)
-        else:
-            sf_warning(f"Warning: invalid wherexlabel={label2loc}, use default bottom.")
-        if tick1loc in ['left', 'right']:
-            ax.yaxis.set_ticks_position(tick1loc)
-        else:
-            sf_warning(f"Warning: invalid whereytick={tick1loc}, use default left.")
-        if tick2loc in ['top', 'bottom']:
-            ax.xaxis.set_ticks_position(tick2loc)
-        else:
-            sf_warning(f"Warning: invalid wherextick={tick2loc}, use default bottom.")
+                else:ax.set_title(title,
+                                    fontsize=titlesz,
+                                    fontweight=titlefat,
+                                    color=frame_color)
+            if label1loc in ['left', 'right']:
+                ax.yaxis.set_label_position(label1loc)
+            else:
+                sf_warning(f"Warning: invalid whereylabel={label1loc}, use default left.")
+            if label2loc in ['top', 'bottom']:
+                ax.xaxis.set_label_position(label2loc)
+            else:
+                sf_warning(f"Warning: invalid wherexlabel={label2loc}, use default bottom.")
+            if tick1loc in ['left', 'right']:
+                ax.yaxis.set_ticks_position(tick1loc)
+            else:
+                sf_warning(f"Warning: invalid whereytick={tick1loc}, use default left.")
+            if tick2loc in ['top', 'bottom']:
+                ax.xaxis.set_ticks_position(tick2loc)
+            else:
+                sf_warning(f"Warning: invalid wherextick={tick2loc}, use default bottom.")
 
 
-        for ticklabel in (ax.get_xticklabels()+ax.get_yticklabels()):
-            ticklabel.set_fontweight(tickfat)
+            for ticklabel in (ax.get_xticklabels()+ax.get_yticklabels()):
+                ticklabel.set_fontweight(tickfat)
 
-        if gridon:
-            ax.grid(visible=True, color=frame_color, linestyle=gridstyle, linewidth=frame_width, alpha=0.5)
+            if gridon:
+                ax.grid(visible=True, color=frame_color, linestyle=gridstyle, linewidth=frame_width, alpha=0.5)
 
-        for spine in ax.spines.values():
-            spine.set_edgecolor(frame_color)
-            spine.set_linewidth(frame_width)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(frame_color)
+                spine.set_linewidth(frame_width)
 
 
-    # Addon elements
-    ## Rectangles (at most 10)
-    for irect in range(10):
-        rectpar = par_dict.get(f'rect{irect+1}', None)
-        if rectpar is None: continue
-        try:
-            rect_vals = rectpar.split(',')
-            if not (4 <= len(rect_vals)):
+        # Addon elements
+        ## Rectangles (at most 10)
+        for irect in range(10):
+            rectpar = par_dict.get(f'rect{irect+1}', None)
+            if rectpar is None: continue
+            try:
+                rect_vals = rectpar.split(',')
+                if not (4 <= len(rect_vals)):
+                    sf_warning(f"Warning: invalid rect{irect+1}={rectpar}, ignored.")
+                    continue
+                min1, max1, min2, max2 = [float(v) for v in rect_vals[:4]]
+                rectcolor = par_dict.get(f'rect{irect+1}color', par_dict.get('rectcolor', frame_color))
+                rectwidth = getfloat(par_dict, f'rect{irect+1}width', getfloat(par_dict, 'rectwidth', frame_width))
+                rectstyle = par_dict.get(f'rect{irect+1}style', par_dict.get('rectstyle', '-'))
+                rect_alpha = getfloat(par_dict, f'rect{irect+1}alpha', getfloat(par_dict, 'rectalpha', 1.0))
+                xy = (min2, min1)
+                width = max2 - min2
+                height = max1 - min1
+                rect = plt.Rectangle(xy, width, height, fill=False, edgecolor=rectcolor, linewidth=rectwidth, linestyle=rectstyle, alpha=rect_alpha)
+                ax.add_patch(rect)
+            except:
                 sf_warning(f"Warning: invalid rect{irect+1}={rectpar}, ignored.")
                 continue
-            min1, max1, min2, max2 = [float(v) for v in rect_vals[:4]]
-            rectcolor = par_dict.get(f'rect{irect+1}color', par_dict.get('rectcolor', frame_color))
-            rectwidth = getfloat(par_dict, f'rect{irect+1}width', getfloat(par_dict, 'rectwidth', frame_width))
-            rectstyle = par_dict.get(f'rect{irect+1}style', par_dict.get('rectstyle', '-'))
-            rect_alpha = getfloat(par_dict, f'rect{irect+1}alpha', getfloat(par_dict, 'rectalpha', 1.0))
-            xy = (min2, min1)
-            width = max2 - min2
-            height = max1 - min1
-            rect = plt.Rectangle(xy, width, height, fill=False, edgecolor=rectcolor, linewidth=rectwidth, linestyle=rectstyle, alpha=rect_alpha)
-            ax.add_patch(rect)
-        except:
-            sf_warning(f"Warning: invalid rect{irect+1}={rectpar}, ignored.")
-            continue
-    ## Arrows (at most 10)
-    for iarrow in range(10):
-        arrowpar = par_dict.get(f'arrow{iarrow+1}', None)
-        if arrowpar is None:
-            continue
-        try:
-            arrow_vals = arrowpar.split(',')
-            if not (4 <= len(arrow_vals)):
-                sf_warning(f"Warning: invalid arrow{iarrow+1}={arrowpar}, ignored.")
+        ## Arrows (at most 10)
+        for iarrow in range(10):
+            arrowpar = par_dict.get(f'arrow{iarrow+1}', None)
+            if arrowpar is None:
+                continue
+            try:
+                arrow_vals = arrowpar.split(',')
+                if not (4 <= len(arrow_vals)):
+                    sf_warning(f"Warning: invalid arrow{iarrow+1}={arrowpar}, ignored.")
+                    continue
+
+                y0, x0, dy, dx = [float(v) for v in arrow_vals[:4]]
+
+                arrow_color = par_dict.get(f'arrow{iarrow+1}color', par_dict.get('arrowcolor', frame_color))
+                arrow_width = getfloat(par_dict, f'arrow{iarrow+1}width', getfloat(par_dict, 'arrowwidth', 0.1))
+                arrow_alpha = par_dict.get(f'arrow{iarrow+1}alpha', par_dict.get('arrowalpha', 1.0))
+
+                arr = plt.Arrow(x0, y0, dx, dy,
+                                width=arrow_width,
+                                color=arrow_color,
+                                alpha=arrow_alpha)
+
+                ax.add_patch(arr)
+
+            except Exception as e:
+                sf_warning(f"Warning: invalid arrow{iarrow+1}={arrowpar} {e}, ignored.")
+                continue
+        ## Texts (at most 10)
+        for itxt in range(10):
+            txtpar = par_dict.get(f'text{itxt+1}', None)
+            if txtpar is None:
+                continue
+            try:
+                txt_vals = txtpar.split(',')
+                if not (3 <= len(txt_vals)):
+                    sf_warning(f"Warning: invalid text{itxt+1}={txtpar}, ignored.")
+                    continue
+
+                x0 = float(txt_vals[1])
+                y0 = float(txt_vals[0])
+                text_str = str(txt_vals[2])
+
+                text_color = par_dict.get(f'text{itxt+1}color', par_dict.get('textcolor', frame_color))
+                text_size  = getfloat(par_dict, f'text{itxt+1}size', getfloat(par_dict, 'textsize', fontsz))
+                text_weight = par_dict.get(f'text{itxt+1}weight', par_dict.get('textweight', fontweight))
+                text_facecolor = par_dict.get(f'text{itxt+1}facecolor', par_dict.get('textfacecolor', 'none'))
+                text_edgecolor = par_dict.get(f'text{itxt+1}edgecolor', par_dict.get('textedgecolor', 'none'))
+                text_alpha = getfloat(par_dict, f'text{itxt+1}alpha', getfloat(par_dict, 'textalpha', 1.0))
+
+                ax.text(x0, y0, text_str,
+                        color=text_color,
+                        fontsize=text_size,
+                        fontweight=text_weight,
+                        bbox=dict(facecolor=text_facecolor,alpha=text_alpha, edgecolor=text_edgecolor),
+                        alpha=text_alpha)
+
+            except Exception as e:
+                sf_warning(f"Warning: invalid text{itxt+1}={txtpar}: {e}, ignored.")
                 continue
 
-            y0, x0, dy, dx = [float(v) for v in arrow_vals[:4]]
-
-            arrow_color = par_dict.get(f'arrow{iarrow+1}color', par_dict.get('arrowcolor', frame_color))
-            arrow_width = getfloat(par_dict, f'arrow{iarrow+1}width', getfloat(par_dict, 'arrowwidth', 0.1))
-            arrow_alpha = par_dict.get(f'arrow{iarrow+1}alpha', par_dict.get('arrowalpha', 1.0))
-
-            arr = plt.Arrow(x0, y0, dx, dy,
-                            width=arrow_width,
-                            color=arrow_color,
-                            alpha=arrow_alpha)
-
-            ax.add_patch(arr)
-
-        except Exception as e:
-            sf_warning(f"Warning: invalid arrow{iarrow+1}={arrowpar} {e}, ignored.")
-            continue
-    ## Texts (at most 10)
-    for itxt in range(10):
-        txtpar = par_dict.get(f'text{itxt+1}', None)
-        if txtpar is None:
-            continue
-        try:
-            txt_vals = txtpar.split(',')
-            if not (3 <= len(txt_vals)): 
-                sf_warning(f"Warning: invalid text{itxt+1}={txtpar}, ignored.")
-                continue
-
-            x0 = float(txt_vals[1])
-            y0 = float(txt_vals[0])
-            text_str = str(txt_vals[2])
-
-            text_color = par_dict.get(f'text{itxt+1}color', par_dict.get('textcolor', frame_color))
-            text_size  = getfloat(par_dict, f'text{itxt+1}size', getfloat(par_dict, 'textsize', fontsz))
-            text_weight = par_dict.get(f'text{itxt+1}weight', par_dict.get('textweight', fontweight))
-            text_facecolor = par_dict.get(f'text{itxt+1}facecolor', par_dict.get('textfacecolor', 'none'))
-            text_edgecolor = par_dict.get(f'text{itxt+1}edgecolor', par_dict.get('textedgecolor', 'none'))
-            text_alpha = getfloat(par_dict, f'text{itxt+1}alpha', getfloat(par_dict, 'textalpha', 1.0))
-
-            ax.text(x0, y0, text_str,
-                    color=text_color,
-                    fontsize=text_size, 
-                    fontweight=text_weight,
-                    bbox=dict(facecolor=text_facecolor,alpha=text_alpha, edgecolor=text_edgecolor),
-                    alpha=text_alpha)
-
-        except Exception as e:
-            sf_warning(f"Warning: invalid text{itxt+1}={txtpar}: {e}, ignored.")
-            continue
 
 
+        plt.tight_layout()
 
-    plt.tight_layout()
+        if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+        # save or show figure
+        if not sys.stdout.isatty():
+            fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                        transparent=None)
+            sys.stdout.flush()
+            # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
+            if movie:
+                splitter = (__SVG_SPLITTER[:-3] +
+                            f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                            f"{frame_axis[iframe * frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
+                            __SVG_SPLITTER[-3:])
+                sys.stdout.write(f"\n{splitter}\n")
+                sys.stdout.flush()
+        else:
+            plt.pause(0.01)
+    if not sys.stdout.isatty():
+        sys.stdout.buffer.close()
 
-    # save or show figure
-    if sys.stdout.isatty():
-        plt.show()
-    else:
-        outfile = sys.stdout.buffer
-        fig.savefig(outfile, bbox_inches='tight', format=pformat, dpi=dpi, transparent=(not facecolor or facecolor=='none'))
-        outfile.flush()
-        outfile.close()
     plt.close(fig)
     sys.exit(0)
     
