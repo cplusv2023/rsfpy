@@ -17,6 +17,7 @@ import sys, os
 from textwrap import dedent
 import importlib.resources
 from rsfpy import bin
+from rsfpy.utils import _get_stdname
 
 svgviewer_path = importlib.resources.files(bin).joinpath("svgviewer")
 __progname__ = os.path.basename(sys.argv[0])
@@ -29,4 +30,10 @@ def main():
         run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
     else:
-        run([str(svgviewer_path)] + sys.argv[1:])
+        args = sys.argv[1:]
+        stdname = _get_stdname()
+        if stdname[0]: args = [stdname[0]] + args
+        result =  run([str(svgviewer_path)] + args,
+            capture_output=False,
+            stderr=sys.stderr,)
+        sys.exit(result.returncode)
