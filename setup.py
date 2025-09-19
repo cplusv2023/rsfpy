@@ -1,6 +1,9 @@
 # setup.py
-import io
+import io, subprocess, os
 from setuptools import setup, find_packages
+from setuptools.command.install import install
+from setuptools.command.develop import develop
+
 
 # 读取 requirements 文件
 with io.open("requirements.txt", encoding="utf-8") as f:
@@ -13,6 +16,39 @@ with io.open("requirements.txt", encoding="utf-8") as f:
 with io.open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
+# class CustomInstall(install):
+#     def run(self):
+#         target_dir = os.path.join(self.install_lib, "rsfpy", "bin")
+#         os.makedirs(target_dir, exist_ok=True)
+#         subprocess.check_call(["scons",
+#                                f"install_dir={target_dir}"], shell=True)
+#         super().run()
+#
+# class CustomDevelop(develop):
+#     def run(self):
+#         target_dir = os.path.join(self.install_dir, "rsfpy", "bin")
+#         os.makedirs(target_dir, exist_ok=True)
+#         subprocess.check_call(["scons",
+#                                f"install_dir={target_dir}"], shell=True)
+#         super().run()
+
+class CustomInstall(install):
+    def run(self):
+        target_dir = os.path.join(self.install_lib, "rsfpy", "bin")
+        os.makedirs(target_dir, exist_ok=True)
+        subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
+                               f"-o {target_dir}/svgviewer "
+                               "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
+        super().run()
+
+class CustomDevelop(develop):
+    def run(self):
+        target_dir = os.path.join(self.install_dir, "rsfpy", "bin")
+        os.makedirs(target_dir, exist_ok=True)
+        subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
+                               f"-o {target_dir}/svgviewer "
+                               "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
+        super().run()
 setup(
     name="rsfpy",
     version="0.1.0",
@@ -38,11 +74,16 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'rsfgrey = Mpygrey:main',
-            'rsfgraph = Mpygrey:main',
-            'rsfwiggle = Mpygrey:main',
-            'rsfsvgpen = Msvgpen:main',
-            'rsfgrey3 = Mpygrey:main',
+            'rsfgrey = rsfpy.tools.Mpygrey:main',
+            'rsfgraph = rsfpy.tools.Mpygrey:main',
+            'rsfwiggle = rsfpy.tools.Mpygrey:main',
+            'rsfsvgpen = rsfpy.tools.Msvgpen:main',
+            'rsfgrey3 = rsfpy.tools.Mpygrey:main',
+            'svgviewer = rsfpy.tools.Msvgviewer:main',
         ]
+    },
+    cmdclass={
+        "install": CustomInstall,
+        "develop": CustomDevelop,
     },
 )

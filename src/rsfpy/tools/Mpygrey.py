@@ -25,25 +25,26 @@
     \tfontfat is font weight, you can use numbers like 700, or: light, normal, medium, semibold, demibold, bold, heavy, ultralight, black, regular, book,  black
 \033[1mPARAMETERS\033[0m
     \t\033[4mbool\033[0m\t\033[1mallpos=n\033[0m [y/n] if y, assume positive data
-    \t\033[4mstring\033[0m\t\033[1mbarlabel=\033[0m colorbar label
-    \t\033[4mstring\033[0m\t\033[1mbarlabelfat=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
-    \t\033[4mfloat\033[0m\t\033[1mbarlabelsz=12.\033[0m colorbar label font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mbarlabel/bartitle=\033[0m colorbar label
+    \t\033[4mstring\033[0m\t\033[1mbarlabelfat/barlabelweight=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mbarlabelsz/labelsize=12.\033[0m colorbar label font size (default 12)
     \t\033[4mstring\033[0m\t\033[1mbackend=default\033[0m matplotlib backend (default: let matplotlib decide)
-    \t\033[4mfloat\033[0m\t\033[1mbgcolor=w\033[0m background color (w: white, k: black)
+    \t\033[4mfloat\033[0m\t\033[1mbgcolor/facecolor=w\033[0m background color (w: white, k: black)
     \t\033[4mstring\033[0m\t\033[1mbias=0.\033[0m value mapped to the center of the color table
     \t\033[4mfloat\033[0m\t\033[1mclip=\033[0m data clip
-    \t\033[4mstring\033[0m\t\033[1mcolor=gray\033[0m color scheme (matplotlib colormap name, e.g., gray (i), jet (j), seismic (or s), hot, cool, etc)
+    \t\033[4mstring\033[0m\t\033[1mcolor/cmap=gray\033[0m color scheme (matplotlib colormap name, e.g., gray (i), jet (j), seismic (or s), hot, cool, etc)
     \t\033[4mfloat\033[0m\t\033[1mdpi=100.\033[0m figure resolution in dots per inch
     \t\033[4mbool\033[0m\t\033[1mflat=y\033[0m [y/n] if y, flatten the 3D data for grey3 plot
     \t\033[4mstring\033[0m\t\033[1mfont=sans-serif\033[0m font family
-    \t\033[4mstring\033[0m\t\033[1mformat=svg\033[0m output figure format: pdf, png, jpg, etc (Default is svg)
+    \t\033[4mfloat\033[0m\t\033[1mfontsz/fontsize=12\033[0m global font size (low priority)
+    \t\033[4mstring\033[0m\t\033[1mformat=svg\033[0m output figure format: pdf, png, jpg, etc (according to output suffix, default: svg)
+    \t\033[4mstring\033[0m\t\033[1mformatbar/barformat=\033[0m format for colorbar tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mformat1=\033[0m format for axis 1 tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mformat2=\033[0m format for axis 2 tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mformat3=\033[0m format for axis 3 tick labels, e.g., %.2f, %.3e, etc. (Grey3 mode only)
     \t\033[4mint\033[0m\t\033[1mframe1=0\033[0m frame index along axis 1 (for grey3 plot)
     \t\033[4mint\033[0m\t\033[1mframe2=0\033[0m frame index along axis 2 (for grey3 plot)
     \t\033[4mint\033[0m\t\033[1mframe3=0\033[0m frame index along axis 3 (for grey3 plot)
-    \t\033[4mstring\033[0m\t\033[1mformatbar=\033[0m format for colorbar tick labels, e.g., %.2f, %.3e, etc.
     \t\033[4mstring\033[0m\t\033[1mframecolor=k\033[0m frame color
     \t\033[4mfloat\033[0m\t\033[1mframewidth=1.0\033[0m frame line width
     \t\033[4mbool\033[0m\t\033[1mgrid=n\033[0m [y/n] if y, show grid (Not working in grey3 mode)
@@ -51,8 +52,8 @@
     \t\033[4mstring\033[0m\t\033[1mlabel1=\033[0m label for axis 1
     \t\033[4mstring\033[0m\t\033[1mlabel2=\033[0m label for axis 2
     \t\033[4mstring\033[0m\t\033[1mlabel3=\033[0m label for axis 3 (grey3 plot)
-    \t\033[4mstring\033[0m\t\033[1mlabelfat=normal\033[0m label font weight: normal, bold, light, etc. (Can be numbers like 700)
-    \t\033[4mfloat\033[0m\t\033[1mlabelsz=12.\033[0m label font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mlabelfat/labelweight=normal\033[0m label font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mlabelsz/labelsize=12.\033[0m label font size (default 12)
     \t\033[4mstring\033[0m\t\033[1mlcolors=\033[0m line colors for multiple traces (comma/space/semicolon separated, only for graph plots)
     \t\033[4mstring\033[0m\t\033[1mlstyles=\033[0m line styles for multiple traces (comma/space/semicolon separated, only for graph plots)
     \t\033[4mfloat\033[0m\t\033[1mlegendncol=1\033[0m number of columns in legend (only for graph plots)
@@ -66,26 +67,26 @@
     \t\033[4mstring\033[0m\t\033[1mmax1=\033[0m maximum value of axis 1 (overrides header d1 and o1)
     \t\033[4mstring\033[0m\t\033[1mmax2=\033[0m maximum value of axis 2 (overrides header d2 and o2)
     \t\033[4mstring\033[0m\t\033[1mncolor=\033[0m negative value fill-in color for wiggle plot
-    \t\033[4mfloat\033[0m\t\033[1mntic1=5\033[0m max number of ticks on axis 1
-    \t\033[4mfloat\033[0m\t\033[1mntic2=5\033[0m max number of ticks on axis 2
-    \t\033[4mfloat\033[0m\t\033[1mntic3=\033[0m max number of ticks on axis 3
+    \t\033[4mfloat\033[0m\t\033[1mntic1/ntick1=5\033[0m max number of ticks on axis 1
+    \t\033[4mfloat\033[0m\t\033[1mntic2/ntick2=5\033[0m max number of ticks on axis 2
+    \t\033[4mfloat\033[0m\t\033[1mntic3/ntick3=\033[0m max number of ticks on axis 3
     \t\033[4mfloat\033[0m\t\033[1mpclip=99.\033[0m data clip percentile (default is 99)
-    \t\033[4mbool\033[0m\t\033[1mscalebar=n\033[0m [y/n] if y, draw scalebar
-    \t\033[4mfloat\033[0m\t\033[1mscreenheight=6.\033[0m figure height in inches (default 6)
-    \t\033[4mfloat\033[0m\t\033[1mscreenwidth=8.\033[0m figure width in inches (default 8)
-    \t\033[4mstring\033[0m\t\033[1mtickfat=normal\033[0m tick font weight: normal, bold, light, etc. (Can be numbers like 700)
-    \t\033[4mfloat\033[0m\t\033[1mticksz=10.\033[0m tick font size (default 12)
-    \t\033[4mstring\033[0m\t\033[1mtitlefat=bold\033[0m title font weight: normal, bold, light, etc. (Can be numbers like 700)
-    \t\033[4mfloat\033[0m\t\033[1mtitlesz=14.\033[0m title font size (default 12)
+    \t\033[4mbool\033[0m\t\033[1mscalebar/colorbar=n\033[0m [y/n] if y, draw scalebar
+    \t\033[4mfloat\033[0m\t\033[1mscreenheight/height=6.\033[0m figure height in inches (default 6)
+    \t\033[4mfloat\033[0m\t\033[1mscreenwidth/width=8.\033[0m figure width in inches (default 8)
+    \t\033[4mstring\033[0m\t\033[1mtickfat/tickweight=normal\033[0m tick font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mticksz/ticksize=10.\033[0m tick font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mtitlefat/titleweight=bold\033[0m title font weight: normal, bold, light, etc. (Can be numbers like 700)
+    \t\033[4mfloat\033[0m\t\033[1mtitlesz/titlesize=14.\033[0m title font size (default 12)
     \t\033[4mfloat\033[0m\t\033[1mplotfat/linewidth=1.0\033[0m line width for wiggle or graph plot
     \t\033[4mstring\033[0m\t\033[1mpcolor=\033[0m positive value fill-in color for wiggle plot
     \t\033[4mfloat\033[0m\t\033[1mpoint1=0.8\033[0m vertical aspect (for grey3 plot)
     \t\033[4mfloat\033[0m\t\033[1mpoint2=0.4\033[0m horizontal aspect (for grey3 plot)
     \t\033[4mbool\033[0m\t\033[1mtransp=y\033[0m [y/n] if y, transpose the display axes (Not working in grey3 plot)
+    \t\033[4mstring\033[0m\t\033[1munit1=\033[0m unit for axis 1
+    \t\033[4mstring\033[0m\t\033[1munit2=\033[0m unit for axis 2
+    \t\033[4mstring\033[0m\t\033[1munit3=\033[0m unit for axis 3
     \t\033[4mbool\033[0m\t\033[1mverb=n\033[0m [y/n] verbosity flag
-    \t\033[4mbool\033[0m\t\033[1mwantlabel1=y\033[0m [y/n] if y, show label for axis 1
-    \t\033[4mbool\033[0m\t\033[1mwantlabel2=y\033[0m [y/n] if y, show label for axis 2
-    \t\033[4mbool\033[0m\t\033[1mwantlabel3=y\033[0m [y/n] if y, show label for axis 3 (Grey3 plot only)
     \t\033[4mbool\033[0m\t\033[1mwheretitle=top\033[0m title position: top, bottom (Not working in grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mwhereylabel=left\033[0m axis 1 label position: left, right (Not working in grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mwherexlabel=bottom\033[0m axis 2 label position: top, bottom (Not working in grey3 plot)
@@ -202,8 +203,11 @@ def main():
                             par_dict.get('colorbar', 'n')
                             ).lower().startswith('y')
     color = par_dict.get('color', par_dict.get('cmap', 'gray'))
-    label1 = par_dict.get('label1', None)
-    label2 = par_dict.get('label2', None)
+    label1 = par_dict.get('label1', data.label1)
+    label2 = par_dict.get('label2', data.label2)
+    unit1 = par_dict.get('unit1', data.unit1)
+    unit2 = par_dict.get('unit2', data.unit2)
+    barunit = par_dict.get('barunit', par_dict.get('unitbar', None))
     title = par_dict.get('title', data.header.get('title', ''))
     clip = getfloat(par_dict, 'clip', None)
     pclip = getfloat(par_dict, 'pclip', 99.)
@@ -232,8 +236,10 @@ def main():
     gridstyle = par_dict.get('gridstyle', '--')
     frame_color = par_dict.get('framecolor', 'k')
     frame_width = getfloat(par_dict, 'framewidth', 1.0)
-    ntic1 = getfloat(par_dict, 'ntic1', 5)
-    ntic2 = getfloat(par_dict, 'ntic2', 5)
+    ntic1 = getfloat(par_dict, 'ntic1',
+                     getfloat(par_dict, 'ntick1', 5))
+    ntic2 = getfloat(par_dict, 'ntic2',
+                     getfloat(par_dict, 'ntick2', 5))
     min1 = getfloat(par_dict, 'min1', None)
     min2 = getfloat(par_dict, 'min2', None)
     max1 = getfloat(par_dict, 'max1', None)
@@ -247,14 +253,12 @@ def main():
     titleloc = getfloat(par_dict, 'wheretitle', None)
     format1 = par_dict.get('format1', None)
     format2 = par_dict.get('format2', None)
-    formatbar = par_dict.get('formatbar', None)
+    formatbar = par_dict.get('formatbar', par_dict.get('barformat', None))
     barlabel = par_dict.get('barlabel', par_dict.get('bartitle', ''))
     barlabelfat = par_dict.get('barlabelfat', par_dict.get('barlabelweight', fontweight))
     barlabelsz = getfloat(par_dict, 'barlabelsz',
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
-    wantlabel1 = par_dict.get('wantlabel1', 'y').lower().startswith('y')
-    wantlabel2 = par_dict.get('wantlabel2', 'y').lower().startswith('y')
 
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
@@ -357,10 +361,11 @@ def main():
         point1 = getfloat(par_dict, 'point1', 0.8)
         point2 = getfloat(par_dict, 'point2', 0.4)
         isflat = par_dict.get('flat', 'y').lower().startswith('y')
-        label3 = par_dict.get('label3', None)
-        wantlabel3 = par_dict.get('wantlabel3', 'y').lower().startswith('y')
+        label3 = par_dict.get('label3', data.label3)
+        unit3 = par_dict.get('unit3', data.unit3)
         format3 = par_dict.get('format3', None)
-        ntic3 = par_dict.get('ntic3', None)
+        ntic3 = getfloat(par_dict, 'ntic3',
+                         getfloat(par_dict, 'ntick3', None))
 
 
     # Verbose Message
@@ -378,8 +383,8 @@ def main():
     if color in cmapper.keys():
         color = cmapper[color]
 
-    if not wantlabel1: label1 = " "
-    if not wantlabel2: label2 = " "
+    data.sfput(label1=label1, unit1=unit1)
+    data.sfput(label2=label2, unit2=unit2)
 
     # Check some parameters could cause errors
     fontfats = ['light', 'normal', 'medium', 'semibold', 'demibold', 'bold', 'heavy', 'ultralight', 'black', 'regular', 'book',  'black']
@@ -436,12 +441,11 @@ def main():
         data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
                 allpos=allpos, clip=clip, pclip=pclip, bias=bias, cmap=color, 
                 min1=min1, max1=max1, min2=min2, max2=max2,
-                colorbar=False, label1=label1, label2=label2, show=False)
+                colorbar=False, show=False)
     elif plottype == 'wiggle':
         data.wiggle(ax=ax, 
                 transp=transp, yreverse=yreverse, xreverse=xreverse,
                 min1=min1, max1=max1, min2=min2, max2=max2,
-                label1=label1, label2=label2, 
                 zplot=zplot, bias=bias, clip=clip, pclip=pclip,
                 ncolor=ncolor, pcolor=pcolor, lcolor=lcolor,
                 linewidth=plotfat,
@@ -511,11 +515,11 @@ def main():
 
 
     elif plottype == 'grey3':
-        if not wantlabel3: label3 = " "
+
+        data.sfput(label3=label3, unit3=unit3)
 
         gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
                    point1=point1, point2=point2, colorbar=scalebar, cmap=color,
-                   label1=label1, label2=label2, label3=label3,
                    clip=clip, pclip=pclip,bias=bias, allpos=allpos,
                            title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
                            format1=format1, format2=format2, format3=format3,
@@ -538,6 +542,8 @@ def main():
         if scalebar:
             gattr.cax.tick_params(axis='both', which='major',
                                   width=frame_width, colors=frame_color)
+            gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                 fontsize=barlabelsz, fontweight=barlabelfat)
             if formatbar is not None:
                 gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
             # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
@@ -591,7 +597,8 @@ def main():
                     spine.set_edgecolor([0,0,0,0])
                     spine.set_linewidth(frame_width)
                 if barlabel:
-                    cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
+                    cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                   fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
             else:
                 cbar = fig.colorbar(ax.images[0], ax=ax)
                 if maxval is not None or minval is not None:
@@ -603,7 +610,8 @@ def main():
                 for ticklabel in cbar.ax.get_yticklabels():
                     ticklabel.set_fontweight(tickfat)
                 if barlabel:
-                    cbar.set_label(barlabel, fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
+                    cbar.set_label(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                   fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
                 for spine in cbar.ax.spines.values():
                     spine.set_edgecolor(frame_color)
                     spine.set_linewidth(frame_width)

@@ -12,10 +12,30 @@ Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scient
 - 🔄 **Totally community**: Just started. Contributions are welcome!
 
 ### 📚 Requirements
+#### Python libraries
 - Python >= 3
 - Numpy
 - Matplotlib
-- (*optional*) lxml 
+- (*optional*) lxml
+
+install by:
+```bash
+pip install -r requirements.txt
+
+```
+#### Others (for building svg viewer)
+- gcc/clang
+- X11 (libx11-dev)
+- Cairo (libcairo2-dev)
+- rsvg2 (librsvg2-dev)
+- glib2.0 (libglib2.0-dev)
+
+install by:
+```bash
+sudo apt update
+sudo apt install build-essential \
+    libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
+```
 
 Note that the command-line tool **rsfsvgpen** needs **lxml** to deal with svg figures.
 
@@ -40,8 +60,12 @@ rsfsvgpen < test1.svg test2.svg mode=overlay bgcolor=w > overlay.svg
 
 rsfsvgpen < test1.svg test2.svg mode=grid ncol=1 > rows.svg
 rsfsvgpen < test1.svg test2.svg mode=grid nrow=1 > cols.svg
+
+# View the svg images (You can also use other programs)
+svgviewer < rows.svg cols.svg
+
 ```
-You can also use the python api.
+You can also use the python API.
 ### import 
 ```python
 from rsfpy.array import Rsfarray
