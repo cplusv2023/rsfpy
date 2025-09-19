@@ -13,7 +13,7 @@ try:
         if len(args) > 2:
             if 'rsfsvgpen' in args[2]:
                 kargs.update({'src_suffix': '.svg'})
-        viewer = WhereIs('eog') or WhereIs('inkscape') \
+        viewer = WhereIs('svgviewer') or WhereIs('eog') or WhereIs('inkscape') \
                  or WhereIs('xdg-open') or WhereIs('open')
         if viewer:
             cmd = project.Command(f'{target}.view', target2, f'{viewer} $SOURCES')

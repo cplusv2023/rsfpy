@@ -602,7 +602,7 @@ def main():
                 gattr.cax.tick_params(axis='both', which='major',
                                       width=frame_width, colors=frame_color)
                 gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
-                                     fontsize=barlabelsz, fontweight=barlabelfat)
+                                     fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
                 if formatbar is not None:
                     gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                 # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
