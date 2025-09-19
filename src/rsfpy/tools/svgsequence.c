@@ -163,9 +163,6 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
     cairo_save(cr);
     cairo_translate(cr, ox, oy + toolbar_h); // 加上 toolbar 高度
     cairo_scale(cr, s, s);
-    fprintf(stderr,"Frame %d: size %.1fx%.1f, window %dx%d, scale %.2f\n",
-       seq->current_index, f->width, f->height, win_w, win_h, s);
-
 
 #if LIBRSVG_CHECK_VERSION(2,52,0)
     RsvgRectangle viewport = {0, 0, f->width, f->height};
