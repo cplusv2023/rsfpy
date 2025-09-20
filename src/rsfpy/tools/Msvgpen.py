@@ -204,8 +204,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     root = etree.Element("{%s}svg" % SVG_NS, nsmap={None: SVG_NS})
     total_width = sum(col_widths)
     total_height = sum(row_heights)
-    root.attrib["width"] = f'{total_width}pt'
-    root.attrib["height"] = f'{total_height}pt'
+    root.attrib["width"] = f'{total_width* px2pt}'
+    root.attrib["height"] = f'{total_height* px2pt}'
 
     for idx, svg in enumerate(svgs):
         row = idx // ncol
@@ -291,8 +291,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         bg_rect = etree.Element("rect", {
             "x": "0",
             "y": "0",
-            "width": f'{total_width}pt',
-            "height": f'{total_height}pt',
+            "width": f'{total_width* px2pt}',
+            "height": f'{total_height* px2pt}',
             "fill": bgcolor
         })
         root.insert(0, bg_rect)
@@ -310,8 +310,8 @@ def overlay(inputs, bgcolor=None):
         h = float(svg.attrib.get("height", "100").replace("pt", "").replace("px", ""))
         max_w = max(max_w, w)
         max_h = max(max_h, h)
-    root.attrib["width"] = f'{max_w}pt'
-    root.attrib["height"] = f'{max_h}pt'
+    root.attrib["width"] = f'{max_w* px2pt}'
+    root.attrib["height"] = f'{max_h* px2pt}'
     for svg in svgs:
         clean_fill_recursive(svg)
         root.append(svg)
@@ -319,8 +319,8 @@ def overlay(inputs, bgcolor=None):
         bg_rect = etree.Element("rect", {
             "x": "0",
             "y": "0",
-            "width": f'{max_w}pt',
-            "height": f'{max_h}pt',
+            "width": f'{max_w* px2pt}',
+            "height": f'{max_h* px2pt}',
             "fill": bgcolor
         })
         root.insert(0, bg_rect)

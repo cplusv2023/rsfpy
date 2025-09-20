@@ -139,29 +139,37 @@ static gboolean load_svg(SvgFrame *f) {
 
 void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
                                int win_w, int win_h,
+                               int pan_x, int pan_y,
+                               double zoom_scale,
                                int toolbar_h, int hintbar_h) {
     if (seq->count == 0) return;
     SvgFrame *f = &seq->frames[seq->current_index];
     if (!f->handle && !load_svg(f)) return;
 
     // 清空背景
-    cairo_set_source_rgb(cr, 1, 1, 1);
-    cairo_paint(cr);
+    // 新方式：只清空内容区域（不包括 toolbar 和 hintbar）
+
+
+    int content_h = win_h - toolbar_h - hintbar_h;
+    cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
+    cairo_rectangle(cr, 0, toolbar_h, win_w, content_h);
+    cairo_fill(cr);
 
     // 内容区域尺寸
-    int content_h = win_h - toolbar_h - hintbar_h;
-    double sx = (double)win_w / (f->width * PXPT_TRANS);
-    double sy = (double)content_h / (f->height * PXPT_TRANS);
+    double sx = (double)win_w / (f->width * 1);
+    double sy = (double)content_h / (f->height * 1);
     double s = sx < sy ? sx : sy;
+    s *= zoom_scale;
 
     // 缩放后尺寸与偏移
-    double dst_w = (f->width * PXPT_TRANS)* s;
-    double dst_h = (f->height * PXPT_TRANS) * s;
+    double dst_w = (f->width * 1)* s;
+    double dst_h = (f->height * 1) * s;
     double ox = (win_w - dst_w) / 2;
     double oy = (content_h - dst_h) / 2;
 
     cairo_save(cr);
     cairo_translate(cr, ox, oy + toolbar_h); // 加上 toolbar 高度
+    cairo_translate(cr, pan_x, pan_y);
     cairo_scale(cr, s, s);
 
 #if LIBRSVG_CHECK_VERSION(2,52,0)

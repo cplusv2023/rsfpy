@@ -820,7 +820,7 @@ def main():
 
         plt.tight_layout()
 
-        if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+        if verb and movie: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
         # save or show figure
         if not sys.stdout.isatty():
             fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
@@ -870,7 +870,7 @@ def sf_warning(*args, **kwargs):
 
 
 def sf_error(*args, **kwargs):
-    sf_warning(*args, verb=True, **kwargs)
+    sf_warning(*args, **kwargs)
     sys.exit(1)
 
 
