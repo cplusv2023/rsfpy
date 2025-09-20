@@ -835,7 +835,8 @@ def main():
                 sys.stdout.write(f"\n{splitter}\n")
                 sys.stdout.flush()
         else:
-            plt.pause(0.01)
+            if movie: plt.pause(0.01)
+            else: plt.show()
     if not sys.stdout.isatty():
         sys.stdout.buffer.close()
 

@@ -239,7 +239,7 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
             if (strlen(svg_content) == 0) continue;
 
             SvgFrame *f = &seq->frames[seq->count];
-            f->path = g_strdup_printf("stream[%d]", i - 1);
+            f->path = g_strdup_printf("stdin[%d]", i - 1);
             f->framelabel = label ? label : g_strdup_printf("Frame %d", i - 1);
             f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), NULL);
             if (!f->handle) {
@@ -269,7 +269,7 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
     } else {
         // 单个 SVG
         SvgFrame *f = &seq->frames[0];
-        f->path = g_strdup("stream[0]");
+        f->path = g_strdup("stdin");
         f->framelabel = g_strdup("Single file");
         f->handle = rsvg_handle_new_from_data((const guint8 *)copy, len, NULL);
         if (!f->handle) {

@@ -32,8 +32,12 @@ def main():
     else:
         args = sys.argv[1:]
         stdname = _get_stdname()
-        if stdname[0]: args = [stdname[0]] + args
+        if stdname[1] and os.path.exists(stdname[1]):
+            args = [stdname[1]] + args
+        else:
+            stdin = sys.stdin.buffer.read()
         result =  run([str(svgviewer_path)] + args,
+            input=stdin if stdin else None,
             capture_output=False,
             stderr=sys.stderr,)
         sys.exit(result.returncode)
