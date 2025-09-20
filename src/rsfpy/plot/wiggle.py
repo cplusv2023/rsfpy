@@ -139,7 +139,7 @@ def wiggle(
     if zplot == 0:
         zplot = 1.0
     # 默认最大幅度
-    default_amp = (max2 - min2) / n2 / 2
+    default_amp = (o2 + d2 * (n2-1) - o2) / n2 / 2
     scale = default_amp * abs(zplot) / clip
 
     # ---- 绘制每道 ----

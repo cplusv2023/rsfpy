@@ -26,16 +26,26 @@ __doc__ = """
     \t\033[4mstring\033[0m\t\033[1mlabelformat="(%s)"\033[0m label format, e.g., (%s), %s, Fig.%s, etc.
     \t\033[4mfloat\033[0m\t\033[1mlabelsz=12.\033[0m label font size
     \t\033[4mint\033[0m\t\033[1mlabelmargin=10\033[0m margin between label and subplot in pixels
+\033[1mMORE INFO\033[0m
+    \tAuthor:\tauthor_label
+    \tEmail:\temail_label
+    \tSource:\tgithub_label
+\033[1mVERSION\033[0m
+    \tversion_label
 """
 
 
 import math, sys, os, subprocess
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
-from rsfpy.version import __SVG_SPLITTER
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
 
 
 __progname__ = os.path.basename(sys.argv[0])
+__doc__ = __doc__.replace("author_label",__author__)
+__doc__ = __doc__.replace("email_label",__email__)
+__doc__ = __doc__.replace("github_label",__github__)
+__doc__ = __doc__.replace("version_label",__version__)
 DOC = dedent(__doc__.replace('Msvgpen.py', __progname__))
 VERB = True
 px2pt = 4./3.  # 1px = 0.75pt
@@ -116,8 +126,9 @@ def main():
             sf_warning(f"Warning: invalid labelformat={labelformat}, use default '(%s)'.")
             labelformat = '(%s)'
     try:
-        order = [int(ind) for ind in order.split(',')]
-        inputs = [inputs[ind] for ind in order]
+        if order is not None:
+            order = [int(ind) for ind in order.split(',')]
+            inputs = [inputs[ind] for ind in order]
     except:
         sf_warning(f"Invalid order={order}, use default input order.")
 

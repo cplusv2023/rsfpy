@@ -54,6 +54,7 @@
     \t\033[4mstring\033[0m\t\033[1mlabel3=\033[0m label for axis 3 (grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mlabelfat/labelweight=normal\033[0m label font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mlabelsz/labelsize=12.\033[0m label font size (default 12)
+    \t\033[4mstring\033[0m\t\033[1mlcolor/plotcol/linecolor=\033[0m line color for graph plots
     \t\033[4mstring\033[0m\t\033[1mlcolors=\033[0m line colors for multiple traces (comma/space/semicolon separated, only for graph plots)
     \t\033[4mstring\033[0m\t\033[1mlstyles=\033[0m line styles for multiple traces (comma/space/semicolon separated, only for graph plots)
     \t\033[4mfloat\033[0m\t\033[1mlegendncol=1\033[0m number of columns in legend (only for graph plots)
@@ -279,8 +280,8 @@ def main():
     if plottype == 'wiggle':
         # Parameters for wiggle plot
         zplot = getfloat(par_dict, 'zplot', 1.0)
+        lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', 'k')))
         ncolor = par_dict.get('ncolor', 'none')
-        lcolor = par_dict.get('lcolor', 'k')
         pcolor = par_dict.get('pcolor', lcolor)
         if par_dict.get('fill', 'y').lower().startswith('n'):
             ncolor = 'none'
@@ -291,10 +292,10 @@ def main():
         # Parameters for graph plot
         transp = par_dict.get('transp', 'n').lower().startswith('y')
         yreverse = par_dict.get('yreverse', 'n').lower().startswith('y')
-        lcolor = par_dict.get('lcolor', 'k')
+        lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', 'k')))
         lcolors = par_dict.get('lcolors', None)
-        lstyle = par_dict.get('lstyle', None)
-        lstyles = par_dict.get('lstyles', None)
+        lstyle = par_dict.get('lstyle', par_dict.get('linestyle', None))
+        lstyles = par_dict.get('lstyles', par_dict.get('linestyles', None))
         plotfat = getfloat(par_dict, 'linewidth', 
                            getfloat(par_dict, 'plotfat', frame_width))
         legendon = par_dict.get('legend', 'n').lower().startswith('y')
