@@ -35,7 +35,7 @@ __doc__ = """
 """
 
 
-import math, sys, os, subprocess
+import math, sys, os, subprocess, re
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
 from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __SVG_BGRECT_ID
@@ -48,7 +48,6 @@ __doc__ = __doc__.replace("github_label",__github__)
 __doc__ = __doc__.replace("version_label",__version__)
 DOC = dedent(__doc__.replace('Msvgpen.py', __progname__))
 VERB = True
-pt2px = 4./3.  # 1px = 0.75pt
 
 try:
     from lxml import etree
@@ -223,19 +222,20 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         x_offset = sum(col_widths[:col])
         y_offset = sum(row_heights[:row])
         orig_w, orig_h = sizes[idx]
+        orig_scale_w = orig_w / no_pixel_unit(svg.attrib.get("width", "100"))
+        orig_scale_h = orig_h / no_pixel_unit(svg.attrib.get("height", "100"))
         target_w = col_widths[col]
         target_h = row_heights[row]
-
         scale_x = target_w / orig_w if stretchx else 1
         scale_y = target_h / orig_h if stretchy else 1
         g = etree.Element("g")
         clean_fill_recursive(svg)
         for child in svg:
             g.append(child)
-        g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({scale_x},{scale_y}) "
+        g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({orig_scale_w * scale_x},{orig_scale_h * scale_y}) "
         g.attrib["vector-effect"] = f"non-scaling-stroke"
-        g.attrib["width"] = f'{target_w}pt'
-        g.attrib["height"] = f'{target_h}pt'
+        g.attrib["width"] = f'{target_w}px'
+        g.attrib["height"] = f'{target_h}px'
         root.append(g)
         
         if label:
@@ -260,7 +260,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
                 offset_x += margin
                 offset_y += labelsz
             elif loc == "north east":
-                offset_x += (target_w - margin)*pt2px
+                offset_x += (target_w - margin)
                 offset_y += labelsz
             elif loc == "south west":
                 offset_x += margin
@@ -287,7 +287,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
                 "fill": labelcolor,
                 "font-family": "DejaVu Sans" if labelfont is None else labelfont,
                 "font-weight": labelfat,
-                "font-size": f'{labelsz}pt',
+                "font-size": f'{labelsz}px',
                 "text-anchor": "start" if "west" in loc else ("end" if "east" in loc else "middle"),
             })
             if labelfont:
@@ -371,7 +371,7 @@ def sf_warning(*args, **kwargs):
     verb = kwargs.pop('verb', VERB)
     endl = ''
     file = kwargs.pop('file', sys.stderr)
-    if args[-1] is not None:
+    if args[-1] is not None and isinstance(args[-1], str):
         if args[-1].endswith('.'): endl = '\n' 
         if args[-1].endswith(';'): endl = '\r'
     endl = kwargs.pop('end', endl)
@@ -419,6 +419,14 @@ def allinpx(s: str) -> float:
         return float(s)
 
 
+def no_pixel_unit(s: str) -> str:
+    """
+    去掉长度字符串里的单位，只保留数值部分（含正负号、小数点、科学计数法 e/E）。
+    """
+    s = s.strip()
+    # 用正则保留数字、正负号、小数点、e/E
+    cleaned = re.sub(r'[^0-9eE\+\-\.]', '', s)
+    return float(cleaned)
 
 if __name__ == "__main__":
     main()
