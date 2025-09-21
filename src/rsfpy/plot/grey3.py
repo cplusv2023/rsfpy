@@ -319,7 +319,7 @@ def grey3flat(
     tlabelpad = 0.01
     gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
     gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=f"{axis3[frame3]:.3g}", ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
-    gattr.ticklabels.append(ax3.text(x=frame3/nx, y=1+tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
+    gattr.ticklabels.append(ax3.text(x=frame2/nx, y=1+tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
 
     ticks1 = ax1.get_yticks()
     ticks2 = ax3.get_yticks()

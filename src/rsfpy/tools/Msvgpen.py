@@ -167,7 +167,7 @@ def movie(inputs):
         if content:
             segments.append(content)
 
-    return f"\n{splitter}\n".join(segments)
+    return f"{splitter}\n" + f"\n\n{splitter}\n\n".join(segments)
 
 
 def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,label=False, loc="north west",    labeltype="a", labelformat="(%s)", labelmargin=10,
