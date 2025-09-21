@@ -1,9 +1,10 @@
 # Rsfpy: pacth for Madagascar SConstruct flow
+from SCons.Util import WhereIs
 
 try:
-    from rsf.proj import project, WhereIs
+    from rsf.proj import project
     import os
-
+    WhereIs = project.WhereIs
 
     def svgResult(*args, **kargs):
         suffix = '.svg'
