@@ -48,7 +48,7 @@ __doc__ = __doc__.replace("github_label",__github__)
 __doc__ = __doc__.replace("version_label",__version__)
 DOC = dedent(__doc__.replace('Msvgpen.py', __progname__))
 VERB = True
-px2pt = 4./3.  # 1px = 0.75pt
+pt2px = 4./3.  # 1px = 0.75pt
 
 try:
     from lxml import etree
@@ -92,7 +92,6 @@ def main():
     labelmargin = int(getfloat(par_dict, 'labelmargin', 10))
     order = par_dict.get('order', None)
 
-    
     colortable={
         'black': '#000000',
         'white': '#FFFFFF',
@@ -192,8 +191,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
     sizes = []
     for svg in svgs:
-        w = float(svg.attrib.get("width", "100").replace("pt", "").replace("px", ""))
-        h = float(svg.attrib.get("height", "100").replace("pt", "").replace("px", ""))
+        w = allinpx(svg.attrib.get("width", "100"))
+        h = allinpx(svg.attrib.get("height", "100"))
         sizes.append((w, h))
 
     col_widths = [0] * current_ncol
@@ -215,14 +214,14 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     root = etree.Element("{%s}svg" % SVG_NS, nsmap={None: SVG_NS})
     total_width = sum(col_widths)
     total_height = sum(row_heights)
-    root.attrib["width"] = f'{total_width* px2pt}'
-    root.attrib["height"] = f'{total_height* px2pt}'
+    root.attrib["width"] = f'{total_width}px'
+    root.attrib["height"] = f'{total_height}px'
 
     for idx, svg in enumerate(svgs):
         row = idx // ncol
         col = idx % ncol
-        x_offset = sum(col_widths[:col]) * px2pt
-        y_offset = sum(row_heights[:row]) * px2pt
+        x_offset = sum(col_widths[:col])
+        y_offset = sum(row_heights[:row])
         orig_w, orig_h = sizes[idx]
         target_w = col_widths[col]
         target_h = row_heights[row]
@@ -230,10 +229,10 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         scale_x = target_w / orig_w if stretchx else 1
         scale_y = target_h / orig_h if stretchy else 1
         g = etree.Element("g")
+        clean_fill_recursive(svg)
         for child in svg:
-            clean_fill_recursive(child)
             g.append(child)
-        g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({scale_x * px2pt},{scale_y * px2pt}) "
+        g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({scale_x},{scale_y}) "
         g.attrib["vector-effect"] = f"non-scaling-stroke"
         g.attrib["width"] = f'{target_w}pt'
         g.attrib["height"] = f'{target_h}pt'
@@ -255,32 +254,32 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
             offset_x = x_offset
             offset_y = y_offset
-            margin = labelmargin * px2pt
+            margin = labelmargin
 
             if loc == "north west":
                 offset_x += margin
-                offset_y += labelsz * px2pt
+                offset_y += labelsz
             elif loc == "north east":
-                offset_x += (target_w - margin)*px2pt
-                offset_y += labelsz * px2pt
+                offset_x += (target_w - margin)*pt2px
+                offset_y += labelsz
             elif loc == "south west":
                 offset_x += margin
-                offset_y += (target_h - labelsz/2) * px2pt
+                offset_y += (target_h - labelsz/2)
             elif loc == "south east":
-                offset_x += (target_w - margin) * px2pt
-                offset_y += (target_h - labelsz/2) * px2pt
+                offset_x += (target_w - margin)
+                offset_y += (target_h - labelsz/2)
             elif loc == "north":
-                offset_x += target_w / 2 * px2pt
+                offset_x += target_w / 2
                 offset_y += margin
             elif loc == "south":
-                offset_x += target_w / 2 * px2pt
-                offset_y += (target_h - labelsz/2) * px2pt
+                offset_x += target_w / 2
+                offset_y += (target_h - labelsz/2)
             elif loc == "west":
                 offset_x += margin
-                offset_y += target_h / 2 * px2pt
+                offset_y += target_h / 2
             elif loc == "east":
                 offset_x += target_w - margin
-                offset_y += target_h / 2 * px2pt
+                offset_y += target_h / 2
 
             text = etree.Element("text", {
                 "x": str(offset_x),
@@ -302,8 +301,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         bg_rect = etree.Element("rect", {
             "x": "0",
             "y": "0",
-            "width": f'{total_width* px2pt}',
-            "height": f'{total_height* px2pt}',
+            "width": f'{total_width}px',
+            "height": f'{total_height}px',
             "fill": bgcolor,
             "id": __SVG_BGRECT_ID
         })
@@ -318,12 +317,12 @@ def overlay(inputs, bgcolor=None):
     max_w = 0
     max_h = 0
     for svg in svgs:
-        w = float(svg.attrib.get("width", "100").replace("pt", "").replace("px", ""))
-        h = float(svg.attrib.get("height", "100").replace("pt", "").replace("px", ""))
+        w = allinpx(svg.attrib.get("width", "100"))
+        h = allinpx(svg.attrib.get("height", "100"))
         max_w = max(max_w, w)
         max_h = max(max_h, h)
-    root.attrib["width"] = f'{max_w* px2pt}'
-    root.attrib["height"] = f'{max_h* px2pt}'
+    root.attrib["width"] = f'{max_w}px'
+    root.attrib["height"] = f'{max_h}px'
     for svg in svgs:
         clean_fill_recursive(svg)
         root.append(svg)
@@ -331,8 +330,8 @@ def overlay(inputs, bgcolor=None):
         bg_rect = etree.Element("rect", {
             "x": "0",
             "y": "0",
-            "width": f'{max_w* px2pt}',
-            "height": f'{max_h* px2pt}',
+            "width": f'{max_w}px',
+            "height": f'{max_h}px',
             "fill": bgcolor,
             "id": __SVG_BGRECT_ID
         })
@@ -382,6 +381,43 @@ def sf_warning(*args, **kwargs):
 def sf_error(*args, **kwargs):
     sf_warning(*args, verb=True, **kwargs)
     sys.exit(1)
+
+def allinpx(s: str) -> float:
+    """
+    将带单位的长度字符串转换为像素(px)数值。
+    支持: px, pt, pc, in, cm, mm, em, ex, % (部分相对单位需上下文)
+    """
+    s = s.strip().lower()
+    if s.endswith('px'):
+        return float(s.replace('px', ''))
+    elif s.endswith('pt'):
+        # 1pt = 1/72 in, 1in = 96px → 1pt = 96/72 = 1.333...px
+        return float(s.replace('pt', '')) * 96.0 / 72.0
+    elif s.endswith('pc'):
+        # 1pc = 12pt = 16px
+        return float(s.replace('pc', '')) * 16.0
+    elif s.endswith('in'):
+        # 1in = 96px
+        return float(s.replace('in', '')) * 96.0
+    elif s.endswith('cm'):
+        # 1in = 2.54cm → 1cm = 96/2.54 px
+        return float(s.replace('cm', '')) * 96.0 / 2.54
+    elif s.endswith('mm'):
+        # 1cm = 10mm
+        return float(s.replace('mm', '')) * 96.0 / 25.4
+    elif s.endswith('em'):
+        # 1em = 当前字体大小 (假设16px)
+        return float(s.replace('em', '')) * 16.0
+    elif s.endswith('ex'):
+        # 1ex ≈ 0.5em (粗略估计)
+        return float(s.replace('ex', '')) * 8.0
+    elif s.endswith('%'):
+        # 百分比需要上下文，这里先返回原始数值
+        return float(s.replace('%', ''))  # 需结合父元素宽度解释
+    else:
+        # 默认当作 px
+        return float(s)
+
 
 
 if __name__ == "__main__":
