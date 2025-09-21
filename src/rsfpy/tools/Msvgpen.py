@@ -38,7 +38,7 @@ __doc__ = """
 import math, sys, os, subprocess
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __SVG_BGRECT_ID
 
 
 __progname__ = os.path.basename(sys.argv[0])
@@ -304,7 +304,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
             "y": "0",
             "width": f'{total_width* px2pt}',
             "height": f'{total_height* px2pt}',
-            "fill": bgcolor
+            "fill": bgcolor,
+            "id": __SVG_BGRECT_ID
         })
         root.insert(0, bg_rect)
 
@@ -332,7 +333,8 @@ def overlay(inputs, bgcolor=None):
             "y": "0",
             "width": f'{max_w* px2pt}',
             "height": f'{max_h* px2pt}',
-            "fill": bgcolor
+            "fill": bgcolor,
+            "id": __SVG_BGRECT_ID
         })
         root.insert(0, bg_rect)
     return etree.ElementTree(root)
@@ -340,6 +342,11 @@ def overlay(inputs, bgcolor=None):
 
 def clean_fill_recursive(elem):
     elem_id = elem.attrib.get("id", "")
+    if elem_id == __SVG_BGRECT_ID:
+        parent = elem.getparent()
+        if parent is not None:
+            parent.remove(elem)
+        return
     if elem_id.startswith("patch_1") or elem_id.startswith("patch_2"):
         for child in elem:
             if 'fill' in child.attrib.get('style', ''):
@@ -347,9 +354,9 @@ def clean_fill_recursive(elem):
                 styles = [s for s in styles if not s.strip().startswith('fill:')]
                 styles.append('fill: none')
                 child.attrib['style'] = ';'.join(styles)
-
-    for child in elem:
+    for child in list(elem):
         clean_fill_recursive(child)
+
 
 ## Safely get float parameters
 def getfloat(par_dict, parname, default):
