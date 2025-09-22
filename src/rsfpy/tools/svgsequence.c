@@ -1,5 +1,6 @@
-#include "svg_sequence.h"
+#include "svgsequence.h"
 #include <string.h>
+#include <math.h>
 #include <stdio.h>
 
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
@@ -146,47 +147,126 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
     SvgFrame *f = &seq->frames[seq->current_index];
     if (!f->handle && !load_svg(f)) return;
 
-    // 清空背景
-    // 新方式：只清空内容区域（不包括 toolbar 和 hintbar）
-
-
     int content_h = win_h - toolbar_h - hintbar_h;
+
+    double sx = (double)win_w / f->width;
+    double sy = (double)content_h / f->height;
+    double s = (sx < sy ? sx : sy) * zoom_scale;
+
+    double dst_w = f->width * s;
+    double dst_h = f->height * s;
+    double ox = (win_w - dst_w) / 2;
+    double oy = (content_h - dst_h) / 2;
+
     cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
     cairo_rectangle(cr, 0, toolbar_h, win_w, content_h);
     cairo_fill(cr);
 
-    // 内容区域尺寸
-    double sx = (double)win_w / (f->width * 1);
-    double sy = (double)content_h / (f->height * 1);
-    double s = sx < sy ? sx : sy;
-    s *= zoom_scale;
-
-    // 缩放后尺寸与偏移
-    double dst_w = (f->width * 1)* s;
-    double dst_h = (f->height * 1) * s;
-    double ox = (win_w - dst_w) / 2;
-    double oy = (content_h - dst_h) / 2;
-
-    cairo_save(cr);
-    cairo_translate(cr, ox, oy + toolbar_h); // 加上 toolbar 高度
-    cairo_translate(cr, pan_x, pan_y);
-    cairo_scale(cr, s, s);
-
-#if LIBRSVG_CHECK_VERSION(2,52,0)
-    RsvgRectangle viewport = {0, 0, f->width, f->height};
-    GError *err = NULL;
-    rsvg_handle_render_document(f->handle, cr, &viewport, &err);
-    if (err) {
-        fprintf(stderr, "Render error: %s\n", err->message);
-        g_error_free(err);
+    // 判断缓存是否失效
+    gboolean cache_invalid = FALSE;
+    if (!f->rendered || !f->surface) {
+        cache_invalid = TRUE;
+    } else {
+        if (abs(win_w - f->cached_win_w) > 50 ||
+            abs(win_h - f->cached_win_h) > 50) {
+            cache_invalid = TRUE;
+        }
+        if (fabs(zoom_scale - f->cached_scale) / f->cached_scale > 0.5) {
+            cache_invalid = TRUE;
+        }
     }
-#else
-    rsvg_handle_render_cairo(f->handle, cr);
-#endif
 
+    if (cache_invalid) {
+        if (f->surface) {
+            cairo_surface_destroy(f->surface);
+            f->surface = NULL;
+        }
+        f->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                                (int)f->width * s,
+                                                (int)f->height * s);
+        if (cairo_surface_status(f->surface) != CAIRO_STATUS_SUCCESS) {
+            const char *msg = "Surface creation failed:";
+            char msg_buf[1024];
+            snprintf(msg_buf, sizeof(msg_buf), "%s\n",
+                     cairo_status_to_string(cairo_surface_status(f->surface)));
+            for (int bufi=0; bufi < sizeof(msg_buf)-1 && msg_buf[bufi] != '\0'; bufi++) {
+                if (msg_buf[bufi] < 32 || msg_buf[bufi] > 126) {
+                    msg_buf[bufi] = '.';
+                }
+            }
+            double cx = win_w / 2.0;
+            double cy = win_h / 2.0;
+            double x = cx - win_w / 2.0;
+            double y = cy - content_h / 2.0;
+
+            cairo_save(cr);
+            cairo_set_source_rgba(cr, 0.95, 0.95, 0.95, 0.5);
+            cairo_rectangle(cr, x, y, win_w, content_h);
+            cairo_fill(cr);
+
+            cairo_set_source_rgb(cr, 1, 0.1, 0);
+            cairo_set_line_width(cr, 2.0);
+            cairo_rectangle(cr, x, y, win_w, content_h);
+            cairo_stroke(cr);
+
+            cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 20);
+            cairo_text_extents_t extents;
+            cairo_text_extents(cr, msg_buf, &extents);
+
+            double tx = cx - extents.width / 2 - extents.x_bearing;
+            double ty = cy - extents.height / 2 - extents.y_bearing - 5;
+
+            cairo_move_to(cr, tx, ty);
+            cairo_show_text(cr, msg);
+
+            ty = ty + extents.height + 5;
+
+
+            cairo_move_to(cr, tx, ty);
+            cairo_show_text(cr, msg_buf);
+
+            cairo_restore(cr);
+
+            cairo_surface_destroy(f->surface);
+            f->surface = NULL;
+            f->rendered = FALSE;
+            return;
+        }
+        cairo_t *cr_surf = cairo_create(f->surface);
+        cairo_scale(cr_surf, s, s);
+
+    #if LIBRSVG_CHECK_VERSION(2,52,0)
+        RsvgRectangle viewport = {0, 0, f->width, f->height};
+        GError *err = NULL;
+        rsvg_handle_render_document(f->handle, cr_surf, &viewport, &err);
+        if (err) {
+            fprintf(stderr, "Render error: %s\n", err->message);
+            g_error_free(err);
+        }
+    #else
+        rsvg_handle_render_cairo(f->handle, cr_surf);
+    #endif
+
+        cairo_destroy(cr_surf);
+        f->rendered = TRUE;
+        f->cached_scale = zoom_scale;
+        f->cached_win_w = win_w;
+        f->cached_win_h = win_h;
+    }
+    cairo_save(cr);
+    cairo_rectangle(cr, 0, toolbar_h, win_w, content_h);
+    cairo_translate(cr, ox + pan_x, oy + toolbar_h + pan_y);
+    cairo_clip(cr);
+    if (!cache_invalid) cairo_scale(cr, zoom_scale/f->cached_scale, zoom_scale/f->cached_scale);
+
+    cairo_set_source_surface(cr, f->surface, 0, 0);
+    cairo_paint(cr);
     cairo_restore(cr);
+
     cairo_surface_flush(cairo_get_target(cr));
 }
+
 
 void svg_sequence_advance(SvgSequence *seq) {
     if (seq->count == 0) return;

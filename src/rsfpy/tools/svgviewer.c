@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "svg_sequence.h"
+#include "svgsequence.h"
 
 
 #include <time.h>
@@ -29,8 +29,8 @@
 #define INCH2PT 72
 
 /* Zoom */
-#define MAX_ZOOM_SCALE 4.00
-#define MIN_ZOOM_SCALE 0.05
+#define MAX_ZOOM_SCALE 100.00
+#define MIN_ZOOM_SCALE 0.01
 
 /* Playback */
 #define MAX_FPS 20
@@ -40,16 +40,21 @@
 #define PAUSEMSG "Paused"
 
 /* Buttons */
-#define MAX_BUTTONS 7
+#define MAX_BUTTONS 9
 #define NEXT_BUTTON 0
 #define PREV_BUTTON 1
 #define RUN_BUTTON 2
 #define PAUSE_BUTTON 3
 #define SLOWER_BUTTON 4
 #define FASTER_BUTTON 5
-#define HOME_BUTTON 6
+#define MOVE_BUTTON 6
+#define ZOOM_BUTTON 7
+#define HOME_BUTTON 8 /* Reset button */
 #define ENABLED_COLOR "#000"
 #define DISABLED_COLOR "#888"
+#define PRESSED_COLOR "#aaa"
+
+#define WAIT_TIME_MS 50
 
 
 typedef struct {
@@ -62,6 +67,7 @@ typedef struct {
     int index;
     int x, y, width, height;
     gboolean enabled;
+    gboolean pressed;
 } Button;
 
 
@@ -89,6 +95,12 @@ typedef struct {
     struct timespec last_drag_time;
 
     double zoom_scale;
+
+    gboolean drag_mode;
+    gboolean zoom_mode;
+
+    struct timespec last_zoom_time;
+    gboolean zooming;
 
 
 } App;
@@ -145,6 +157,30 @@ static char *but_labels[] = {
     "<polygon points='32,48 52,32 30,16' fill='%s'/>"
     "</svg>",
 
+    /* Drag (Cross Arrows) */
+    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
+    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
+            "fill='%s' stroke='%s' stroke-width='2'/>"
+    "<polygon points='32,6 24,18 40,18' fill='%s'/>"
+    "<polygon points='32,58 24,46 40,46' fill='%s'/>"
+    "<polygon points='6,32 18,24 18,40' fill='%s'/>"
+    "<polygon points='58,32 46,24 46,40' fill='%s'/>"
+    "<rect x='28' y='22' width='8' height='20' fill='%s'/>"
+    "<rect x='22' y='28' width='20' height='8' fill='%s'/>"
+    "</svg>",
+
+    /* Zoom (Magnifier) */
+    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
+    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
+            "fill='%s' stroke='%s' stroke-width='2'/>"
+    "<circle cx='28' cy='28' r='16' fill='none' stroke='%s' stroke-width='4'/>"
+    "<rect x='40' y='36' width='24' height='6' rx='3' ry='3' fill='%s' "
+            "transform='rotate(45 42 37)'/>"
+    "<rect x='16' y='25' width='24' height='6' rx='3' ry='3' fill='%s' />"
+    "<rect x='25' y='16' width='6' height='24' rx='3' ry='3' fill='%s' />"
+
+    "</svg>",
+
     /* Reset */
     "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' >"
     "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
@@ -168,7 +204,7 @@ static char *but_labels[] = {
 
 
 Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
-                   double height, gboolean enabled) {
+                   double height, gboolean enabled, gboolean pressed) {
     // 按钮尺寸（固定或基于 icon_size）
     int btn_w = 0;
     int btn_h = (int)(0.8 * height);
@@ -178,8 +214,11 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
     if (svg_label) {
         GError *err = NULL;
         snprintf(svg_buf, sizeof(svg_buf), svg_label,
-                /* background color */ "#fff",
+                /* background color */ pressed? PRESSED_COLOR:"#fff",
                 /* stroke color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
+                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
+                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
+                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
@@ -237,6 +276,7 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
     b.width = btn_w;
     b.height = btn_h;
     b.enabled = enabled;
+    b.pressed = pressed;
     strncpy(b.label, "[svg]", sizeof(b.label));
     return b;
 }
@@ -339,6 +379,7 @@ void draw_toolbar(App *app) {
     app->num_buttons = 0;
     for (int i = 0; i < MAX_BUTTONS; i++) {
         gboolean enabled = TRUE;
+        gboolean pressed = (i == MOVE_BUTTON);
         if (i == RUN_BUTTON) enabled = !app->sequence.playing;
         else if (i == PAUSE_BUTTON || i==FASTER_BUTTON || i==SLOWER_BUTTON) enabled = app->sequence.playing;
         else if (i == NEXT_BUTTON || i==PREV_BUTTON) enabled = TRUE;
@@ -353,16 +394,28 @@ void draw_toolbar(App *app) {
                 enabled = FALSE;
             }
         }
-        Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled);
+        if (i == MOVE_BUTTON) {
+            enabled = TRUE;
+            pressed = app->drag_mode;
+        }
+        if (i == ZOOM_BUTTON) {
+            enabled = TRUE;
+            pressed = app->zoom_mode;
+        }
+        Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled, pressed);
         b.index = i;
         app->buttons[app->num_buttons++] = b;
         x += b.width + padding;
     }
     char fps_text[64];
     if (app->sequence.count <= 1)
-    snprintf(fps_text, sizeof(fps_text), "%2.0f%%.", app->zoom_scale*100.);
+    snprintf(fps_text, sizeof(fps_text), "%s%2.0f%%.",
+                                        app->zooming? "Zooming... " : "",
+                                        app->zoom_scale*100.);
     else
-    snprintf(fps_text, sizeof(fps_text), "%d frame(s)/sec. %2.0f%%. %s.", app->sequence.fps,  app->zoom_scale * 100.,
+    snprintf(fps_text, sizeof(fps_text), "%d frame(s)/sec. %s%2.0f%%. %s.", app->sequence.fps,
+                                        app->zooming? "Zooming... " : "",
+                                        app->zoom_scale * 100.,
                                         app->sequence.playing ? RUNMSG : PAUSEMSG);
 
     cairo_set_source_rgb(app->cr, 0.25, 0.25, 0.3);
@@ -400,6 +453,7 @@ static void draw_all(App *app) {
 }
 
 static void run_loop(App *app) {
+    struct timespec now;
     XSelectInput(app->dpy, app->win,
              ExposureMask | StructureNotifyMask | KeyPressMask |
              ButtonPressMask | ButtonReleaseMask | PointerMotionMask
@@ -418,6 +472,19 @@ static void run_loop(App *app) {
     clock_gettime(CLOCK_MONOTONIC, &last_frame_time);
 
     while (1) {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    /* Time to finish zooming */
+    if (app->zooming){
+        if (now.tv_sec == app->last_zoom_time.tv_sec &&
+            now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+        }else{
+            app->last_zoom_time = now;
+            app->zooming = FALSE;
+            draw_all(app);
+        }
+    }
+
     while (XPending(app->dpy)) {
         XPeekEvent(app->dpy, &ev);
         if (ev.type == Expose) {
@@ -437,27 +504,28 @@ static void run_loop(App *app) {
                 clock_gettime(CLOCK_MONOTONIC, &app->last_resize_time);
             } break;
             case ButtonRelease: {
-                if (ev.xbutton.button == Button1) {
+                if (app->drag_mode && ev.xbutton.button == Button1) {
                     app->dragging = FALSE;
                     draw_all(app);
                 }
             } break;
 
             case MotionNotify: {
-                if (app->dragging) {
-                    struct timespec now;
-                    clock_gettime(CLOCK_MONOTONIC, &now);
+                if (app->drag_mode && app->dragging) {
                     long elapsed_ms = (now.tv_sec - app->last_drag_time.tv_sec) * 1000 +
                                     (now.tv_nsec - app->last_drag_time.tv_nsec) / 1000000;
+                    int dx = ev.xmotion.x - app->drag_start_x;
+                    int dy = ev.xmotion.y - app->drag_start_y;
+                    if (elapsed_ms >= 100 && (abs(dx) > 5 || abs(dy) > 5)) {
 
-                    if (elapsed_ms >= 100) {
-                        int dx = ev.xmotion.x - app->drag_start_x;
-                        int dy = ev.xmotion.y - app->drag_start_y;
                         app->pan_x += dx;
                         app->pan_y += dy;
                         app->drag_start_x = ev.xmotion.x;
                         app->drag_start_y = ev.xmotion.y;
                         draw_all(app);
+                        app->last_drag_time = now;
+                    }else if (!(abs(dx) > 5 || abs(dy) > 5)){
+                        // Reset timer
                         app->last_drag_time = now;
                     }
                 }
@@ -466,21 +534,43 @@ static void run_loop(App *app) {
             case ButtonPress: {
                 int x = ev.xbutton.x;
                 int y = ev.xbutton.y;
-                if (ev.xbutton.button == Button1) {
+                if (app->drag_mode && ev.xbutton.button == Button1) {
                     app->dragging = TRUE;
                     app->drag_start_x = ev.xbutton.x;
                     app->drag_start_y = ev.xbutton.y;
                     clock_gettime(CLOCK_MONOTONIC, &app->last_drag_time);
                 }
 
-                if (ev.xbutton.button == Button4) {
+                if (app->zoom_mode && ev.xbutton.button == Button4) {
+                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
+                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                        app->zoom_scale += 0.05;
+                        if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
+                        app->zooming = TRUE;
+                        app->last_zoom_time = now;
+                        draw_toolbar(app);
+                        break;
+                    }
                     app->zoom_scale += 0.05;
                     if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
+                    app->last_zoom_time = now;
+                    app->zooming = FALSE;
                     draw_all(app);
                 }
-                else if (ev.xbutton.button == Button5) {
+                else if (app->zoom_mode && ev.xbutton.button == Button5) {
+                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
+                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                        app->zoom_scale -= 0.05;
+                        if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
+                        app->zooming = TRUE;
+                        app->last_zoom_time = now;
+                        draw_toolbar(app);
+                        break;
+                    }
                     app->zoom_scale -= 0.05;
                     if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
+                    app->last_zoom_time = now;
+                    app->zooming = FALSE;
                     draw_all(app);
                 }
 
@@ -493,19 +583,23 @@ static void run_loop(App *app) {
 
                         if (btn->index == PAUSE_BUTTON) {
                             app->sequence.playing = FALSE;
+                            draw_all(app);
                         }
                         else if (btn->index == RUN_BUTTON) {
                             app->sequence.playing = TRUE;
+                            draw_all(app);
                         }
                         else if (btn->index == NEXT_BUTTON) {
                             app->sequence.playing = FALSE;
                             app->sequence.current_index =
                                 (app->sequence.current_index + 1) % app->sequence.count;
+                            draw_all(app);
                         }
                         else if (btn->index == PREV_BUTTON) {
                             app->sequence.playing = FALSE;
                             app->sequence.current_index =
                                 (app->sequence.current_index - 1 + app->sequence.count) % app->sequence.count;
+                            draw_all(app);
                         }
                         else if (btn->index == FASTER_BUTTON) {
                             if (app->sequence.fps < MAX_FPS)
@@ -523,8 +617,16 @@ static void run_loop(App *app) {
                             app->zoom_scale = 1.0;
                             app->pan_x = 0;
                             app->pan_y = 0;
+                            draw_all(app);
                         }
-                        draw_all(app);
+                        else if (btn->index == MOVE_BUTTON) {
+                            app->drag_mode = !app->drag_mode;
+                            draw_toolbar(app);
+                        }
+                        else if (btn->index == ZOOM_BUTTON) {
+                            app->zoom_mode = !app->zoom_mode;
+                            draw_toolbar(app);
+                        }
                     }
                 }
             } break;
@@ -571,14 +673,36 @@ static void run_loop(App *app) {
                             draw_toolbar(app);
                         }
                 }
-                if (ks == XK_Up) {
-                    app->zoom_scale *= 1.1;
-                    if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
+                if (app->zoom_mode && ks == XK_Up) {
+                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
+                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                        app->zoom_scale += 0.05;
+                        if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
+                        app->zooming = TRUE;
+                        app->last_zoom_time = now;
+                        draw_toolbar(app);
+                        break;
+                    }
+                    app->zoom_scale += 0.05;
+                    if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
+                    app->last_zoom_time = now;
+                    app->zooming = FALSE;
                     draw_all(app);
                 }
-                if (ks == XK_Down) {
-                    app->zoom_scale /= 1.1;
+                if (app->zoom_mode && ks == XK_Down) {
+                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
+                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                        app->zoom_scale -= 0.05;
+                        if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
+                        app->zooming = TRUE;
+                        app->last_zoom_time = now;
+                        draw_toolbar(app);
+                        break;
+                    }
+                    app->zoom_scale -= 0.05;
                     if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
+                    app->last_zoom_time = now;
+                    app->zooming = FALSE;
                     draw_all(app);
                 }
                 if (ks == XK_h || ks == XK_Home) {
@@ -593,21 +717,23 @@ static void run_loop(App *app) {
     }
 
     if (app->sequence.playing && app->sequence.fps > 0) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
         long elapsed_ms = (now.tv_sec - last_frame_time.tv_sec) * 1000 +
                           (now.tv_nsec - last_frame_time.tv_nsec) / 1000000;
         int interval_ms = 1000 / app->sequence.fps;
         if (elapsed_ms >= interval_ms) {
             svg_sequence_advance(&app->sequence);
-            draw_all(app);
+            // draw_all(app);
+            svg_sequence_render_frame(&app->sequence, app->cr,
+                              app->win_w >= MIN_WIDTH ? app->win_w : MIN_WIDTH,
+                              app->win_h >= MIN_HEIGHT ? app->win_h: MIN_HEIGHT,
+                              app->pan_x, app->pan_y,
+                              app->zoom_scale,
+                              app->toolbar_h, app->hintbar_h);
             last_frame_time = now;
         }
     }
 
     if (app->resize_pending) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
         long elapsed_ms = (now.tv_sec - app->last_resize_time.tv_sec) * 1000 +
                         (now.tv_nsec - app->last_resize_time.tv_nsec) / 1000000;
         if (elapsed_ms >= 200) {
@@ -620,12 +746,22 @@ static void run_loop(App *app) {
                 adjust_bar(app);
                 app->hintbar_h = 32;
                 draw_all(app);
+            }else if (app->win_w < MIN_WIDTH || app->win_h < MIN_HEIGHT) {
+                int new_w = app->win_w < MIN_WIDTH ? MIN_WIDTH : app->win_w;
+                int new_h = app->win_h < MIN_HEIGHT ? MIN_HEIGHT : app->win_h;
+                XResizeWindow(app->dpy, app->win, new_w, new_h);
+                app->win_w = new_w;
+                app->win_h = new_h;
+                create_cairo(app);
+                adjust_bar(app);
+                app->hintbar_h = 32;
+                draw_all(app);
             }
             app->resize_pending = FALSE;
         }
     }
 
-    nanosleep(&(struct timespec){0, 10000000}, NULL);
+    nanosleep(&(struct timespec){0, WAIT_TIME_MS * 1000000L}, NULL);
 
 }
 
@@ -657,6 +793,9 @@ int main(int argc, char **argv) {
     app.pan_y = 0;
     app.dragging = FALSE;
     app.zoom_scale = 1.0;
+    app.drag_mode = FALSE;
+    app.zoom_mode = FALSE;
+    clock_gettime(CLOCK_MONOTONIC, &app.last_zoom_time);
 
 
     app.dpy = XOpenDisplay(NULL);
