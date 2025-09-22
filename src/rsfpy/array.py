@@ -539,6 +539,7 @@ class Rsfdata(np.ndarray):
             f = params[f'f{ax+1}'] if params[f'f{ax+1}'] is not None else 0
             if n < 0: n = self.n(ax)
             if f < 0: f += self.n(ax)
+            if f >= self.n(ax): f= self.n(ax) - 1
             slices = np.arange(f, f + n * j, j, dtype=int)
             slices = slices[np.where((slices >= 0) & (slices < self.n(ax)))]
             new_data = np.take(new_data, slices, axis=ax)

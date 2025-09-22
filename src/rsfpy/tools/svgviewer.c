@@ -1,5 +1,6 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
+#include <X11/Xatom.h>
 #include <cairo/cairo.h>
 #include <cairo/cairo-xlib.h>
 #include <librsvg/rsvg.h>
@@ -13,48 +14,6 @@
 #include <time.h>
 #include <unistd.h> // for isatty()
 
-#define WINDOW_TITLE "RSFPY - SVG Sequence Viewer"
-
-
-
-/* Aspect */
-#define DEFAULT_DPI 90
-#define DEFAULT_WIDTH 960
-#define DEFAULT_HEIGHT 720
-#define MIN_WIDTH 500
-#define MIN_HEIGHT 450
-#define MIN_BAR_HEIGHT 24
-#define BAR_HEIGHT_RATIO 0.025
-#define DEFAULT_FONT_HEIGHT 12
-#define INCH2PT 72
-
-/* Zoom */
-#define MAX_ZOOM_SCALE 100.00
-#define MIN_ZOOM_SCALE 0.01
-
-/* Playback */
-#define MAX_FPS 20
-#define MIN_FPS 1
-
-#define RUNMSG "Running"
-#define PAUSEMSG "Paused"
-
-/* Buttons */
-#define MAX_BUTTONS 9
-#define NEXT_BUTTON 0
-#define PREV_BUTTON 1
-#define RUN_BUTTON 2
-#define PAUSE_BUTTON 3
-#define SLOWER_BUTTON 4
-#define FASTER_BUTTON 5
-#define MOVE_BUTTON 6
-#define ZOOM_BUTTON 7
-#define HOME_BUTTON 8 /* Reset button */
-#define ENABLED_COLOR "#000"
-#define DISABLED_COLOR "#888"
-#define PRESSED_COLOR "#aaa"
-
-#define WAIT_TIME_MS 50
 
 
 typedef struct {
@@ -101,6 +60,8 @@ typedef struct {
 
     struct timespec last_zoom_time;
     gboolean zooming;
+
+    
 
 
 } App;
@@ -201,20 +162,84 @@ static char *but_labels[] = {
 };
 
 
+/* static unsigned char *clipboard_png_data;
+static size_t clipboard_png_size;
+static cairo_status_t
+write_png_to_memory(void *closure, const unsigned char *data, unsigned int length) {
+    size_t old_size = clipboard_png_size;
+    clipboard_png_size += length;
+    clipboard_png_data = realloc(clipboard_png_data, clipboard_png_size);
+    memcpy(clipboard_png_data + old_size, data, length);
+    return CAIRO_STATUS_SUCCESS;
+}
+
+void copy_cairo_region_to_clipboard(App *app, Display *dpy, Window win,
+                                    cairo_surface_t *src) {
+    free(clipboard_png_data);
+    clipboard_png_data = NULL;
+    clipboard_png_size = 0;
+    cairo_surface_write_to_png_stream(src, write_png_to_memory, NULL);
+
+    Atom XA_CLIPBOARD = XInternAtom(dpy, "CLIPBOARD", False);
+    XSetSelectionOwner(dpy, XA_CLIPBOARD, win, CurrentTime);
+    XFlush(dpy);
+    fprintf(stderr, "Copied %zu bytes PNG to clipboard.\n", clipboard_png_size);
+}
+
+void handle_selection_request(Display *dpy, XEvent *e) {
+    XSelectionRequestEvent *req = &e->xselectionrequest;
+
+    XSelectionEvent sev;
+    memset(&sev, 0, sizeof(sev));
+    sev.type      = SelectionNotify;
+    sev.display   = req->display;
+    sev.requestor = req->requestor;
+    sev.selection = req->selection;
+    sev.target    = req->target;
+    sev.property  = req->property;
+    sev.time      = req->time;
+
+    Atom XA_TARGETS = XInternAtom(dpy, "TARGETS", False);
+    Atom XA_UTF8    = XInternAtom(dpy, "UTF8_STRING", False);
+    Atom atom_STRING  = XInternAtom(dpy, "STRING", False);
+    Atom XA_PNG     = XInternAtom(dpy, "image/png", False);
+
+    if (req->target == XA_TARGETS) {
+        Atom targets[] = { XA_UTF8, atom_STRING, XA_PNG };
+        XChangeProperty(dpy, req->requestor, req->property,
+                        XA_ATOM, 32, PropModeReplace,
+                        (unsigned char*)targets, 3);
+    }
+    else if (req->target == XA_UTF8 || req->target == atom_STRING) {
+        const char *text = "Hello from WSLg + X11!";
+        XChangeProperty(dpy, req->requestor, req->property,
+                        req->target, 8, PropModeReplace,
+                        (unsigned char*)text, strlen(text));
+    }
+    else if (req->target == XA_PNG && clipboard_png_data && clipboard_png_size > 0) {
+        XChangeProperty(dpy, req->requestor, req->property,
+                        XA_PNG, 8, PropModeReplace,
+                        clipboard_png_data, clipboard_png_size);
+    }
+    else {
+        sev.property = None;
+    }
+
+    XSendEvent(dpy, req->requestor, True, 0, (XEvent*)&sev);
+    XFlush(dpy);
+} */
 
 
 Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
                    double height, gboolean enabled, gboolean pressed) {
-    // 按钮尺寸（固定或基于 icon_size）
     int btn_w = 0;
     int btn_h = (int)(0.8 * height);
     char svg_buf[1024];
 
-    // 渲染 SVG 图标
     if (svg_label) {
         GError *err = NULL;
         snprintf(svg_buf, sizeof(svg_buf), svg_label,
-                /* background color */ pressed? PRESSED_COLOR:"#fff",
+                /* background color */ pressed? PRESSED_COLOR:WHITE,
                 /* stroke color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
@@ -329,7 +354,7 @@ static void adjust_bar(App *app){
 void draw_hintbar(App *app, int hintbar_h) {
     cairo_save(app->cr);
 
-    cairo_set_source_rgb(app->cr, 0.92, 0.92, 0.95);
+    cairo_set_source_rgba_string(app->cr, BAR_COLOR);
     cairo_rectangle(app->cr, 0, app->win_h - hintbar_h, app->win_w, hintbar_h);
     cairo_fill(app->cr);
 
@@ -346,7 +371,7 @@ void draw_hintbar(App *app, int hintbar_h) {
     }
 
     int padding = 10;
-    cairo_set_source_rgb(app->cr, 0.25, 0.25, 0.3);
+    cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
     cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(app->cr, 12);
 
@@ -366,7 +391,7 @@ void draw_hintbar(App *app, int hintbar_h) {
 void draw_toolbar(App *app) {
     cairo_save(app->cr);
     // toolbar background
-    cairo_set_source_rgb(app->cr, 0.92, 0.92, 0.95);
+    cairo_set_source_rgba_string(app->cr, BAR_COLOR);
     cairo_rectangle(app->cr, 0, 0, app->win_w, app->toolbar_h);
     cairo_fill(app->cr);
 
@@ -418,7 +443,7 @@ void draw_toolbar(App *app) {
                                         app->zoom_scale * 100.,
                                         app->sequence.playing ? RUNMSG : PAUSEMSG);
 
-    cairo_set_source_rgb(app->cr, 0.25, 0.25, 0.3);
+    cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
     cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT);
 
@@ -454,9 +479,10 @@ static void draw_all(App *app) {
 
 static void run_loop(App *app) {
     struct timespec now;
+    long elapsed_ms = 0;
     XSelectInput(app->dpy, app->win,
              ExposureMask | StructureNotifyMask | KeyPressMask |
-             ButtonPressMask | ButtonReleaseMask | PointerMotionMask
+             ButtonPressMask | ButtonReleaseMask | PointerMotionMask 
     );
 
     XMapWindow(app->dpy, app->win);
@@ -473,11 +499,12 @@ static void run_loop(App *app) {
 
     while (1) {
     clock_gettime(CLOCK_MONOTONIC, &now);
+    elapsed_ms = (now.tv_sec - last_frame_time.tv_sec) * 1000 +
+                 (now.tv_nsec - last_frame_time.tv_nsec) / 1000000;
 
     /* Time to finish zooming */
     if (app->zooming){
-        if (now.tv_sec == app->last_zoom_time.tv_sec &&
-            now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+        if (elapsed_ms < (3 * WAIT_TIME_MS)) {
         }else{
             app->last_zoom_time = now;
             app->zooming = FALSE;
@@ -497,6 +524,12 @@ static void run_loop(App *app) {
             case Expose: {
                 draw_all(app);
             } break;
+/*             case SelectionRequest:
+                {
+                    handle_selection_request(app->dpy, &ev);
+                    fprintf(stderr, "handled!");
+                    break;
+                } */
             case ConfigureNotify: {
                 app->resize_pending = TRUE;
                 app->resize_w = ev.xconfigure.width;
@@ -512,12 +545,9 @@ static void run_loop(App *app) {
 
             case MotionNotify: {
                 if (app->drag_mode && app->dragging) {
-                    long elapsed_ms = (now.tv_sec - app->last_drag_time.tv_sec) * 1000 +
-                                    (now.tv_nsec - app->last_drag_time.tv_nsec) / 1000000;
                     int dx = ev.xmotion.x - app->drag_start_x;
                     int dy = ev.xmotion.y - app->drag_start_y;
-                    if (elapsed_ms >= 100 && (abs(dx) > 5 || abs(dy) > 5)) {
-
+                    if (elapsed_ms >= WAIT_TIME_MS && (abs(dx) > 5 || abs(dy) > 5)) {
                         app->pan_x += dx;
                         app->pan_y += dy;
                         app->drag_start_x = ev.xmotion.x;
@@ -542,8 +572,7 @@ static void run_loop(App *app) {
                 }
 
                 if (app->zoom_mode && ev.xbutton.button == Button4) {
-                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
-                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
                         app->zoom_scale += 0.05;
                         if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
                         app->zooming = TRUE;
@@ -558,8 +587,7 @@ static void run_loop(App *app) {
                     draw_all(app);
                 }
                 else if (app->zoom_mode && ev.xbutton.button == Button5) {
-                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
-                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
                         app->zoom_scale -= 0.05;
                         if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
                         app->zooming = TRUE;
@@ -674,8 +702,7 @@ static void run_loop(App *app) {
                         }
                 }
                 if (app->zoom_mode && ks == XK_Up) {
-                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
-                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
                         app->zoom_scale += 0.05;
                         if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
                         app->zooming = TRUE;
@@ -690,8 +717,7 @@ static void run_loop(App *app) {
                     draw_all(app);
                 }
                 if (app->zoom_mode && ks == XK_Down) {
-                    if (now.tv_sec == app->last_zoom_time.tv_sec &&
-                        now.tv_nsec - app->last_zoom_time.tv_nsec < 500000000) {
+                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
                         app->zoom_scale -= 0.05;
                         if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
                         app->zooming = TRUE;
@@ -717,8 +743,6 @@ static void run_loop(App *app) {
     }
 
     if (app->sequence.playing && app->sequence.fps > 0) {
-        long elapsed_ms = (now.tv_sec - last_frame_time.tv_sec) * 1000 +
-                          (now.tv_nsec - last_frame_time.tv_nsec) / 1000000;
         int interval_ms = 1000 / app->sequence.fps;
         if (elapsed_ms >= interval_ms) {
             svg_sequence_advance(&app->sequence);
@@ -746,6 +770,8 @@ static void run_loop(App *app) {
                 adjust_bar(app);
                 app->hintbar_h = 32;
                 draw_all(app);
+                // copy_cairo_region_to_clipboard(app, app->dpy, app->win, app->sequence.frames[app->sequence.current_index].surface);
+                /* Copy test */
             }else if (app->win_w < MIN_WIDTH || app->win_h < MIN_HEIGHT) {
                 int new_w = app->win_w < MIN_WIDTH ? MIN_WIDTH : app->win_w;
                 int new_h = app->win_h < MIN_HEIGHT ? MIN_HEIGHT : app->win_h;
@@ -760,8 +786,8 @@ static void run_loop(App *app) {
             app->resize_pending = FALSE;
         }
     }
-
-    nanosleep(&(struct timespec){0, WAIT_TIME_MS * 1000000L}, NULL);
+    /* half of WAIT_TIME_MS */
+    nanosleep(&(struct timespec){0, WAIT_TIME_MS * 500000L}, NULL);
 
 }
 
@@ -783,8 +809,8 @@ int main(int argc, char **argv) {
     // Init X
     App app;
     memset(&app, 0, sizeof(app));
-    app.toolbar_h = 48;
-    app.hintbar_h = 32;
+    app.toolbar_h = MIN_BAR_HEIGHT;
+    app.hintbar_h = MIN_BAR_HEIGHT;
     app.win_w = DEFAULT_WIDTH;
     app.win_h = DEFAULT_HEIGHT;
     app.resize_w = app.win_w;
@@ -796,6 +822,9 @@ int main(int argc, char **argv) {
     app.drag_mode = FALSE;
     app.zoom_mode = FALSE;
     clock_gettime(CLOCK_MONOTONIC, &app.last_zoom_time);
+    app.last_drag_time = app.last_zoom_time;
+    app.last_resize_time = app.last_zoom_time;
+    app.zooming = FALSE;
 
 
     app.dpy = XOpenDisplay(NULL);
@@ -807,13 +836,13 @@ int main(int argc, char **argv) {
                                   WhitePixel(app.dpy, app.screen));
 
     // Load SVGs: from args or stdin
-    gboolean ok = FALSE;
+    gboolean check_input = FALSE;
 
     if (argc >= 2 && strcmp(argv[1], "-") != 0) {
-        // 从文件路径加载
-        ok = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);
+        // Read from file paths
+        check_input = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);
     } else {
-        // 从标准输入加载
+        // Read from stdin
         GError *err = NULL;
         gchar *content = NULL;
         gsize len = 0;
@@ -824,16 +853,14 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        ok = svg_sequence_load_from_stream(&app.sequence, content, len);
+        check_input = svg_sequence_load_from_stream(&app.sequence, content, len);
         g_free(content);
     }
 
-    if (!ok || app.sequence.count == 0) {
+    if (!check_input || app.sequence.count == 0) {
         fprintf(stderr, "Failed to load SVG sequence. Exiting.\n");
         return 1;
     }
-
-
 
     create_cairo(&app);
     adjust_bar(&app);

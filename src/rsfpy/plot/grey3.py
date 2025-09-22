@@ -241,6 +241,9 @@ def grey3flat(
         if vmin is None: vmin = -vmax
         if vmax is None: vmax = -vmin
         if vmin > vmax: vmin, vmax = vmax, vmin
+    
+    if data.dtype == np.uint8:
+        vmin, vmax = 0, 255
 
     if ax is None:
         fig, ax = plt.subplots()
@@ -439,6 +442,9 @@ def grey3cube(
         if vmin is None: vmin = -vmax
         if vmax is None: vmax = -vmin
         if vmin > vmax: vmin, vmax = vmax, vmin
+
+    if data.dtype == np.uint8:
+        vmin, vmax = 0, 255
 
 
 

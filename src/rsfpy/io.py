@@ -98,14 +98,15 @@ def read_rsf(file, order='F'):
         if fmt_A not in ("native", "ascii", "xdr"):
             warnings.warn(f"Unsupported format type: {fmt_A}")
             return None
-        if fmt_B not in ("int", "float", "complex"):
+        if fmt_B not in ("int", "float", "complex", "uchar"):
             warnings.warn(f"Unsupported data type: {fmt_B}")
             return None
 
         dtype_map = {
             "int": np.int32,
             "float": np.float32,
-            "complex": np.complex64
+            "complex": np.complex64,
+            "uchar": np.uint8
         }
         dtype = dtype_map[fmt_B]
 

@@ -26,6 +26,7 @@
 \033[1mPARAMETERS\033[0m
     \t\033[4mbool\033[0m\t\033[1mallpos=n\033[0m [y/n] if y, assume positive data
     \t\033[4mstring\033[0m\t\033[1mbarlabel/bartitle=\033[0m colorbar label
+    \t\033[4mstring/file\033[0m\t\033[1mbar/bartitle=\033[0m colorbar file (when datatype=uchar and scalebar=y)
     \t\033[4mstring\033[0m\t\033[1mbarlabelfat/barlabelweight=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mbarlabelsz/labelsize=12.\033[0m colorbar label font size (default 12)
     \t\033[4mstring\033[0m\t\033[1mbackend=default\033[0m matplotlib backend (default: let matplotlib decide)
@@ -71,6 +72,7 @@
     \t\033[4mfloat\033[0m\t\033[1mntic1/ntick1=5\033[0m max number of ticks on axis 1
     \t\033[4mfloat\033[0m\t\033[1mntic2/ntick2=5\033[0m max number of ticks on axis 2
     \t\033[4mfloat\033[0m\t\033[1mntic3/ntick3=\033[0m max number of ticks on axis 3
+    \t\033[4mfloat\033[0m\t\033[1mnticbar/nticbar=\033[0m max number of ticks on colorbar
     \t\033[4mfloat\033[0m\t\033[1mpclip=99.\033[0m data clip percentile (default is 99)
     \t\033[4mbool\033[0m\t\033[1mscalebar/colorbar=n\033[0m [y/n] if y, draw scalebar
     \t\033[4mfloat\033[0m\t\033[1mscreenheight/height=6.\033[0m figure height in inches (default 6)
@@ -136,9 +138,9 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.font_manager as font_manager
-from SCons.Tool import suffix
+import numpy as np
 from matplotlib import use as use_backend
-from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator
+from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter
 import sys, subprocess, os, re
 from textwrap import dedent
 
@@ -193,6 +195,9 @@ def main():
     data = Rsfarray(sys.stdin.buffer)
     if data.size == 0:
         sf_error("Failed read RSF data from input.")
+    datatype = data.dtype
+    if datatype not in [np.int32, np.float32, np.complex64,np.uint8]:
+        sf_error(f"Error: unsupported data type: {datatype} ?")
     
     # Get parameters
     backend = par_dict.get('backend', 'default')
@@ -243,6 +248,8 @@ def main():
                      getfloat(par_dict, 'ntick1', 5))
     ntic2 = getfloat(par_dict, 'ntic2',
                      getfloat(par_dict, 'ntick2', 5))
+    nticbar = getfloat(par_dict, 'nticbar',
+                          getfloat(par_dict, 'ntickbar', 5))
     min1 = getfloat(par_dict, 'min1', None)
     min2 = getfloat(par_dict, 'min2', None)
     max1 = getfloat(par_dict, 'max1', None)
@@ -278,6 +285,8 @@ def main():
         plottype = 'grey3'
 
     if plottype == 'wiggle':
+        if datatype == np.uint8:
+            sf_error("Error: wiggle plot does not support uchar data.")
         # Parameters for wiggle plot
         zplot = getfloat(par_dict, 'zplot', 1.0)
         lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', 'k')))
@@ -289,6 +298,8 @@ def main():
         plotfat = getfloat(par_dict, 'linewidth', 
                            getfloat(par_dict, 'plotfat', frame_width))
     elif plottype == 'graph':
+        if datatype == np.uint8:
+            sf_error("Error: wiggle plot does not support uchar data.")
         # Parameters for graph plot
         transp = par_dict.get('transp', 'n').lower().startswith('y')
         yreverse = par_dict.get('yreverse', 'n').lower().startswith('y')
@@ -357,11 +368,11 @@ def main():
         frame1 = int(getfloat(par_dict, 'frame1', 0.0))
         frame2 = int(getfloat(par_dict, 'frame2', 0.0))
         frame3 = int(getfloat(par_dict, 'frame3', 0.0))
-        if frame1 > data.n1: frame1 = data.n1
+        if frame1 > data.n1: frame1 = data.n1 - 1
         elif frame1 < 0: frame1 = 0
-        if frame2 > data.n2: frame2 = data.n2
+        if frame2 > data.n2: frame2 = data.n2 - 1
         elif frame2 < 0: frame2 = 0
-        if frame3 > data.n3: frame3 = data.n3
+        if frame3 > data.n3: frame3 = data.n3 - 1
         elif frame3 < 0: frame3 = 0
         point1 = getfloat(par_dict, 'point1', 0.8)
         point2 = getfloat(par_dict, 'point2', 0.4)
@@ -371,6 +382,20 @@ def main():
         format3 = par_dict.get('format3', None)
         ntic3 = getfloat(par_dict, 'ntic3',
                          getfloat(par_dict, 'ntick3', None))
+
+    if datatype == np.uint8 and scalebar:
+        # Process bar
+        barfile = par_dict.get('barfile', par_dict.get('bar', None))
+        if formatbar is None: formatbar = '%.2g'
+        try:
+            bar_array = Rsfarray(barfile)
+            if plottype=='grey3':bar_array = bar_array.window(n3=1, f3=frame3)
+            else:bar_array = bar_array.window(n3=1)
+            min_max_vals = np.frombuffer(bar_array[:8].tobytes(), dtype=np.float32)
+            min_val, max_val = min_max_vals[0], min_max_vals[1]
+        except Exception as e:
+            sf_error(f"Error reading bar= when scalebar=y, {e}")
+
 
 
     # Verbose Message
@@ -600,12 +625,24 @@ def main():
             if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
 
             if scalebar:
+                if datatype == np.uint8:
+                    # Overlap existing colorbar
+                    gattr.cax.clear()
+                    gattr.cax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
+                                     vmin=0, vmax=255)
+                    gattr.cax.xaxis.set_visible(False)
+                    gattr.cax.yaxis.set_label_position('right')
+                    gattr.cax.set_yticks(np.linspace(0, 255, num=int(nticbar)))
+                    formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
+                    gattr.cax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
+                elif formatbar is not None:
+                    gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                 gattr.cax.tick_params(axis='both', which='major',
                                       width=frame_width, colors=frame_color)
                 gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
                                      fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
-                if formatbar is not None:
-                    gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                # if formatbar is not None:
+                #     gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                 # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
 
                 for iblabel in gattr.cax.yaxis.get_ticklabels():
@@ -661,11 +698,22 @@ def main():
                                        fontsize=barlabelsz, fontweight=barlabelfat, color=[0,0,0,0])
                 else:
                     cbar = fig.colorbar(ax.images[0], ax=ax)
-                    if maxval is not None or minval is not None:
-                        vmin, vmax = ax.images[0].get_clim()
-                        if minval is None: minval = vmin
-                        if maxval is None: maxval = vmax
-                        cbar.ax.set_ylim(minval, maxval)
+                    if datatype == np.uint8:
+                        cbar.ax.clear()
+                        cbar.ax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
+                                       vmin=0, vmax=255)
+                        cbar.ax.xaxis.set_visible(False)
+                        cbar.ax.yaxis.set_label_position('right')
+                        cbar.set_ticks(np.linspace(255, 0, num=int(nticbar)))
+                        formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
+                        cbar.ax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
+                    elif formatbar is not None:
+                        cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                        if maxval is not None or minval is not None:
+                            vmin, vmax = ax.images[0].get_clim()
+                            if minval is None: minval = vmin
+                            if maxval is None: maxval = vmax
+                            cbar.ax.set_ylim(minval, maxval)
                     cbar.ax.tick_params(labelsize=ticksz, width=frame_width, colors=frame_color)
                     for ticklabel in cbar.ax.get_yticklabels():
                         ticklabel.set_fontweight(tickfat)
@@ -676,11 +724,8 @@ def main():
                         spine.set_edgecolor(frame_color)
                         spine.set_linewidth(frame_width)
 
-                if formatbar is not None:
-                    try:
-                        cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
-                    except:
-                        sf_warning(f"Warning: invalid formatbar={formatbar}, ignored.")
+
+                    
 
                 offset = cbar.ax.yaxis.get_offset_text()
                 offset.set_color(frame_color)

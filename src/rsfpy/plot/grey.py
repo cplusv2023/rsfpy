@@ -147,6 +147,7 @@ def grey(
             vmin, vmax = bias - clip, bias + clip
 
 
+
     # 优先级 2: clip
     if clip is not None:
         clip = abs(clip)
@@ -164,7 +165,9 @@ def grey(
         if vmin > vmax:
             vmin, vmax = vmax, vmin
         # clip/bias 未触发，不调整 bias
-
+    
+    if data.dtype == np.uint8:
+        vmin, vmax = 0, 255
     # 最终赋值
     imshow_kwargs = {k: v for k, v in params.items()
                      if k in ['cmap', 'origin', 'interpolation','aspect']}
