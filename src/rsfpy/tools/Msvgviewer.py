@@ -43,12 +43,12 @@ def main():
     else:
         args = sys.argv[1:]
         stdname = _get_stdname()
-        if stdname[1] and os.path.exists(stdname[1]):
+        stdin = None
+        # in case pseudo shell
+        if stdname[1] and os.path.exists(stdname[1]) and stdname[1].endswith('.svg'):
             args = [stdname[1]] + args
         elif not sys.stdin.isatty():
             stdin = sys.stdin.buffer.read()
-        else:
-            stdin = None
         result =  run([str(svgviewer_path)] + args,
             input=stdin if stdin else None,
             capture_output=False,
