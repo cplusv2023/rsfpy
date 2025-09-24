@@ -268,8 +268,8 @@ def grey3flat(
     ax2 = ax_main.inset_axes([point2*width, 0.0, (1 - point2) * width, point1 * height], sharey=ax1)
     ax3 = ax_main.inset_axes([0.0, point1 * height, point2 * width, (1 - point1) * height], sharex=ax1)
     gattr.ax1 = ax1
-    gattr.ax2 = ax2
-    gattr.ax3 = ax3
+    gattr.ax2 = ax3
+    gattr.ax3 = ax2
 
     if wig:
         wigparas = {
@@ -323,6 +323,55 @@ def grey3flat(
     gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
     gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=f"{axis3[frame3]:.3g}", ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
     gattr.ticklabels.append(ax3.text(x=frame2/nx, y=1+tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
+
+    def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
+        hline1 = gattr.hlines[0].get_segments()
+        hline1[0][0, 1] = axis1[frame1]
+        hline1[0][1, 1] = axis1[frame1]
+        gattr.hlines[0].set_segments(hline1)
+
+        hline2 = gattr.hlines[1].get_segments()
+        hline2[0][0, 1] = axis1[frame1]
+        hline2[0][1, 1] = axis1[frame1]
+        gattr.hlines[1].set_segments(hline2)
+
+        hline3 = gattr.hlines[2].get_segments()
+        hline3[0][0, 1] = axis3[frame3]
+        hline3[0][1, 1] = axis3[frame3]
+        gattr.hlines[2].set_segments(hline3)
+
+        vline1 = gattr.vlines[0].get_segments()
+        vline1[0][0, 0] = axis2[frame2]
+        vline1[0][1, 0] = axis2[frame2]
+        gattr.vlines[0].set_segments(vline1)
+
+        vline2 = gattr.vlines[1].get_segments()
+        vline2[0][0, 0] = axis3[frame3]
+        vline2[0][1, 0] = axis3[frame3]
+        gattr.vlines[1].set_segments(vline2)
+
+        vline3 = gattr.vlines[2].get_segments()
+        vline3[0][0, 0] = axis2[frame2]
+        vline3[0][1, 0] = axis2[frame2]
+        gattr.vlines[2].set_segments(vline3)
+        # gattr.ticklabels.append(
+        #     ax2.text(x=1 + tlabelpad, y=1 - frame1 / ny, s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol,
+        #              rotation=90, transform=ax2.transAxes))
+        # gattr.ticklabels.append(
+        #     ax2.text(x=frame3 / nz, y=1 + tlabelpad, s=f"{axis3[frame3]:.3g}", ha="left", va="bottom", color=lcol,
+        #              rotation=0, transform=ax2.transAxes))
+        # gattr.ticklabels.append(
+        #     ax3.text(x=frame2 / nx, y=1 + tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol,
+        #              rotation=0, transform=ax3.transAxes))
+
+        gattr.ticklabels[-3].set_position([1+tlabelpad, 1 - frame1/ny])
+        gattr.ticklabels[-3].set_text(f"{axis1[frame1]:.3g}")
+        gattr.ticklabels[-2].set_position([frame3 / nz, 1 + tlabelpad])
+        gattr.ticklabels[-2].set_text(f"{axis3[frame3]:.3g}")
+        gattr.ticklabels[-1].set_position([frame2 / nx, 1 + tlabelpad])
+        gattr.ticklabels[-1].set_text(f"{axis2[frame2]:.3g}")
+
+    setattr(gattr, 'set_indicator_frame', _set_indicator_frame)
 
     ticks1 = ax1.get_yticks()
     ticks2 = ax3.get_yticks()
@@ -492,11 +541,7 @@ def grey3cube(
     dyshear = (1 - point1) / len3
     dyshift = 0
 
-    l11 = (amax1 - axis1[frame1]) / len1 * point1
-    l12 = (axis2[frame2] - o2) / len2 * point2
 
-    loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
-    loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
 
     dtrans1 = transforms.Affine2D(
         np.array([[point2 / len2, dxshear, 0],
@@ -661,6 +706,11 @@ def grey3cube(
         gattr.cbar = cbar
 
     # Indicating lines
+    l11 = (amax1 - axis1[frame1]) / len1 * point1
+    l12 = (axis2[frame2] - o2) / len2 * point2
+
+    loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
+    loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
 
     l21 = point1 + loff1
     l22 = point2 + loff2
@@ -675,9 +725,9 @@ def grey3cube(
     gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes))
     gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes))
     gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes))
-    gattr.vlines.append(ax3.vlines(1, (1-point1)*hei_ax, 1*hei_ax, color=lcol, transform=axbase.transAxes))
     gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes))
     gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes))
+
 
     # Indicating labels
     lab1 = str(axis2[frame2])
@@ -696,6 +746,68 @@ def grey3cube(
     gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
                 "%s" % lab3, va='top', ha='left', color=lcol))
 
+    def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
+        l11 = (amax1 - axis1[frame1]) / len1 * point1
+        l12 = (axis2[frame2] - o2) / len2 * point2
+
+        loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
+        loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
+
+        l21 = point1 + loff1
+        l22 = point2 + loff2
+        l221 = l12 + (1 - point2)
+
+        l31 = l11 + 1 - point1
+        l32 = point1 + loff1
+
+        hline1 = gattr.hlines[0].get_segments()
+        hline1[0][0,1] = l11*hei_ax
+        hline1[0][1,1] = l11*hei_ax
+        gattr.hlines[0].set_segments(hline1)
+
+        hline2, = gattr.hlines[1]
+        hline2.set_xdata([loff2,l22])
+        hline2.set_ydata([l21*hei_ax,l21*hei_ax])
+
+        hline3, = gattr.hlines[2]
+        hline3.set_xdata([point2,1])
+        hline3.set_ydata([l11*hei_ax,l31*hei_ax])
+
+        vline1 = gattr.vlines[0].get_segments()
+        vline1[0][0,0] = l12
+        vline1[0][1,0] = l12
+        gattr.vlines[0].set_segments(vline1)
+
+        vline2, = gattr.vlines[1]
+        vline2.set_xdata([l12,l221])
+        vline2.set_ydata([point1*hei_ax,1*hei_ax])
+
+        vline3 = gattr.vlines[2].get_segments()
+        vline3[0][0,0] = l22
+        vline3[0][1,0] = l22
+        vline3[0][0,1] = loff1 * hei_ax
+        vline3[0][1,1] = l32 * hei_ax
+        gattr.vlines[2].set_segments(vline3)
+
+        # Indicating labels
+        lab1 = str(axis2[frame2])
+        lab11 = "%.2f" % axis2[frame2]
+        lab1 = lab11 if len(lab11) < len(lab1) else lab1
+        lab2 = str(axis1[frame1])
+        lab21 = "%.2f" % axis1[frame1]
+        lab2 = lab21 if len(lab21) < len(lab2) else lab2
+        lab3 = str(axis3[frame3])
+        lab31 = "%.2f" % axis3[frame3]
+        lab3 = lab31 if len(lab31) < len(lab3) else lab3
+        gattr.ticklabels[-3].set_position([l221, 1 * hei_ax])
+        gattr.ticklabels[-3].set_text("%s" % lab1)
+        gattr.ticklabels[-2].set_position([1, l31 * hei_ax])
+        gattr.ticklabels[-2].set_text("%s" % lab2)
+        gattr.ticklabels[-1].set_position([l22, loff1 * hei_ax])
+        gattr.ticklabels[-1].set_text("%s" % lab3)
+
+
+    setattr(gattr, 'set_indicator_frame', _set_indicator_frame)
     return gattr
 
 

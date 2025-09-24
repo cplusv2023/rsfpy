@@ -140,7 +140,7 @@ import matplotlib.colors as mcolors
 import matplotlib.font_manager as font_manager
 import numpy as np
 from matplotlib import use as use_backend
-from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter
+from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter, ScalarFormatter
 import sys, subprocess, os, re
 from textwrap import dedent
 
@@ -271,7 +271,7 @@ def main():
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
     movie = par_dict.get('movie', 'n').endswith('y')
-    maxframe = int(getfloat(par_dict, 'maxframe', 10))
+    maxframe = int(getfloat(par_dict, 'maxframe', 30))
 
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
@@ -410,11 +410,10 @@ def main():
     if datatype == np.uint8 and scalebar:
         # Process bar
         barfile = par_dict.get('barfile', par_dict.get('bar', None))
-        if formatbar is None: formatbar = '%.2g'
         try:
-            bar_array = Rsfarray(barfile)
-            if plottype=='grey3':bar_array = bar_array.window(n3=1, f3=frame3)
-            else:bar_array = bar_array.window(n3=1)
+            bar_arrays = Rsfarray(barfile)
+            if plottype=='grey3':bar_array = bar_arrays.window(n3=1, f3=frame3)
+            else:bar_array = bar_arrays.window(n3=1)
             min_max_vals = np.frombuffer(bar_array[:8].tobytes(), dtype=np.float32)
             min_val, max_val = min_max_vals[0], min_max_vals[1]
         except Exception as e:
@@ -514,7 +513,8 @@ def main():
             databin = data.reshape((data.n1, data.n2, -1))
             nframes = databin.n3
             if nframes > maxframe:
-                frame_step = int(round(nframes / maxframe))
+                frame_step = int((nframes / maxframe))
+                sf_warning(f"Got {nframes} movie frames, while maxframe is {maxframe}, use framestep {frame_step}.")
             frame_axis = databin.axis3
             frame_prefix = databin.label3 if databin.label3 is not None else "Frame"
             frame_suffix = f" ({databin.unit3})" if databin.unit3 is not None else ""
@@ -526,7 +526,8 @@ def main():
                 databin = data.reshape((data.n1, data.n2, data.n3, -1))
                 nframes = databin.n(movie - 1)
                 if nframes > maxframe:
-                    frame_step = int(round(nframes / maxframe))
+                    frame_step = int((nframes / maxframe))
+                    sf_warning(f"Got {nframes} movie frames, while maxframe is {maxframe}, use framestep {frame_step}.")
                 frame_axis = databin.axis(movie-1)
                 frame_prefix = databin.label(movie-1) if databin.label(movie-1) is not None else "Frame"
                 frame_suffix = f" ({databin.unit(movie-1)})" if databin.unit(movie-1) is not None else ""
@@ -537,11 +538,11 @@ def main():
 
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
     ax = fig.add_subplot(1, 1, 1)
-
+    cbar = None
     for iframe in range(min(nframes, maxframe)):
-
         if plottype == 'grey':
-            if movie: data = databin.window(n3=1, f3=iframe*frame_step)
+            data = databin.window(n3=1, f3=iframe*frame_step)
+
             if iframe==0:
                 data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
                     allpos=allpos, clip=clip, pclip=pclip, bias=bias, cmap=color,
@@ -549,21 +550,30 @@ def main():
                     colorbar=False, show=False, interpolation="none")
             else:
                 ax.images[0].set_data(data)
-                if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                newbar = bar_arrays.window(n3=1, f3=iframe*frame_step)
+                new_min_max_vals = np.frombuffer(newbar[:8].tobytes(), dtype=np.float32)
+                new_min, new_max = tuple(new_min_max_vals)
+                cbar.ax.images[0].set_extent([0, 1, new_min, new_max])
+                cbar.ax.yaxis.set_major_formatter(
+                    FormatStrFormatter(formatbar) if formatbar is not None
+                    else ScalarFormatter())
+                cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=nticbar))
+
+                cbar.ax.images[0].set_data(255 - newbar[8:, np.newaxis])
+
+                sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
                 # save or show figure
                 if not sys.stdout.isatty():
-                    fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
-                                transparent=None)
-                    sys.stdout.flush()
-                    # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
                     if movie:
                         splitter = (__SVG_SPLITTER[:-3] +
                                 f"framelabel=\"{frame_prefix}{frame_suffix}: "+
-                                f"{frame_axis[iframe*frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
+                                f"{frame_axis[iframe*frame_step]:5g} of {frame_axis[-1]:5g}\"" +
                                 __SVG_SPLITTER[-3:])
                         sys.stdout.write(f"\n{splitter}\n")
                         sys.stdout.flush()
-
+                    fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                                transparent=None)
+                    sys.stdout.flush()
                 else:
                     plt.pause(0.01)
                 continue
@@ -603,9 +613,7 @@ def main():
                         basefmt=frame_color+lstyles[itrace],  # 基线样式
                         label=stemlabel
                     )
-                    # 调整 marker 大小
                     stem_container.markerline.set_markersize(markersize)
-                    # 调整线宽
                     stem_container.stemlines.set_linewidth(plotfat)
                 else:
                     ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
@@ -695,12 +703,13 @@ def main():
                         # Overlap existing colorbar
                         gattr.cax.clear()
                         gattr.cax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
-                                         vmin=0, vmax=255)
+                                         vmin=0, vmax=255, extent=[0,1,min_val,max_val])
                         gattr.cax.xaxis.set_visible(False)
                         gattr.cax.yaxis.set_label_position('right')
-                        gattr.cax.set_yticks(np.linspace(0, 255, num=int(nticbar)))
-                        formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
-                        gattr.cax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
+                        gattr.cax.yaxis.set_major_formatter(
+                            FormatStrFormatter(formatbar) if formatbar is not None
+                            else ScalarFormatter())
+                        gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=nticbar))
                     elif formatbar is not None:
                         gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                     gattr.cax.tick_params(axis='both', which='major',
@@ -718,21 +727,36 @@ def main():
                 if movie == 1:gattr.ax2.images[0].set_data(data.window(n1=1, f1=frame1))
                 if movie == 2:gattr.ax3.images[0].set_data(data.window(n2=1, f2=frame2))
                 if movie == 3:gattr.ax1.images[0].set_data(data.window(n3=1, f3=frame3))
-                if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                gattr.set_indicator_frame(gattr, frame1, frame2, frame3)
+                fig.canvas.draw_idle()
+
+
+                if scalebar and datatype == np.uint8 and movie == 3:
+                    newbar = bar_arrays.window(n3=1, f3=frame3)
+                    new_min_max_vals = np.frombuffer(newbar[:8].tobytes(), dtype=np.float32)
+                    new_min, new_max = tuple(new_min_max_vals)
+                    gattr.cax.images[0].set_extent([0,1,new_min, new_max])
+                    gattr.cax.yaxis.set_major_formatter(
+                        FormatStrFormatter(formatbar) if formatbar is not None
+                        else ScalarFormatter())
+                    gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=nticbar))
+
+                    gattr.cax.images[0].set_data(255 - newbar[8:, np.newaxis])
+
+
+                sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
                 # save or show figure
                 if not sys.stdout.isatty():
+                    if movie:
+                        splitter = (__SVG_SPLITTER[:-3] +
+                                    f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                                    f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
+                                    __SVG_SPLITTER[-3:])
+                        sys.stdout.write(f"\n{splitter}\n")
+                        sys.stdout.flush()
                     fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
                                 transparent=None)
                     sys.stdout.flush()
-                    # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
-                    if movie:
-                        splitter = (__SVG_SPLITTER[:-3] +
-                                f"framelabel=\"{frame_prefix}{frame_suffix}: "+
-                                f"{frame_axis[iframe*frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
-                                __SVG_SPLITTER[-3:])
-                        sys.stdout.write(f"\n{splitter}\n")
-                        sys.stdout.flush()
-
                 else:
                     plt.pause(0.01)
                 continue
@@ -790,12 +814,11 @@ def main():
                     if datatype == np.uint8:
                         cbar.ax.clear()
                         cbar.ax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
-                                       vmin=0, vmax=255)
+                                       vmin=0, vmax=255, extent=[0,1,min_val, max_val])
                         cbar.ax.xaxis.set_visible(False)
                         cbar.ax.yaxis.set_label_position('right')
-                        cbar.set_ticks(np.linspace(255, 0, num=int(nticbar)))
-                        formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
-                        cbar.ax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
+                        cbar.ax.yaxis.set_major_formatter(FuncFormatter(formatbar) if formatbar is not None
+                                                          else ScalarFormatter())
                     elif formatbar is not None:
                         cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
                         if maxval is not None or minval is not None:
@@ -955,25 +978,26 @@ def main():
 
         plt.tight_layout()
 
-        if verb and movie: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+        if movie: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
         # save or show figure
         if not sys.stdout.isatty():
-            fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
-                        transparent=None)
-            sys.stdout.flush()
-            # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
             if movie:
                 splitter = (__SVG_SPLITTER[:-3] +
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
-                            f"{frame_axis[iframe * frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
+                            f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
                             __SVG_SPLITTER[-3:])
                 sys.stdout.write(f"\n{splitter}\n")
                 sys.stdout.flush()
+            fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                        transparent=None)
+            sys.stdout.flush()
         else:
             if movie: plt.pause(0.01)
             else: plt.show()
     if not sys.stdout.isatty():
         sys.stdout.buffer.close()
+    else:
+        plt.show()
 
     plt.close(fig)
     sys.exit(0)

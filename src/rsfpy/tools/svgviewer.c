@@ -862,14 +862,15 @@ int main(int argc, char **argv) {
     GError *err = NULL;
     gchar *content = NULL;
     gsize len = 0;
-    if (!g_file_get_contents("/dev/stdin", &content, &len, &err)) {
+    if(has_stdin){
+        if (!g_file_get_contents("/dev/stdin", &content, &len, &err)) {
         fprintf(stderr, "Ignore stdin: %s\n", err->message);
         g_clear_error(&err);
-    }else{
+        }else{
         check_input = svg_sequence_load_from_stream(&app.sequence, content, len);
         g_free(content);
+        }
     }
-
     if (argc >= 2 && strcmp(argv[1], "-") != 0) {
         // Read from file paths
         check_input = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);

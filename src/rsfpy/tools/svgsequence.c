@@ -35,14 +35,20 @@ void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str) {
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
     // Assume seq is already initialized
     // seq->count = 0;
+    const char * path, *splitter = "<!-- RSFPY_SPLIT";;
+    GError *err;
+    gchar *content;
+    gsize len;
+    char *svg_start, *svg_content, *label_end, *label_start, *label,
+         **segments, *segment;
+
     seq->current_index = seq->count;
     seq->fps = 4;
-
     for (int i = 0; i < num && seq->count < MAX_FRAMES; i++) {
-        const char *path = paths[i];
-        GError *err = NULL;
-        gchar *content = NULL;
-        gsize len = 0;
+        path = paths[i];
+        err = NULL;
+        content = NULL;
+        len = 0;
 
         if (!g_file_get_contents(path, &content, &len, &err)) {
             fprintf(stderr, "Failed to read file: %s\n", path);
@@ -50,36 +56,38 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
             continue;
         }
 
-        const char *splitter = "<!-- RSFPY_SPLIT";
         if (strstr(content, splitter)) {
-            char **segments = g_strsplit(content, splitter, MAX_FRAMES - seq->count + 1);
-            for (int j = 1; segments[j] && seq->count < MAX_FRAMES; j++) {
-                char *segment = g_strstrip(segments[j]);
+            segments = g_strsplit(content, splitter, MAX_FRAMES - seq->count + 1);
+            for (int j = 0; segments[j] && seq->count < MAX_FRAMES; j++) {
+                segment = g_strstrip(segments[j]);
                 if (strlen(segment) == 0) continue;
 
-                char *label = NULL;
-                char *label_start = strstr(segment, "framelabel=\"");
+                label = NULL;
+                label_start = strstr(segment, "framelabel=\"");
                 if (label_start) {
                     label_start += strlen("framelabel=\"");
-                    char *label_end = strchr(label_start, '"');
+                    label_end = strchr(label_start, '"');
                     if (label_end && label_end > label_start) {
                         label = g_strndup(label_start, label_end - label_start);
                     }
                 }
 
-                char *svg_start = strstr(segment, "-->");
-                if (!svg_start) continue;
-                svg_start += 3;
-
-                char *svg_content = g_strstrip(svg_start);
-                if (strlen(svg_content) == 0) continue;
+                if (j!=0){
+                    svg_start = strstr(segment, "-->");
+                    if (!svg_start) continue;
+                    svg_start += 3;
+                    svg_content = g_strstrip(svg_start);
+                    if (strlen(svg_content) == 0) continue;
+                }else{
+                    svg_content = segment;
+                }
 
                 SvgFrame *f = &seq->frames[seq->count];
-                f->path = g_strdup_printf("%s.frame[%d]", path, j - 1);
-                f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count);
+                f->path = g_strdup_printf("%s.frame[%d]", path, j-1);
+                f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count-1);
                 f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), NULL);
                 if (!f->handle) {
-                    fprintf(stderr, "Failed to load SVG segment %d from %s\n", j - 1, path);
+                    fprintf(stderr, "Failed to load SVG segment %d from %s\n", j, path);
                     g_free(f->framelabel);
                     continue;
                 }
@@ -319,36 +327,41 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
 
     char *copy = g_strndup(data, len);
     const char *splitter = "<!-- RSFPY_SPLIT";
+    char *svg_start, *svg_content, *label_end, *label_start, *label,
+         **segments, *segment;
 
     if (strstr(copy, splitter)) {
-        char **segments = g_strsplit(copy, splitter, MAX_FRAMES + 1);
-        for (int i = 1; segments[i] && seq->count < MAX_FRAMES; i++) {
-            char *segment = g_strstrip(segments[i]);
+        segments = g_strsplit(copy, splitter, MAX_FRAMES + 1);
+        for (int i = 0; segments[i] && seq->count < MAX_FRAMES; i++) {
+            segment = g_strstrip(segments[i]);
             if (strlen(segment) == 0) continue;
 
-            char *label = NULL;
-            char *label_start = strstr(segment, "framelabel=\"");
+            label = NULL;
+            label_start = strstr(segment, "framelabel=\"");
             if (label_start) {
                 label_start += strlen("framelabel=\"");
-                char *label_end = strchr(label_start, '"');
+                label_end = strchr(label_start, '"');
                 if (label_end && label_end > label_start) {
                     label = g_strndup(label_start, label_end - label_start);
                 }
             }
 
-            char *svg_start = strstr(segment, "-->");
-            if (!svg_start) continue;
-            svg_start += 3;
-
-            char *svg_content = g_strstrip(svg_start);
-            if (strlen(svg_content) == 0) continue;
+            if (i!=0){
+                svg_start = strstr(segment, "-->");
+                if (!svg_start) continue;
+                svg_start += 3;
+                svg_content = g_strstrip(svg_start);
+                if (strlen(svg_content) == 0) continue;
+            }else{
+                svg_content = segment;
+            }
 
             SvgFrame *f = &seq->frames[seq->count];
-            f->path = g_strdup_printf("stdin[%d]", i - 1);
-            f->framelabel = label ? label : g_strdup_printf("Frame %d", i - 1);
+            f->path = g_strdup_printf("stdin[%d]", i-1);
+            f->framelabel = label ? label : g_strdup_printf("Frame %d", i-1);
             f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), NULL);
             if (!f->handle) {
-                fprintf(stderr, "Failed to load SVG segment %d\n", i - 1);
+                fprintf(stderr, "Failed to load SVG segment %d\n", i );
                 g_free(f->framelabel);
                 continue;
             }
