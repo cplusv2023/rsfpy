@@ -196,8 +196,9 @@ def main():
     if data.size == 0:
         sf_error("Failed read RSF data from input.")
     datatype = data.dtype
-    if datatype not in [np.int32, np.float32, np.complex64,np.uint8]:
+    if datatype not in [np.int32, np.float32, np.complex64, np.uint8]:
         sf_error(f"Error: unsupported data type: {datatype} ?")
+
     
     # Get parameters
     backend = par_dict.get('backend', 'default')
@@ -257,7 +258,7 @@ def main():
     maxval = getfloat(par_dict, 'maxval', None)
     minval = getfloat(par_dict, 'minval', None)
     label1loc = par_dict.get('whereylabel', 'left').lower()
-    label2loc = par_dict.get('wherexlabel', 'bottom').lower()
+    label2loc = par_dict.get('wherexlabel', 'top').lower()
     tick1loc = par_dict.get('whereytick', label1loc).lower()
     tick2loc = par_dict.get('wherextick', label2loc).lower()
     titleloc = getfloat(par_dict, 'wheretitle', None)
@@ -307,6 +308,15 @@ def main():
         lcolors = par_dict.get('lcolors', None)
         lstyle = par_dict.get('lstyle', par_dict.get('linestyle', None))
         lstyles = par_dict.get('lstyles', par_dict.get('linestyles', None))
+        marker = par_dict.get('marker',
+                              par_dict.get('symbol', None))
+        markers = par_dict.get('markers',
+                               par_dict.get('symbols', None))
+        markersize = getfloat(par_dict, 'markersize',
+                              getfloat(par_dict, 'markersz',
+                                       getfloat(par_dict, 'symbolsize',
+                                                getfloat(par_dict, 'symbolsz', fontsz))))
+        stem = par_dict.get('stem', 'n').lower().startswith('y')
         plotfat = getfloat(par_dict, 'linewidth', 
                            getfloat(par_dict, 'plotfat', frame_width))
         legendon = par_dict.get('legend', 'n').lower().startswith('y')
@@ -363,6 +373,20 @@ def main():
             while len(lstyles) < data.n2:
                 lstyles += lstyles
             lstyles = lstyles[:data.n2]
+
+        if markers is not None:
+            markers = re.split(r'[ ,;]+', markers)
+            while len(markers) < data.n2:
+                markers.append('.')
+        elif marker is not None:
+            markers = []
+            while len(markers) < data.n2:
+                markers.append(marker)
+        else:
+            markers = ['.',',','o','*','s','p','x','d','v','^','<','>']
+            while len(markers) < data.n2:
+                markers += markers
+            markers = markers[:data.n2]
         # scalebar = False
     elif plottype == 'grey3':
         frame1 = int(getfloat(par_dict, 'frame1', 0.0))
@@ -395,6 +419,12 @@ def main():
             min_val, max_val = min_max_vals[0], min_max_vals[1]
         except Exception as e:
             sf_error(f"Error reading bar= when scalebar=y, {e}")
+    if datatype == np.int32:
+        sf_warning(f"Got {datatype}, converting to float32.")
+        data = Rsfarray(data.astype(np.float32), header=data.header)
+    if datatype == np.complex64 and plottype!= 'graph':
+        sf_warning(f"Got {datatype}, converting to float32 using abs.")
+        data = Rsfarray(np.abs(data), header=data.header)
 
 
 
@@ -466,7 +496,7 @@ def main():
     ################################################################################
     # Support multiple frames
     if plottype == 'grey3':
-        movie = getfloat(par_dict, 'movie', None)
+        movie = int(getfloat(par_dict, 'movie', 0))
     databin = None
     nframes = 1
     frame_step = 1
@@ -490,10 +520,20 @@ def main():
             frame_suffix = f" ({databin.unit3})" if databin.unit3 is not None else ""
             if nframes == 1:
                 movie = False
+        if plottype == 'grey3':
+            if movie == 0: movie = False
+            elif movie < 4:
+                databin = data.reshape((data.n1, data.n2, data.n3, -1))
+                nframes = databin.n(movie - 1)
+                if nframes > maxframe:
+                    frame_step = int(round(nframes / maxframe))
+                frame_axis = databin.axis(movie-1)
+                frame_prefix = databin.label(movie-1) if databin.label(movie-1) is not None else "Frame"
+                frame_suffix = f" ({databin.unit(movie-1)})" if databin.unit(movie-1) is not None else ""
+                if nframes == 1:
+                    movie = False
 
     if not movie: maxframe = 1
-
-
 
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
     ax = fig.add_subplot(1, 1, 1)
@@ -540,15 +580,38 @@ def main():
                 data = data.reshape((data.n1, 1))
             for itrace in range(data.n2):
                 if transp:
-                    x = data[:, itrace].squeeze()
-                    y = data.axis1
-                else:
-                    x = data.axis1
-                    y = data[:, itrace].squeeze()
+                    if datatype == np.complex64:
+                        y, x = np.real(data[:, itrace]), np.imag(data[:, itrace])
+                    else:
+                        x, y = data[:, itrace].squeeze(), data.axis1
 
-                ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
-                        linestyle=lstyles[itrace],
-                        label=legends[itrace] if legends else None)
+                else:
+                    if datatype == np.complex64:
+                        x, y = np.real(data[:, itrace]), np.imag(data[:, itrace])
+                    else:
+                        y, x = data[:, itrace].squeeze(), data.axis1
+                if stem:
+                    stemmarker = markers[itrace] if markers else 'o'
+                    stemlabel = legends[itrace] if legends else None
+                    stemcolor = lcolors[itrace]
+
+                    # stem 返回 StemContainer，可以单独设置 stemline, markerline, baseline
+                    stem_container = ax.stem(
+                        x, y,
+                        linefmt=stemcolor + '-',  # 茎的线条样式
+                        markerfmt=stemcolor + stemmarker,  # 顶端 marker 样式
+                        basefmt=frame_color+lstyles[itrace],  # 基线样式
+                        label=stemlabel
+                    )
+                    # 调整 marker 大小
+                    stem_container.markerline.set_markersize(markersize)
+                    # 调整线宽
+                    stem_container.stemlines.set_linewidth(plotfat)
+                else:
+                    ax.plot(x, y, color=lcolors[itrace], linewidth=plotfat,
+                            linestyle=lstyles[itrace],
+                            label=legends[itrace] if legends else None,
+                            marker=markers[itrace], markersize=markersize)
 
             amin1, amax1 = ax.get_xlim()
             amin2, amax2 = ax.get_ylim()
@@ -592,62 +655,88 @@ def main():
                 if legendbox:
                     legend.get_frame().set_alpha(legendalpha)
             if not transp:
-                ax.set_xlabel(label1 if label1 else data.label_unit(0))
-                ax.set_ylabel(label2 if label2 else data.label_unit(1))
+                ax.set_xlabel(data.label_unit(0))
+                ax.set_ylabel(data.label_unit(1))
             else:
-                ax.set_ylabel(label1 if label1 else data.label_unit(0))
-                ax.set_xlabel(label2 if label2 else data.label_unit(1))
+                ax.set_ylabel(data.label_unit(0))
+                ax.set_xlabel(data.label_unit(1))
 
 
         elif plottype == 'grey3':
+            if movie == 1: frame1 = iframe*frame_step
+            if movie == 2: frame2 = iframe*frame_step
+            if movie == 3: frame3 = iframe*frame_step
+            if iframe ==0:
+                data.sfput(label3=label3, unit3=unit3)
 
-            data.sfput(label3=label3, unit3=unit3)
+                gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
+                           point1=point1, point2=point2, colorbar=scalebar, cmap=color,
+                           clip=clip, pclip=pclip,bias=bias, allpos=allpos,
+                                   title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
+                                   format1=format1, format2=format2, format3=format3,
+                           flat=isflat, show=False)
+                gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
+                gattr.set_lines(color=frame_color,width=frame_width)
+                gattr.set_spines(color=frame_color,width=frame_width)
+                gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
+                gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
+                if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
+                if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
+                if format3 is not None:
+                    gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
+                    gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
+                if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+                if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+                if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+                if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
 
-            gattr = data.grey3(ax=ax, frame1=frame1, frame2=frame2, frame3=frame3,
-                       point1=point1, point2=point2, colorbar=scalebar, cmap=color,
-                       clip=clip, pclip=pclip,bias=bias, allpos=allpos,
-                               title=title, n3tic=ntic3, ntic1=ntic1, ntic2=ntic2,
-                               format1=format1, format2=format2, format3=format3,
-                       flat=isflat, show=False)
-            gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
-            gattr.set_lines(color=frame_color,width=frame_width)
-            gattr.set_spines(color=frame_color,width=frame_width)
-            gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
-            gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
-            if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
-            if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
-            if format3 is not None:
-                gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
-                gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
-            if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-            if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-            if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
-            if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+                if scalebar:
+                    if datatype == np.uint8:
+                        # Overlap existing colorbar
+                        gattr.cax.clear()
+                        gattr.cax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
+                                         vmin=0, vmax=255)
+                        gattr.cax.xaxis.set_visible(False)
+                        gattr.cax.yaxis.set_label_position('right')
+                        gattr.cax.set_yticks(np.linspace(0, 255, num=int(nticbar)))
+                        formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
+                        gattr.cax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
+                    elif formatbar is not None:
+                        gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                    gattr.cax.tick_params(axis='both', which='major',
+                                          width=frame_width, colors=frame_color)
+                    gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
+                                         fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
+                    # if formatbar is not None:
+                    #     gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
+                    # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
 
-            if scalebar:
-                if datatype == np.uint8:
-                    # Overlap existing colorbar
-                    gattr.cax.clear()
-                    gattr.cax.imshow(255 - bar_array[8:, np.newaxis], aspect='auto', cmap=color,
-                                     vmin=0, vmax=255)
-                    gattr.cax.xaxis.set_visible(False)
-                    gattr.cax.yaxis.set_label_position('right')
-                    gattr.cax.set_yticks(np.linspace(0, 255, num=int(nticbar)))
-                    formatbarfunc = lambda v, pos: formatbar % (-min_val - (v/255)*(max_val-min_val))
-                    gattr.cax.yaxis.set_major_formatter(FuncFormatter(formatbarfunc))
-                elif formatbar is not None:
-                    gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
-                gattr.cax.tick_params(axis='both', which='major',
-                                      width=frame_width, colors=frame_color)
-                gattr.cax.set_ylabel(barlabel if barunit is None else f"{barlabel} ({barunit})",
-                                     fontsize=barlabelsz, fontweight=barlabelfat, color=frame_color)
-                # if formatbar is not None:
-                #     gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(formatbar))
-                # gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=n1tic))
+                    for iblabel in gattr.cax.yaxis.get_ticklabels():
+                        iblabel.set_fontweight(tickfat)
+                        iblabel.set_fontsize(ticksz)
+            else:
+                if movie == 1:gattr.ax2.images[0].set_data(data.window(n1=1, f1=frame1))
+                if movie == 2:gattr.ax3.images[0].set_data(data.window(n2=1, f2=frame2))
+                if movie == 3:gattr.ax1.images[0].set_data(data.window(n3=1, f3=frame3))
+                if verb: sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                # save or show figure
+                if not sys.stdout.isatty():
+                    fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                                transparent=None)
+                    sys.stdout.flush()
+                    # sys.stdout.write(f"\n{__SVG_SPLITTER}\n")
+                    if movie:
+                        splitter = (__SVG_SPLITTER[:-3] +
+                                f"framelabel=\"{frame_prefix}{frame_suffix}: "+
+                                f"{frame_axis[iframe*frame_step]:5g} of {databin.axis3[-1]:5g}\"" +
+                                __SVG_SPLITTER[-3:])
+                        sys.stdout.write(f"\n{splitter}\n")
+                        sys.stdout.flush()
 
-                for iblabel in gattr.cax.yaxis.get_ticklabels():
-                    iblabel.set_fontweight(tickfat)
-                    iblabel.set_fontsize(ticksz)
+                else:
+                    plt.pause(0.01)
+                continue
+
 
         ax.tick_params(axis='both', which='major', labelsize=ticksz, width=frame_width, colors=frame_color)
 

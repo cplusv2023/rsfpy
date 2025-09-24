@@ -33,8 +33,9 @@ void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str) {
 }
 
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
-    seq->count = 0;
-    seq->current_index = 0;
+    // Assume seq is already initialized
+    // seq->count = 0;
+    seq->current_index = seq->count;
     seq->fps = 4;
 
     for (int i = 0; i < num && seq->count < MAX_FRAMES; i++) {

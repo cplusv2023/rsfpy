@@ -405,28 +405,42 @@ void draw_toolbar(App *app) {
     for (int i = 0; i < MAX_BUTTONS; i++) {
         gboolean enabled = TRUE;
         gboolean pressed = (i == MOVE_BUTTON);
-        if (i == RUN_BUTTON) enabled = !app->sequence.playing;
-        else if (i == PAUSE_BUTTON || i==FASTER_BUTTON || i==SLOWER_BUTTON) enabled = app->sequence.playing;
-        else if (i == NEXT_BUTTON || i==PREV_BUTTON) enabled = TRUE;
 
-        if (app->sequence.count <= 1 ) {
-            enabled = FALSE;
-        }
-        if (i == HOME_BUTTON) {
-            if (app->zoom_scale != 1.0 || app->pan_x !=0 || app->pan_y !=0) {
+        switch(i) {
+            case RUN_BUTTON:
+                enabled = !app->sequence.playing;
+                if (app->sequence.count <= 1 ) enabled = FALSE;
+                break;
+            case NEXT_BUTTON:
+            case PREV_BUTTON:
                 enabled = TRUE;
-            }else{
-                enabled = FALSE;
-            }
+                if (app->sequence.count <= 1 ) enabled = FALSE;
+                break;
+            case PAUSE_BUTTON:
+            case FASTER_BUTTON:
+            case SLOWER_BUTTON:
+                enabled = app->sequence.playing;
+                if (app->sequence.count <= 1 ) enabled = FALSE;
+                break;
+            case HOME_BUTTON:
+                if (app->zoom_scale != 1.0 || app->pan_x !=0 || app->pan_y !=0) {
+                    enabled = TRUE;
+                }else{
+                    enabled = FALSE;
+                }
+                break;
+            case MOVE_BUTTON:
+                enabled = TRUE;
+                pressed = app->drag_mode;
+                break;
+            case ZOOM_BUTTON:
+                enabled = TRUE;
+                pressed = app->zoom_mode;
+                break;
+            default:
+                break;
         }
-        if (i == MOVE_BUTTON) {
-            enabled = TRUE;
-            pressed = app->drag_mode;
-        }
-        if (i == ZOOM_BUTTON) {
-            enabled = TRUE;
-            pressed = app->zoom_mode;
-        }
+
         Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled, pressed);
         b.index = i;
         app->buttons[app->num_buttons++] = b;
@@ -482,7 +496,7 @@ static void run_loop(App *app) {
     long elapsed_ms = 0;
     XSelectInput(app->dpy, app->win,
              ExposureMask | StructureNotifyMask | KeyPressMask |
-             ButtonPressMask | ButtonReleaseMask | PointerMotionMask 
+             ButtonPressMask | ButtonReleaseMask | PointerMotionMask
     );
 
     XMapWindow(app->dpy, app->win);
@@ -754,6 +768,7 @@ static void run_loop(App *app) {
                               app->zoom_scale,
                               app->toolbar_h, app->hintbar_h);
             last_frame_time = now;
+            draw_hintbar(app, app->hintbar_h);
         }
     }
 
@@ -826,6 +841,10 @@ int main(int argc, char **argv) {
     app.last_resize_time = app.last_zoom_time;
     app.zooming = FALSE;
 
+    app.sequence.count = 0;
+    app.sequence.current_index = 0;
+
+
 
     app.dpy = XOpenDisplay(NULL);
     if (!app.dpy) fatal("Cannot open X display");
@@ -838,24 +857,25 @@ int main(int argc, char **argv) {
     // Load SVGs: from args or stdin
     gboolean check_input = FALSE;
 
-    if (argc >= 2 && strcmp(argv[1], "-") != 0) {
-        // Read from file paths
-        check_input = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);
-    } else {
-        // Read from stdin
-        GError *err = NULL;
-        gchar *content = NULL;
-        gsize len = 0;
 
-        if (!g_file_get_contents("/dev/stdin", &content, &len, &err)) {
-            fprintf(stderr, "Failed to read from stdin: %s\n", err->message);
-            g_clear_error(&err);
-            return 1;
-        }
-
+    // Read from stdin
+    GError *err = NULL;
+    gchar *content = NULL;
+    gsize len = 0;
+    if (!g_file_get_contents("/dev/stdin", &content, &len, &err)) {
+        fprintf(stderr, "Ignore stdin: %s\n", err->message);
+        g_clear_error(&err);
+    }else{
         check_input = svg_sequence_load_from_stream(&app.sequence, content, len);
         g_free(content);
     }
+
+    if (argc >= 2 && strcmp(argv[1], "-") != 0) {
+        // Read from file paths
+        check_input = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);
+    }
+    app.sequence.current_index = 0;
+
 
     if (!check_input || app.sequence.count == 0) {
         fprintf(stderr, "Failed to load SVG sequence. Exiting.\n");
