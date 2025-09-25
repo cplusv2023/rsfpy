@@ -554,6 +554,7 @@ static void run_loop(App *app) {
                 if (app->drag_mode && ev.xbutton.button == Button1) {
                     app->dragging = FALSE;
                     draw_all(app);
+                    app->last_drag_time = now;
                 }
             } break;
 
@@ -561,7 +562,7 @@ static void run_loop(App *app) {
                 if (app->drag_mode && app->dragging) {
                     int dx = ev.xmotion.x - app->drag_start_x;
                     int dy = ev.xmotion.y - app->drag_start_y;
-                    if (elapsed_ms >= WAIT_TIME_MS && (abs(dx) > 5 || abs(dy) > 5)) {
+                    if (elapsed_ms >= 10 * WAIT_TIME_MS && (abs(dx) > 5 || abs(dy) > 5)) {
                         app->pan_x += dx;
                         app->pan_y += dy;
                         app->drag_start_x = ev.xmotion.x;
@@ -582,7 +583,7 @@ static void run_loop(App *app) {
                     app->dragging = TRUE;
                     app->drag_start_x = ev.xbutton.x;
                     app->drag_start_y = ev.xbutton.y;
-                    clock_gettime(CLOCK_MONOTONIC, &app->last_drag_time);
+//                    clock_gettime(CLOCK_MONOTONIC, &app->last_drag_time);
                 }
 
                 if (app->zoom_mode && ev.xbutton.button == Button4) {
@@ -775,7 +776,7 @@ static void run_loop(App *app) {
     if (app->resize_pending) {
         long elapsed_ms = (now.tv_sec - app->last_resize_time.tv_sec) * 1000 +
                         (now.tv_nsec - app->last_resize_time.tv_nsec) / 1000000;
-        if (elapsed_ms >= 200) {
+        if (elapsed_ms >= 5 * WAIT_TIME_MS) {
 
             if (app->win_w != app->resize_w || app->win_h != app->resize_h) {
                 XResizeWindow(app->dpy, app->win, app->resize_w, app->resize_h);

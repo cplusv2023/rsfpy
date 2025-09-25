@@ -541,7 +541,7 @@ def main():
     cbar = None
     for iframe in range(min(nframes, maxframe)):
         if plottype == 'grey':
-            data = databin.window(n3=1, f3=iframe*frame_step)
+            if movie: data = databin.window(n3=1, f3=iframe*frame_step)
 
             if iframe==0:
                 data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
