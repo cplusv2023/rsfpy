@@ -185,8 +185,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         nrow = math.ceil(total / ncol)
 
     current_ncol = math.ceil(total / nrow)
-
-    svgs = [etree.parse(f).getroot() for f in inputs]
+    parser = etree.XMLParser(huge_tree=True)
+    svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
 
     sizes = []
     for svg in svgs:
@@ -311,7 +311,8 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     return etree.ElementTree(root)
 
 def overlay(inputs, bgcolor=None):
-    svgs = [etree.parse(f).getroot() for f in inputs]
+    parser = etree.XMLParser(huge_tree=True)
+    svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
     SVG_NS = "http://www.w3.org/2000/svg"
     root = etree.Element("{%s}svg" % SVG_NS, nsmap={None: SVG_NS})
     max_w = 0

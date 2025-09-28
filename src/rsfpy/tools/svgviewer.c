@@ -677,13 +677,13 @@ static void run_loop(App *app) {
             case KeyPress: {
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
                 if (ks == XK_q || ks == XK_Escape) return;
-                if (ks == XK_Left || ks == XK_n) {
+                if (ks == XK_Left || ks == XK_m) {
                     app->sequence.playing = FALSE;
                     app->sequence.current_index =
                         (app->sequence.current_index - 1 + app->sequence.count) % app->sequence.count;
                     draw_all(app);
                 }
-                if (ks == XK_Right || ks == XK_m) {
+                if (ks == XK_Right || ks == XK_n) {
                     app->sequence.playing = FALSE;
                     app->sequence.current_index =
                         (app->sequence.current_index + 1) % app->sequence.count;
