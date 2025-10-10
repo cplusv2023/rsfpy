@@ -85,9 +85,9 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
                 SvgFrame *f = &seq->frames[seq->count];
                 f->path = g_strdup_printf("%s.frame[%d]", path, j-1);
                 f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count-1);
-                f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), NULL);
+                f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
                 if (!f->handle) {
-                    fprintf(stderr, "Failed to load SVG segment %d from %s\n", j, path);
+                    fprintf(stderr, "Failed to load SVG segment %d from %s: %s\n", j, path, err->message);
                     g_free(f->framelabel);
                     continue;
                 }
@@ -114,9 +114,9 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup(path);
             f->framelabel = g_strdup("Single file");
-            f->handle = rsvg_handle_new_from_data((const guint8 *)content, len, NULL);
+            f->handle = rsvg_handle_new_from_data((const guint8*)content, len, &err);
             if (!f->handle) {
-                fprintf(stderr, "Failed to load SVG file: %s\n", path);
+                fprintf(stderr, "Failed to load SVG file: %s, %s\n", path, err->message);
                 g_free(content);
                 g_free(f->framelabel);
                 continue;
@@ -329,6 +329,7 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
     const char *splitter = "<!-- RSFPY_SPLIT";
     char *svg_start, *svg_content, *label_end, *label_start, *label,
          **segments, *segment;
+    GError *err = NULL;
 
     if (strstr(copy, splitter)) {
         segments = g_strsplit(copy, splitter, MAX_FRAMES + 1);
@@ -359,9 +360,9 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup_printf("stdin[%d]", i-1);
             f->framelabel = label ? label : g_strdup_printf("Frame %d", i-1);
-            f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), NULL);
+            f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
             if (!f->handle) {
-                fprintf(stderr, "Failed to load SVG segment %d\n", i );
+                fprintf(stderr, "Failed to load SVG segment %d: %s\n", i, err->message);
                 g_free(f->framelabel);
                 continue;
             }
@@ -388,9 +389,9 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
         SvgFrame *f = &seq->frames[0];
         f->path = g_strdup("stdin");
         f->framelabel = g_strdup("Single file");
-        f->handle = rsvg_handle_new_from_data((const guint8 *)copy, len, NULL);
+        f->handle = rsvg_handle_new_from_data((const guint8 *)copy, len, &err);
         if (!f->handle) {
-            fprintf(stderr, "Failed to load single SVG stream\n");
+            fprintf(stderr, "Failed to load single SVG stream: %s\n", err->message);
             g_free(copy);
             g_free(f->framelabel);
             return FALSE;
