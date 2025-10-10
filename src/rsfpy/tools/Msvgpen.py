@@ -90,6 +90,9 @@ def main():
     labelsz = getfloat(par_dict, 'labelsz', getfloat(par_dict, 'labelsize', 12))
     labelmargin = int(getfloat(par_dict, 'labelmargin', 10))
     order = par_dict.get('order', None)
+    gridorder = par_dict.get('gridorder', 'c').lower()
+    ha = par_dict.get('ha', 'left').lower()
+    va = par_dict.get('va', 'top').lower()
 
     colortable={
         'black': '#000000',
@@ -132,7 +135,8 @@ def main():
 
     if mode == 'grid':
         outtree = grid(inputs, ncol=ncol, nrow=nrow, stretchx=stretchx, stretchy=stretchy, bgcolor=bgcolor, label=label, loc=loc, labeltype=labeltype, labelformat=labelformat, labelmargin=labelmargin,
-                       labelfont=labelfont, labelcolor=labelcolor, labelsz=labelsz, labelfat=labelfat)
+                       labelfont=labelfont, labelcolor=labelcolor, labelsz=labelsz, labelfat=labelfat,
+                       ha=ha, va=va, gridorder=gridorder)
     elif mode == 'overlay':
         outtree = overlay(inputs, bgcolor=bgcolor)
 
@@ -170,8 +174,8 @@ def movie(inputs):
     return f"{splitter}\n" + f"\n\n{splitter}\n\n".join(segments)
 
 
-def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,label=False, loc="north west",    labeltype="a", labelformat="(%s)", labelmargin=10,
-         labelfont=None, labelcolor="#000", labelsz=12, labelfat="normal"):
+def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,label=False, loc="north west", labeltype="a", labelformat="(%s)", labelmargin=10,
+         labelfont=None, labelcolor="#000", labelsz=12, labelfat="normal", ha="mid", va="btm", gridorder='r'):
     if ncol == -1 and nrow == -1:
         ncol, nrow = 3, -1
 
@@ -179,12 +183,18 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     if ncol != -1 and nrow != -1 and ncol * nrow < total:
         ncol, nrow = 3, -1
 
+    if gridorder == 'r':
+        if nrow == -1:
+            nrow = math.ceil(total / ncol) if ncol != -1 else 3
+        if ncol == -1:
+            ncol = math.ceil(total / nrow)
     if ncol == -1:
         ncol = math.ceil(total / nrow) if nrow != -1 else 3
     if nrow == -1:
         nrow = math.ceil(total / ncol)
 
     current_ncol = math.ceil(total / nrow)
+    current_nrow = math.ceil(total / ncol)
     parser = etree.XMLParser(huge_tree=True)
     svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
 
@@ -194,11 +204,11 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         h = allinpx(svg.attrib.get("height", "100"))
         sizes.append((w, h))
 
-    col_widths = [0] * current_ncol
-    row_heights = [0] * nrow
+    col_widths = [0] * (ncol if gridorder == 'r' else current_ncol)
+    row_heights = [0] * (current_nrow if gridorder == 'r' else nrow)
     for idx, (w, h) in enumerate(sizes):
-        row = idx // current_ncol
-        col = idx % current_ncol
+        row = idx % current_nrow if gridorder == 'r' else idx // current_ncol
+        col = idx // current_nrow if gridorder == 'r' else idx % current_ncol
         col_widths[col] = max(col_widths[col], w)
         row_heights[row] = max(row_heights[row], h)
 
@@ -217,17 +227,50 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     root.attrib["height"] = f'{total_height}px'
 
     for idx, svg in enumerate(svgs):
-        row = idx // ncol
-        col = idx % ncol
+        row = idx % current_nrow if gridorder == 'r' else idx // current_ncol
+        col = idx // current_nrow if gridorder == 'r' else idx % current_ncol
         x_offset = sum(col_widths[:col])
         y_offset = sum(row_heights[:row])
         orig_w, orig_h = sizes[idx]
         orig_scale_w = orig_w / no_pixel_unit(svg.attrib.get("width", "100"))
         orig_scale_h = orig_h / no_pixel_unit(svg.attrib.get("height", "100"))
-        target_w = col_widths[col]
-        target_h = row_heights[row]
+        target_w = col_widths[col] # Grid width
+        target_h = row_heights[row] # Grid height
         scale_x = target_w / orig_w if stretchx else 1
         scale_y = target_h / orig_h if stretchy else 1
+
+        if target_w < orig_w: scale_x = target_w /orig_w
+        if target_h < orig_h: scale_y = target_h /orig_h
+
+        wpad_ingrid = target_w - orig_w
+        hpad_ingrid = target_h - orig_h
+        if gridorder == 'r':
+            if col == current_ncol - 1:
+                hpad_row = (current_nrow * current_ncol - total)
+                if hpad_row <= 0: hpad_row = 0
+                else: hpad_row += sum(row_heights[-hpad_row:])
+                if va in ('mid', 'middle'):
+                    y_offset +=  hpad_row / 2
+                elif va in ('btm','bottom'):
+                    y_offset += hpad_row
+        else:
+            if row == current_nrow - 1:
+                wpad_col = (current_ncol * current_nrow - total)
+                if wpad_col <= 0: wpad_col = 0
+                else: wpad_col += sum(col_widths[-wpad_col:])
+                if ha in ('mid', 'middle'): x_offset += wpad_col / 2
+                elif ha in ('right'):
+                    x_offset += wpad_col
+
+        if ha in ('mid', 'middle'):
+            x_offset += wpad_ingrid/2
+        elif ha in ('right'):
+            x_offset += wpad_ingrid
+        if va in ('mid', 'middle'):
+            y_offset += hpad_ingrid/2
+        elif va in ('btm','bottom'):
+            y_offset += hpad_ingrid
+
         g = etree.Element("g")
         clean_fill_recursive(svg)
         for child in svg:

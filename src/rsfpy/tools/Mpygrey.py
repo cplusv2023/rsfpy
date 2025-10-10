@@ -224,7 +224,7 @@ def main():
     fig_width = getfloat(par_dict, 'screenwidth',
                          getfloat(par_dict, 'width', 8.))
     fig_height = getfloat(par_dict, 'screenheight',
-                          getfloat(par_dict, 'screenheight', 6.))
+                          getfloat(par_dict, 'height', 6.))
     facecolor = par_dict.get('bgcolor', par_dict.get('facecolor', 'w'))
     dpi = getfloat(par_dict, 'dpi', 100.)
     fontsz = getfloat(par_dict, 'fontsz',
@@ -308,6 +308,8 @@ def main():
         lcolors = par_dict.get('lcolors', None)
         lstyle = par_dict.get('lstyle', par_dict.get('linestyle', None))
         lstyles = par_dict.get('lstyles', par_dict.get('linestyles', None))
+        label2loc = par_dict.get('wherexlabel', 'bottom').lower()
+        tick2loc = par_dict.get('wherextick', label2loc).lower()
         marker = par_dict.get('marker',
                               par_dict.get('symbol', None))
         markers = par_dict.get('markers',
@@ -382,11 +384,13 @@ def main():
             markers = []
             while len(markers) < data.n2:
                 markers.append(marker)
-        else:
+        elif stem:
             markers = ['.',',','o','*','s','p','x','d','v','^','<','>']
             while len(markers) < data.n2:
                 markers += markers
             markers = markers[:data.n2]
+        else:
+            markers = ['none'] * data.n2
         # scalebar = False
     elif plottype == 'grey3':
         frame1 = int(getfloat(par_dict, 'frame1', 0.0))
