@@ -26,6 +26,10 @@ __doc__ = """
     \t\033[4mstring\033[0m\t\033[1mlabelformat="(%s)"\033[0m label format, e.g., (%s), %s, Fig.%s, etc.
     \t\033[4mfloat\033[0m\t\033[1mlabelsz=12.\033[0m label font size
     \t\033[4mint\033[0m\t\033[1mlabelmargin=10\033[0m margin between label and subplot in pixels
+    \t\033[4mstring\033[0m\t\033[1mgridorder=c\033[0m Grid order (column first:c, row first:r)
+    \t\033[4mstring\033[0m\t\033[1mha=left\033[0m Horizontal alignment for grid mode
+    \t\033[4mstring\033[0m\t\033[1mva=top\033[0m Vertical alignment for grid mode
+    
 \033[1mMORE INFO\033[0m
     \tAuthor:\tauthor_label
     \tEmail:\temail_label

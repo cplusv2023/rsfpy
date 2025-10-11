@@ -26,7 +26,7 @@
 \033[1mPARAMETERS\033[0m
     \t\033[4mbool\033[0m\t\033[1mallpos=n\033[0m [y/n] if y, assume positive data
     \t\033[4mstring\033[0m\t\033[1mbarlabel/bartitle=\033[0m colorbar label
-    \t\033[4mstring/file\033[0m\t\033[1mbar/bartitle=\033[0m colorbar file (when datatype=uchar and scalebar=y)
+    \t\033[4mstring/file\033[0m\t\033[1mbar/barfile=\033[0m colorbar file (when datatype=uchar and scalebar=y)
     \t\033[4mstring\033[0m\t\033[1mbarlabelfat/barlabelweight=normal\033[0m colorbar label font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mbarlabelsz/labelsize=12.\033[0m colorbar label font size (default 12)
     \t\033[4mstring\033[0m\t\033[1mbackend=default\033[0m matplotlib backend (default: let matplotlib decide)
