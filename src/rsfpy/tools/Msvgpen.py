@@ -412,6 +412,8 @@ def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fo
 
 
 def clean_fill_recursive(elem):
+    if not hasattr(elem, "attrib"):
+        return
     elem_id = elem.attrib.get("id", "")
     if elem_id == __SVG_BGRECT_ID:
         parent = elem.getparent()
@@ -429,6 +431,8 @@ def clean_fill_recursive(elem):
         clean_fill_recursive(child)
 
 def replace_title_text_recursive(elem, title=""):
+    if not hasattr(elem, "attrib"):
+        return
     elem_id = elem.attrib.get("id", "")
     if elem_id == f"{__BASE_AX_NAME}_title":
         for child in elem:
@@ -442,6 +446,8 @@ def adjust_text_style_recursive(elem, fontscale=1.0, append_family=None, fontwei
     Recursively visit elem and its children:
     - if elem's tag is <text>, edit font-size, font-family, and font-weight in style
     """
+    if not hasattr(elem, "tag") or not isinstance(elem.tag, str):
+        return
     if fontscale == 1.0 and append_family is None and fontweight is None:
         return  # Do nothing
 
@@ -537,6 +543,8 @@ def normalize_font_weight(*args, default="400"):
     return results
 
 def add_inverse_scale_to_text(elem, inv_scale=(1.0, 1.0)):
+    if not hasattr(elem, "tag") or not isinstance(elem.tag, str):
+        return
     if elem.tag.endswith('text'):
         sx, sy = inv_scale
         inv_sx = 1/sx if sx != 0 else 1.0
