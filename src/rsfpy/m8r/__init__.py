@@ -1,1 +1,1 @@
-from .patches import svgResult
+from .patches import svgResult, svgPlot

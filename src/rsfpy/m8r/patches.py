@@ -1,10 +1,21 @@
 # Rsfpy: pacth for Madagascar SConstruct flow
-from SCons.Util import WhereIs
-
 try:
     from rsf.proj import project
     import os
     WhereIs = project.WhereIs
+
+    def svgPlot(*args, **kargs):
+        suffix = '.svg'
+        kargs.update({'suffix': suffix})
+        target = args[0]
+        if target.endswith('.svg'):
+            target2 = target
+        else:
+            target2 = target + suffix
+        if len(args) > 2:
+            if 'rsfsvgpen' in args[2]:
+                kargs.update({'src_suffix': '.svg'})
+        return project.Plot(*args, **kargs)
 
     def svgResult(*args, **kargs):
         suffix = '.svg'
@@ -23,7 +34,7 @@ try:
                                   f'echo "No SVG viewer found to open $SOURCES". Try install eog or use web browser.')
         project.view.append(cmd)
 
-        # flip (test using eog)
+        # flip
         locked = os.path.join(project.figdir, target + '.svg')
         if viewer:
             flip_cmd = project.Command(f'{target}.flip', [target2], f'{viewer} $SOURCES {locked}')

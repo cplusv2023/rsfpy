@@ -22,7 +22,7 @@
     \tlcolor/pcolor/ncolor use simple color name, e.g., red (or r), blue (or b), black (or k),
     \t\t or RGB/RGBA (HEX) string like #abc (#aabbcc), #abcdefab, #0f0f0f, or none, etc. Explore: https://matplotlib.org/stable/users/explain/colors/colors.html
 
-    \tfontfat is font weight, you can use numbers like 700, or: light, normal, medium, semibold, demibold, bold, heavy, ultralight, black, regular, book,  black
+    \tfontfat is font weight, you can use numbers like 700 (not over 900), or: light, normal, medium, semibold, demibold, bold, heavy, ultralight, black, regular, book,  black
 \033[1mPARAMETERS\033[0m
     \t\033[4mbool\033[0m\t\033[1mallpos=n\033[0m [y/n] if y, assume positive data
     \t\033[4mstring\033[0m\t\033[1mbarlabel/bartitle=\033[0m colorbar label
@@ -37,6 +37,7 @@
     \t\033[4mfloat\033[0m\t\033[1mdpi=100.\033[0m figure resolution in dots per inch
     \t\033[4mbool\033[0m\t\033[1mflat=y\033[0m [y/n] if y, flatten the 3D data for grey3 plot
     \t\033[4mstring\033[0m\t\033[1mfont=sans-serif\033[0m font family
+    \t\033[4mstring\033[0m\t\033[1mfontfat/fontweight=normal\033[0m label font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mfontsz/fontsize=12\033[0m global font size (low priority)
     \t\033[4mstring\033[0m\t\033[1mformat=svg\033[0m output figure format: pdf, png, jpg, etc (according to output suffix, default: svg)
     \t\033[4mstring\033[0m\t\033[1mformatbar/barformat=\033[0m format for colorbar tick labels, e.g., %.2f, %.3e, etc.
@@ -146,7 +147,7 @@ from textwrap import dedent
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re, _get_stdname
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME
 
 __progname__ = os.path.basename(sys.argv[0])
 DESCRIPTION = {
@@ -450,32 +451,9 @@ def main():
     data.sfput(label2=label2, unit2=unit2)
 
     # Check some parameters could cause errors
-    fontfats = ['light', 'normal', 'medium', 'semibold', 'demibold', 'bold', 'heavy', 'ultralight', 'black', 'regular', 'book',  'black']
-    if fontweight not in fontfats:
-        try: fontweight = float(fontweight)
-        except:
-            sf_warning(f"Warning: invalid fontfat={fontweight}, use default normal.")
-        fontweight = 'normal'
-    if labelfat not in fontfats:
-        try: labelfat = float(labelfat)
-        except:
-            sf_warning(f"Warning: invalid labelfat={labelfat}, use default {fontweight}.")
-            labelfat = fontweight
-    if titlefat not in fontfats and not titlefat.isdigit():
-        try: titlefat = float(titlefat)
-        except:
-            sf_warning(f"Warning: invalid titlefat={titlefat}, use default {fontweight}.")
-            titlefat = fontweight
-    if tickfat not in fontfats:
-        try: tickfat = float(tickfat)
-        except:
-            sf_warning(f"Warning: invalid titlefat={tickfat}, use default {fontweight}.")
-            tickfat = fontweight
-    if barlabelfat not in fontfats:
-        try: barlabelfat = float(barlabelfat)
-        except:
-            sf_warning(f"Warning: invalid barlabelfat={barlabelfat}, use default {fontweight}.")
-            barlabelfat = fontweight
+    fontweight, labelfat, tickfat, titlefat, barlabelfat = \
+        check_font_weight(fontweight, labelfat, tickfat, titlefat, barlabelfat,
+                          default=fontweight)
 
     easy_font_name = {
         'Times': 'Nimbus Roman', #Embrace open source
@@ -485,7 +463,7 @@ def main():
         '3': 'Courier New',
         '4': 'Noto Sans CJK',
         '0': 'Arial',
-        'Chinese': 'Noto Sans CJK',
+        'Chinese': 'Noto Sans CJK SC',
     }
     if font_family in easy_font_name.keys():
         plt.rcParams['font.family'] = [easy_font_name.get(font_family, 'Sans-serif'), 'Sans-serif']
@@ -495,6 +473,7 @@ def main():
         plt.rcParams['font.family'] = [new_font.get_name(), 'Sans-serif']
     else: plt.rcParams['font.family'] = [font_family, 'Sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['svg.fonttype'] = 'none'
 
     ################################################################################
     # Support multiple frames
@@ -688,6 +667,7 @@ def main():
                                    format1=format1, format2=format2, format3=format3,
                            flat=isflat, show=False)
                 gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
+                gattr.title_text.set_gid(f"{__BASE_AX_NAME}_title")
                 gattr.set_lines(color=frame_color,width=frame_width)
                 gattr.set_spines(color=frame_color,width=frame_width)
                 gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
@@ -851,21 +831,24 @@ def main():
 
             if title:
                 if titleloc:
-                    try:ax.set_title(title,
+                    try:
+                        title_text = ax.set_title(title,
                                 fontsize=titlesz,
                                 fontweight=titlefat,
                                 color=frame_color,
                                 y=titleloc)
                     except:
                         sf_warning(f"Warning: invalid titleloc={titleloc}, need float.")
-                        ax.set_title(title,
+                        title_text = ax.set_title(title,
                                 fontsize=titlesz,
                                 fontweight=titlefat,
                                 color=frame_color)
-                else:ax.set_title(title,
+                else:
+                    title_text = ax.set_title(title,
                                     fontsize=titlesz,
                                     fontweight=titlefat,
                                     color=frame_color)
+                title_text.set_gid(f"{__BASE_AX_NAME}_title")
             if label1loc in ['left', 'right']:
                 ax.yaxis.set_label_position(label1loc)
             else:
@@ -978,7 +961,10 @@ def main():
                 sf_warning(f"Warning: invalid text{itxt+1}={txtpar}: {e}, ignored.")
                 continue
 
-
+        ax.set_gid(__BASE_AX_NAME)
+        rect = plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor=(0, 0, 0, 0.0), transform=ax.transAxes)
+        rect.set_gid(f"{__BASE_AX_NAME}_bbox")
+        ax.add_patch(rect)
 
         plt.tight_layout()
 
@@ -1006,8 +992,72 @@ def main():
     plt.close(fig)
     sys.exit(0)
     
+def check_font_weight(*args, default="normal"):
+    """
+    检查并规范化 font-weight 参数，返回 Matplotlib 可识别的值列表。
+    - 支持关键字: ultralight, light, normal, regular, book, medium,
+                 semibold, demibold, bold, heavy, black
+    - 支持数值/字符串: 100–900
+    - 支持任意整数/浮点数，会向上取整到最近的 100，并限制在 100–900
+    - 无效输入会回退到 default
+    """
+    mapping = {
+        100: "ultralight",
+        200: "light",
+        300: "book",
+        400: "normal",
+        500: "medium",
+        600: "semibold",
+        700: "bold",
+        800: "heavy",
+        900: "black",
+    }
+    valid_keywords = set(mapping.values()) | {"regular", "demibold"}  # 兼容别名
+    fats = []
 
-    
+    # 处理默认值
+    if default not in valid_keywords:
+        try:
+            num = float(default)
+            if num <= 0:
+                raise ValueError
+            rounded = int(((num + 99) // 100) * 100)
+            rounded = min(max(rounded, 100), 900)
+            default = mapping.get(rounded, "normal")
+        except Exception:
+            default = "normal"
+
+    # 处理输入参数
+    for fat in args:
+        if isinstance(fat, str):
+            v = fat.lower()
+            if v in valid_keywords:
+                fats.append(v)
+                continue
+            try:
+                num = float(v)
+            except ValueError:
+                fats.append(default)
+                continue
+        else:
+            try:
+                num = float(fat)
+            except Exception:
+                fats.append(default)
+                continue
+
+        # 数值处理：向上取整到最近的 100
+        if num <= 0:
+            fats.append(default)
+            continue
+        rounded = int(((num + 99) // 100) * 100)
+        rounded = min(max(rounded, 100), 900)
+        fats.append(mapping.get(rounded, default))
+
+    return fats
+
+
+
 ## Safely get float parameters
 def getfloat(par_dict, parname, default):
     try:

@@ -20,7 +20,7 @@ __doc__ = """
     \t\033[4mbool\033[0m\t\033[1mlabel=y\033[0m [y/n] if y, add subplot labels (only in grid mode)
     \t\033[4mstring\033[0m\t\033[1mlabelfont=\033[0m label font family
     \t\033[4mstring\033[0m\t\033[1mlabelcolor=k\033[0m label color
-    \t\033[4mstring\033[0m\t\033[1mlabelfat=normal\033[0m label font weight: normal, bold, light, etc.
+    \t\033[4mstring\033[0m\t\033[1mlabelfat/labelweight=normal\033[0m label font weight: normal, bold, light, etc.
     \t\033[4mstring\033[0m\t\033[1mloc="north west"\033[0m label location: north west, north east, south west, south east, north, south, west, east
     \t\033[4mstring\033[0m\t\033[1mlabeltype=a\033[0m label type: a (alphabet), # (number), I (roman)
     \t\033[4mstring\033[0m\t\033[1mlabelformat="(%s)"\033[0m label format, e.g., (%s), %s, Fig.%s, etc.
@@ -29,6 +29,11 @@ __doc__ = """
     \t\033[4mstring\033[0m\t\033[1mgridorder=c\033[0m Grid order (column first:c, row first:r)
     \t\033[4mstring\033[0m\t\033[1mha=left\033[0m Horizontal alignment for grid mode
     \t\033[4mstring\033[0m\t\033[1mva=top\033[0m Vertical alignment for grid mode
+    \t\033[4mstring\033[0m\t\033[1mtitle= \033[0m Replace title for overlay mode
+    \t\033[4mfloat\033[0m\t\033[1mfontscale=1.0 \033[0m Fontsize scaling factor
+    \t\033[4mstring\033[0m\t\033[1mfontfamily/font= \033[0m Set fontfamily
+    \t\033[4mstring\033[0m\t\033[1mfontfat/fontweight= \033[0m Set fontfamily
+    
     
 \033[1mMORE INFO\033[0m
     \tAuthor:\tauthor_label
@@ -42,8 +47,8 @@ __doc__ = """
 import math, sys, os, subprocess, re
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __SVG_BGRECT_ID
-
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __SVG_BGRECT_ID, \
+    __BASE_AX_NAME
 
 __progname__ = os.path.basename(sys.argv[0])
 __doc__ = __doc__.replace("author_label",__author__)
@@ -87,7 +92,8 @@ def main():
     label = par_dict.get('label', 'y').lower() in ('true', 'y', 'yes')
     labelfont = par_dict.get('labelfont', None)
     labelcolor = par_dict.get('labelcolor', 'k')
-    labelfat = par_dict.get('labelfat', 'normal')
+    fontweight = par_dict.get('fontfat', par_dict.get('fontweight', None))
+    labelfat = par_dict.get('labelfat', par_dict.get('labelweight', fontweight))
     loc = par_dict.get('labelloc', 'north west').lower()
     labeltype = par_dict.get('labeltype', 'a')
     labelformat = par_dict.get('labelformat', '(%s)')
@@ -97,6 +103,9 @@ def main():
     gridorder = par_dict.get('gridorder', 'c').lower()
     ha = par_dict.get('ha', 'left').lower()
     va = par_dict.get('va', 'top').lower()
+    title = par_dict.get('title', None)
+    fontscale = getfloat(par_dict, 'fontscale', 1.0)
+    fontfamily = par_dict.get('fontfamily', par_dict.get('font', None))
 
     colortable={
         'black': '#000000',
@@ -137,40 +146,49 @@ def main():
     except:
         sf_warning(f"Invalid order={order}, use default input order.")
 
+    if fontscale <= 0:
+        fontscale = 1.
+        sf_warning(f"Warning: fontscale={fontscale} is invalid.")
+
+    if fontweight is not None:
+        fontweight, labelfat = normalize_font_weight(fontweight, labelfat, default="400")
+    else: labelfat, = normalize_font_weight(labelfat, default="400")
+
+
     if mode == 'grid':
         outtree = grid(inputs, ncol=ncol, nrow=nrow, stretchx=stretchx, stretchy=stretchy, bgcolor=bgcolor, label=label, loc=loc, labeltype=labeltype, labelformat=labelformat, labelmargin=labelmargin,
                        labelfont=labelfont, labelcolor=labelcolor, labelsz=labelsz, labelfat=labelfat,
-                       ha=ha, va=va, gridorder=gridorder)
+                       ha=ha, va=va, gridorder=gridorder, fontscale=fontscale, fontfamily=fontfamily, fontweight=fontweight)
     elif mode == 'overlay':
-        outtree = overlay(inputs, bgcolor=bgcolor)
+        outtree = overlay(inputs, bgcolor=bgcolor, title=title, fontscale=fontscale, fontfamily=fontfamily, fontweight=fontweight)
 
     elif mode == 'movie':
-         sys.stdout.write(movie(inputs))
+         sys.stdout.write(movie(inputs, fontscale=fontscale, fontfamily=fontfamily, fontweight=fontweight))
          outtree = None
     else:
         sf_error(f"Error: unsupported mode={mode}.")
     if outtree is not None: outtree.write(sys.stdout.buffer, pretty_print=True, xml_declaration=True, encoding='utf-8')
 
-def movie(inputs):
-    """
-    将多个 SVG 文件拼接成自定义格式，每段之间用 <!-- RSFPY_SPLIT --> 分隔。
-    参数:
-        inputs: List[str | IO] - SVG 文件路径或文件指针
-    返回:
-        str - 拼接后的 SVG 内容
-    """
+from lxml import etree
+
+def movie(inputs, fontscale=1.0, fontfamily=None, fontweight=None):
+
     splitter = __SVG_SPLITTER
     segments = []
+    parser = etree.XMLParser(huge_tree=True)
 
     for item in inputs:
-        if hasattr(item, "read"):  # 是文件指针
-            content = item.read()
-        elif isinstance(item, str):  # 是路径
-            with open(item, "r", encoding="utf-8") as f:
-                content = f.read()
+        # 解析 SVG
+        if hasattr(item, "read"):
+            svg_tree = etree.parse(item, parser=parser)
+        elif isinstance(item, str):
+            svg_tree = etree.parse(item, parser=parser)
         else:
             raise TypeError(f"Unsupported input type: {type(item)}")
 
+        root = svg_tree.getroot()
+        adjust_text_style_recursive(root, fontscale, fontfamily, fontweight)
+        content = etree.tostring(root, encoding="unicode")
         content = content.strip()
         if content:
             segments.append(content)
@@ -178,8 +196,9 @@ def movie(inputs):
     return f"{splitter}\n" + f"\n\n{splitter}\n\n".join(segments)
 
 
+
 def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,label=False, loc="north west", labeltype="a", labelformat="(%s)", labelmargin=10,
-         labelfont=None, labelcolor="#000", labelsz=12, labelfat="normal", ha="mid", va="btm", gridorder='r'):
+         labelfont=None, labelcolor="#000", labelsz=12, labelfat="normal", ha="mid", va="btm", gridorder='r', fontscale=1.0, fontfamily=None, fontweight=None):
     if ncol == -1 and nrow == -1:
         ncol, nrow = 3, -1
 
@@ -207,6 +226,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         w = allinpx(svg.attrib.get("width", "100"))
         h = allinpx(svg.attrib.get("height", "100"))
         sizes.append((w, h))
+        adjust_text_style_recursive(svg, fontscale, fontfamily, fontweight)
 
     col_widths = [0] * (ncol if gridorder == 'r' else current_ncol)
     row_heights = [0] * (current_nrow if gridorder == 'r' else nrow)
@@ -277,6 +297,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
         g = etree.Element("g")
         clean_fill_recursive(svg)
+        add_inverse_scale_to_text(svg, (orig_scale_w * scale_x,orig_scale_h * scale_y))
         for child in svg:
             g.append(child)
         g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({orig_scale_w * scale_x},{orig_scale_h * scale_y}) "
@@ -328,17 +349,18 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
                 offset_x += target_w - margin
                 offset_y += target_h / 2
 
+            labelfonts = "'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif, 'Sans-serif'"
+            if labelfont:
+                labelfonts = labelfont + ', ' + labelfonts
             text = etree.Element("text", {
                 "x": str(offset_x),
                 "y": str(offset_y),
                 "fill": labelcolor,
-                "font-family": "DejaVu Sans" if labelfont is None else labelfont,
+                "font-family": labelfonts,
                 "font-weight": labelfat,
                 "font-size": f'{labelsz}px',
                 "text-anchor": "start" if "west" in loc else ("end" if "east" in loc else "middle"),
             })
-            if labelfont:
-                text.attrib["font-family"] = labelfont
 
             text.text = label_text
             root.append(text)
@@ -357,7 +379,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
     return etree.ElementTree(root)
 
-def overlay(inputs, bgcolor=None):
+def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fontweight=None):
     parser = etree.XMLParser(huge_tree=True)
     svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
     SVG_NS = "http://www.w3.org/2000/svg"
@@ -369,10 +391,12 @@ def overlay(inputs, bgcolor=None):
         h = allinpx(svg.attrib.get("height", "100"))
         max_w = max(max_w, w)
         max_h = max(max_h, h)
+        adjust_text_style_recursive(svg, fontscale, fontfamily, fontweight)
     root.attrib["width"] = f'{max_w}px'
     root.attrib["height"] = f'{max_h}px'
     for svg in svgs:
         clean_fill_recursive(svg)
+        if title is not None: replace_title_text_recursive(svg, title)
         root.append(svg)
     if bgcolor is not None:
         bg_rect = etree.Element("rect", {
@@ -404,6 +428,144 @@ def clean_fill_recursive(elem):
     for child in list(elem):
         clean_fill_recursive(child)
 
+def replace_title_text_recursive(elem, title=""):
+    elem_id = elem.attrib.get("id", "")
+    if elem_id == f"{__BASE_AX_NAME}_title":
+        for child in elem:
+            if child.tag.endswith("text"):
+                child.text = title
+    for child in elem:
+        replace_title_text_recursive(child,title)
+
+def adjust_text_style_recursive(elem, fontscale=1.0, append_family=None, fontweight=None):
+    """
+    Recursively visit elem and its children:
+    - if elem's tag is <text>, edit font-size, font-family, and font-weight in style
+    """
+    if fontscale == 1.0 and append_family is None and fontweight is None:
+        return  # Do nothing
+
+    if elem.tag.endswith("text"):
+        style = elem.attrib.get("style", "")
+        if style:
+            style_dict = {}
+            for item in style.split(";"):
+                if ":" in item:
+                    k, v = item.split(":", 1)
+                    style_dict[k.strip()] = v.strip()
+
+            # Edit font-size
+            if fontscale != 1.0 and "font-size" in style_dict:
+                try:
+                    size_num = allinpx(style_dict["font-size"])
+                    new_size = size_num * fontscale
+                    style_dict["font-size"] = f"{new_size}px"
+                except ValueError:
+                    pass
+
+            # Edit font-family
+            if append_family:
+                if "font-family" in style_dict:
+                    style_dict["font-family"] = f"{append_family}, " + style_dict["font-family"]
+                else:
+                    style_dict["font-family"] = f"{append_family}"
+
+            # Edit font-weight
+            if fontweight:
+                style_dict["font-weight"] = str(fontweight)
+
+            # Rebuild style string
+            new_style = "; ".join(f"{k}: {v}" for k, v in style_dict.items())
+            elem.set("style", new_style)
+
+    # Recurse into children, passing all parameters
+    for child in elem:
+        adjust_text_style_recursive(child, fontscale, append_family, fontweight)
+
+
+
+def normalize_font_weight(*args, default="400"):
+
+    keyword_to_num = {
+        "ultralight": 100,
+        "light": 200,
+        "book": 300,
+        "normal": 400,
+        "regular": 400,
+        "medium": 500,
+        "semibold": 600,
+        "demibold": 600,
+        "demi": 600,
+        "bold": 700,
+        "heavy": 800,
+        "black": 900,
+    }
+
+    results = []
+
+    try:
+        dnum = int(float(default))
+        if dnum < 100 or dnum > 900:
+            raise ValueError
+        dnum = int(((dnum + 99) // 100) * 100)
+        default_str = str(min(max(dnum, 100), 900))
+    except Exception:
+        default_str = "400"
+
+    for fat in args:
+        if isinstance(fat, str):
+            v = fat.lower()
+            if v in keyword_to_num:
+                results.append(str(keyword_to_num[v]))
+                continue
+            try:
+                num = float(v)
+            except ValueError:
+                results.append(default_str)
+                continue
+        else:
+            try:
+                num = float(fat)
+            except Exception:
+                results.append(default_str)
+                continue
+
+        rounded = int(((num + 99) // 100) * 100)
+        rounded = min(max(rounded, 100), 900)
+        results.append(str(rounded))
+
+    return results
+
+def add_inverse_scale_to_text(elem, inv_scale=(1.0, 1.0)):
+    if elem.tag.endswith('text'):
+        sx, sy = inv_scale
+        inv_sx = 1/sx if sx != 0 else 1.0
+        inv_sy = 1/sy if sy != 0 else 1.0
+
+        if "x" in elem.attrib:
+            elem.attrib["x"] = str(float(elem.attrib["x"]) * sx)
+        if "y" in elem.attrib:
+            elem.attrib["y"] = str(float(elem.attrib["y"]) * sy)
+        new_scale = f"scale({inv_sx},{inv_sy})"
+        if 'transform' in elem.attrib:
+            trans = elem.attrib['transform']
+            if 'rotate' in trans:
+                m = re.search(r'rotate\(([-0-9.]+)\s+([-0-9.]+)\s+([-0-9.]+)\)', trans)
+            else: m = None
+            if m:
+                angle, cx, cy = m.groups()
+                cx = float(cx) * sx
+                cy = float(cy) * sy
+                rotate_str = f"rotate({angle} {cx} {cy})"
+                trans = re.sub(r'rotate\([^)]+\)', rotate_str, trans)
+            elem.attrib['transform'] = new_scale + " " + trans
+        else:
+            elem.attrib['transform'] = new_scale
+    if elem.tag.endswith('path') or elem.tag.endswith('line'):
+        elem.attrib['vector-effect'] = "non-scaling-stroke"
+
+    for child in elem:
+        add_inverse_scale_to_text(child, inv_scale)
 
 ## Safely get float parameters
 def getfloat(par_dict, parname, default):

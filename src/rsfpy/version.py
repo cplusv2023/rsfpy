@@ -19,9 +19,10 @@
 """
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "Jiawei Chen"
 __email__ = "chenjw22@mails.jlu.edu.cn"
 __github__ = "https://github.com/cplusv2023/rsfpy"
 __SVG_SPLITTER = "<!-- RSFPY_SPLIT -->"
 __SVG_BGRECT_ID = "RSFPY_BGRECT"
+__BASE_AX_NAME = "RSFPY_BASE_AX"

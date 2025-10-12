@@ -42,7 +42,7 @@ Note that the command-line tool **rsfsvgpen** needs **lxml** to deal with svg fi
 ## 📦 Installation
 **Strongly recommended to use a virtual Python environment** to isolate dependencies and ensure reproducibility.
 ```bash
-pip install -e . # editable (development) mode
+pip install . 
 ```
 
 ## 🚀 Quick start 
@@ -69,11 +69,12 @@ You can also use the python API.
 
 ![svgviewer](./img/rows.png)
 ![svgviewer](./img/cols.png)
-### import 
+### Python API
+#### import 
 ```python
 from rsfpy.array import Rsfarray
 ```
-### Read
+#### Read
 ```python
 ### Read from RSF file (file path)
 rarray = Rsfarray("./dat.test")
@@ -82,7 +83,7 @@ rarray = Rsfarray("./dat.test")
 with open("./test/dat.test") as fp:
     rarray = Rsfarray(fp)
 ```
-### Initialize from ndarray
+#### Initialize from ndarray
 ```python
 import numpy as np
 narray = np.array([1,2,3])
@@ -92,14 +93,14 @@ rarray = Rsfarray(narray,
                   )
 ```
 
-### Empty array and override
+#### Empty array and override
 ```python
 # Empty array
 empty = Rsfarray()
 # Override array
 empty.read("./test/dat.test")
 ```
-### Write
+#### Write
 ```python
 # Write to file
 rarray.write("./test/saved.test", # header file
@@ -113,7 +114,7 @@ meta = io.StringIO()
 dat = io.BytesIO()
 rarray.write(meta, out=dat)
 ```
-### Use Rsfarray properties
+#### Use Rsfarray properties
 ```python
 # Axis
 data = Rsfarray("./test/dat.test")
@@ -142,7 +143,7 @@ print(f"after window: {data1.d1, data1.o1}")
 
 ```
 
-### Plotting
+#### Plotting
 ``` python
 # Grey/wiggle image
 ## Support subplot mode
@@ -157,8 +158,8 @@ fig.show()
 ```
 ![Grey/wiggle image plot](./img/figure1.png)
 
-### 📄 License
+## 📄 License
 GNU GPLv2
-### 🤝 Contributing
+## 🤝 Contributing
 Contributions are welcome! Feel free to open an issue or submit a pull request to improve **rsfpy**
 
