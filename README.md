@@ -158,6 +158,9 @@ fig.show()
 ```
 ![Grey/wiggle image plot](./img/figure1.png)
 
+## Changelog
+View changelog [*here*](./CHANGELOG.md "./CHANGELOG.md").
+
 ## 📄 License
 GNU GPLv2
 ## 🤝 Contributing
