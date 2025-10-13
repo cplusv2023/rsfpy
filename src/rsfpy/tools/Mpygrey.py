@@ -305,7 +305,7 @@ def main():
         # Parameters for graph plot
         transp = par_dict.get('transp', 'n').lower().startswith('y')
         yreverse = par_dict.get('yreverse', 'n').lower().startswith('y')
-        lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', 'k')))
+        lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', None)))
         lcolors = par_dict.get('lcolors', None)
         lstyle = par_dict.get('lstyle', par_dict.get('linestyle', None))
         lstyles = par_dict.get('lstyles', par_dict.get('linestyles', None))
