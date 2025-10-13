@@ -1,8 +1,20 @@
 # Rsfpy: pacth for Madagascar SConstruct flow
+import sys
+
 try:
     from rsf.proj import project
     import os
     WhereIs = project.WhereIs
+
+    def get_bin_from_package():
+        bindir = WhereIs("rsfgrey")
+        if bindir is not None:
+            return os.path.dirname(bindir)
+        pkg_dir = os.path.dirname(os.path.dirname(__file__))
+        prefix = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(pkg_dir))))  # <prefix>
+        return os.path.join(prefix, "bin")
+
+    project.Append(ENV= {'PATH':project['ENV']['PATH'] + os.pathsep + get_bin_from_package()})
 
     def svgPlot(*args, **kargs):
         suffix = '.svg'
@@ -42,5 +54,8 @@ try:
             flip_cmd = project.Command(f'{target}.flip', [target2],
                                        f'echo "No SVG viewer found to open ${{SOURCES[0]}}". Try install eog or use web browser.')
         return project.Result(*args, **kargs)
-except:
-    exit(1)
+except ImportError:
+    print("Failed to import rsf.proj. Check if madagascar is correctly installed!", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print("Failed to load rsfpy:", e, file=sys.stderr)
