@@ -4,7 +4,6 @@ from setuptools import setup, find_packages
 from setuptools.command.install import install
 from setuptools.command.develop import develop
 
-
 # 读取 requirements 文件
 with io.open("requirements.txt", encoding="utf-8") as f:
     install_requires = [
@@ -33,9 +32,17 @@ class CustomDevelop(develop):
                                f"-o {target_dir}/svgviewer "
                                "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
         super().run()
+
+version_ns = {}
+here = os.path.abspath(os.path.dirname(__file__))
+version_file = os.path.join(here, "src", "rsfpy", "version.py")
+with open(version_file) as f:
+    exec(f.read(), version_ns)
+__version__ = version_ns["__version__"]
+
 setup(
     name="rsfpy",
-    version="0.1.1",
+    version=__version__,
     description="A Python toolkit for RSF data IO",
     long_description=long_description,
     long_description_content_type="text/markdown",
