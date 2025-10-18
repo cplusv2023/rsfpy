@@ -822,6 +822,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    sf_init(argc, argv);
+
     // Init X
     App app;
     memset(&app, 0, sizeof(app));

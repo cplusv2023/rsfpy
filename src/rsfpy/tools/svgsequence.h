@@ -51,6 +51,7 @@
 #define WAIT_TIME_MS 100
 
 #define MAX_FRAMES 200
+#define MAX_TMP_FILES 1000
 
 #define PXPT_TRANS 1.066667f /* 96/90 */
 #define SPLIT_MARKER "<!-- RSFPY_SPLIT -->"
@@ -82,7 +83,7 @@ typedef struct {
     gboolean playing;
 } SvgSequence;
 
-
+void sf_init(int argc, char **argv);
 void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str);
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num);
 void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr, int win_w, int win_h, int pan_x, int pan_y, double zoom_scale, int toolbar_h, int hintbar_h) ;

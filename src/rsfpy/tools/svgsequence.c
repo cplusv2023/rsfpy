@@ -1,5 +1,205 @@
 #include "svgsequence.h"
 
+static int npng = 0;
+static char *png_paths[MAX_TMP_FILES];
+static int nsvg = 0;
+static char *tmp_svg_paths[MAX_FRAMES];
+static int argc_global;
+static char **argv_global;
+
+
+void sf_init(int argc, char **argv){
+    argc_global = argc;
+    argv_global = argv;
+}
+
+static char * sf_getstring(const char *key)
+/* key=value */
+{
+    if (!key) return NULL;
+
+    size_t keylen = strlen(key);
+
+    for (int i = 1; i < argc_global; i++) {
+        const char *arg = argv_global[i];
+        // matching "key="
+        if (strncmp(arg, key, keylen) == 0 && arg[keylen] == '=') {
+            const char *val = arg + keylen + 1;
+            return strdup(val);
+        }
+    }
+    return NULL;
+}
+
+static gboolean readpathfile(const char* filename, char* datapath) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return FALSE;
+
+    if (fscanf(fp, "datapath=%s", datapath) <= 0) {
+        fclose(fp);
+        return FALSE;
+    }
+    fclose(fp);
+    return TRUE;
+}
+
+static char* getdatapath(void) {
+    /* Finds datapath.
+ 
+   Datapath rules:
+   1. check datapath= on the command line
+   2. check .datapath file in the current directory
+   3. check DATAPATH environmental variable
+   4. check .datapath in the home directory
+   5. use '.' (not a SEPlib behavior) 
+
+   Note that option 5 results in:
+   if you move the header to another directory then you must also move 
+   the data to the same directory. Confusing consequence. 
+*/
+    char *path, *penv, file[PATH_MAX];
+
+    path = sf_getstring("datapath");
+    if (path != NULL) return path;
+
+    path = (char*)malloc(PATH_MAX+1);
+
+    if (readpathfile(".datapath", path)) return path;
+
+    penv = getenv("DATAPATH");
+    if (penv != NULL) {
+        strncpy(path, penv, PATH_MAX);
+        return path;
+    }
+
+    char *home = getenv("HOME");
+    if (home != NULL) {
+        snprintf(file, PATH_MAX, "%s/.datapath", home);
+        if (readpathfile(file, path)) return path;
+    }
+
+    strncpy(path, "./", 3);
+    return path;
+}
+
+RsvgHandle *extract_base64(const guint8 *svg_content,
+                           RsvgHandleFlags flags,
+                           GCancellable   *cancellable,
+                           GError        **err)
+{
+    const char *p = (const char *)svg_content;
+    GString *out = g_string_new("");
+    char *datapath = getdatapath();
+    gboolean found = FALSE;
+
+    while (1) {
+        const char *tag = strstr(p, "data:image/png;base64,");
+        if (!tag) {
+            g_string_append(out, p);
+            break;
+        }
+
+        g_string_append_len(out, p, tag - p);
+
+        tag += strlen("data:image/png;base64,");
+        const char *end = strpbrk(tag, "\"'>");
+        if (!end) {
+            g_set_error(err, g_quark_from_static_string("extract-base64"),
+                        1, "Malformed SVG: unterminated base64 image");
+            g_string_free(out, TRUE);
+            return NULL;
+        }
+
+        size_t b64len = end - tag;
+        char *b64data = g_strndup(tag, b64len);
+
+        gsize out_len = 0;
+        guchar *decoded = g_base64_decode(b64data, &out_len);
+        g_free(b64data);
+
+        if (!decoded) {
+            g_set_error(err, g_quark_from_static_string("extract-base64"),
+                        2, "Base64 decode failed");
+            g_string_free(out, TRUE);
+            return NULL;
+        }
+
+        char filename[PATH_MAX];
+        snprintf(filename, sizeof(filename), "%s/.pngtmp_%d_%ld.png",
+                 datapath, getpid(), random());
+
+        FILE *fp = fopen(filename, "wb");
+        if (!fp) {
+            g_free(decoded);
+            g_set_error(err, g_quark_from_static_string("extract-base64"),
+                        3, "Failed to open temp file %s", filename);
+            g_string_free(out, TRUE);
+            return NULL;
+        }
+        fwrite(decoded, 1, out_len, fp);
+        fclose(fp);
+        g_free(decoded);
+
+        if (npng < MAX_TMP_FILES) {
+            png_paths[npng] = g_strdup(filename);
+            npng++;
+            fprintf(stderr, "Extracted embedded PNG to %s\n", filename);
+        } else {
+            g_set_error(err, g_quark_from_static_string("extract-base64"),
+                        5, "Exceeded maximum number of temporary PNG files");
+            g_string_free(out, TRUE);
+            return NULL;
+        }
+
+        g_string_append_printf(out, "%s", filename);
+
+        found = TRUE;
+        p = end;
+    }
+
+    if (!found) {
+        g_set_error(err, g_quark_from_static_string("extract-base64"),
+                    4, "No embedded PNG images found");
+        g_string_free(out, TRUE);
+        return NULL;
+    }
+
+    char svg_filename[PATH_MAX];
+    snprintf(svg_filename, sizeof(svg_filename), "%s/.svgtmp_%d_%ld.svg",
+             datapath, getpid(), random());
+
+    FILE *svg_fp = fopen(svg_filename, "wb");
+    if (!svg_fp) {
+        g_set_error(err, g_quark_from_static_string("extract-base64"),
+                    6, "Failed to open temp SVG file %s", svg_filename);
+        g_string_free(out, TRUE);
+        return NULL;
+    }
+    fwrite(out->str, 1, out->len, svg_fp);
+    fclose(svg_fp);
+
+    if (nsvg < MAX_FRAMES) {
+        tmp_svg_paths[nsvg] = g_strdup(svg_filename);
+        nsvg++;
+        fprintf(stderr, "Wrote temporary SVG to %s\n", svg_filename);
+    } else {
+        g_set_error(err, g_quark_from_static_string("extract-base64"),
+                    7, "Exceeded maximum number of temporary SVG files");
+        g_string_free(out, TRUE);
+        return NULL;
+    }
+
+    g_string_free(out, FALSE);
+
+    GFile *gfile = g_file_new_for_path(svg_filename);
+    RsvgHandle *handle = rsvg_handle_new_from_gfile_sync(
+        gfile, flags, cancellable, err);
+    g_object_unref(gfile);
+
+    return handle;
+}
+
+
 
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -84,13 +284,20 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
 
                 SvgFrame *f = &seq->frames[seq->count];
                 f->path = g_strdup_printf("%s.frame[%d]", path, j-1);
-                f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count-1);
+                f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count);
                 f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
                 if (!f->handle) {
-                    fprintf(stderr, "Failed to load SVG segment %d from %s: %s\n", j, path, err->message);
-                    g_free(f->framelabel);
-                    continue;
+                    fprintf(stderr, "Warning: failed to load SVG segment %d from %s: %s\nTry extracting embedded PNGs instead.\n", j, path, err->message);
+                    err = NULL;
+                    if (!(f->handle = extract_base64((const guint8 *)svg_content, RSVG_HANDLE_FLAGS_NONE, NULL, &err))) {
+                        fprintf(stderr, "Failed to load SVG segment %d from %s: %s\n", j, path, err->message);
+                        g_error_free(err);
+                        err = NULL;
+                        g_free(f->framelabel);
+                        continue;
+                    } 
                 }
+
 
 #if LIBRSVG_CHECK_VERSION(2,46,0)
                 double w = 0, h = 0;
@@ -114,12 +321,17 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup(path);
             f->framelabel = g_strdup("Single file");
-            f->handle = rsvg_handle_new_from_data((const guint8*)content, len, &err);
+            f->handle = rsvg_handle_new_from_data((const guint8 *)content, len, &err);
             if (!f->handle) {
-                fprintf(stderr, "Failed to load SVG file: %s, %s\n", path, err->message);
-                g_free(content);
-                g_free(f->framelabel);
-                continue;
+                fprintf(stderr, "Warning: failed to load SVG segment %d from %s: %s\nTry extracting embedded PNGs instead.\n", seq->count, path, err->message);
+                err = NULL;
+                if (!(f->handle = extract_base64((const guint8 *)content, RSVG_HANDLE_FLAGS_NONE, NULL, &err))) {
+                    fprintf(stderr, "Failed to load SVG file: %s, %s\n", path, err->message);
+                    g_error_free(err);
+                    err = NULL;
+                    g_free(f->framelabel);
+                    continue;
+                } 
             }
 
 #if LIBRSVG_CHECK_VERSION(2,46,0)
@@ -309,15 +521,7 @@ void svg_sequence_advance(SvgSequence *seq) {
     seq->current_index = (seq->current_index + 1) % seq->count;
 }
 
-void svg_sequence_free(SvgSequence *seq) {
-    for (int i = 0; i < seq->count; i++) {
-        SvgFrame *f = &seq->frames[i];
-        if (f->handle) g_object_unref(f->handle);
-        if (f->surface) cairo_surface_destroy(f->surface);
-        if (f->path) g_free(f->path);
-    }
-    seq->count = 0;
-}
+
 
 gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_t len) {
     seq->count = 0;
@@ -359,12 +563,16 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
 
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup_printf("stdin[%d]", i-1);
-            f->framelabel = label ? label : g_strdup_printf("Frame %d", i-1);
+            f->framelabel = label ? label : g_strdup_printf("Frame %d", i);
             f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
             if (!f->handle) {
-                fprintf(stderr, "Failed to load SVG segment %d: %s\n", i, err->message);
-                g_free(f->framelabel);
-                continue;
+                fprintf(stderr, "Warning: failed to load SVG segment %d: %s\nTry extracting embedded PNGs instead.\n", i, err->message);
+                err = NULL;
+                if (!(f->handle = extract_base64((const guint8 *)svg_content, RSVG_HANDLE_FLAGS_NONE, NULL, &err))) {
+                    fprintf(stderr, "Failed to load SVG segment %d: %s\n", i, err->message);
+                    g_free(f->framelabel);
+                    continue;
+                } 
             }
 
 #if LIBRSVG_CHECK_VERSION(2,46,0)
@@ -391,10 +599,14 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
         f->framelabel = g_strdup("Single file");
         f->handle = rsvg_handle_new_from_data((const guint8 *)copy, len, &err);
         if (!f->handle) {
-            fprintf(stderr, "Failed to load single SVG stream: %s\n", err->message);
-            g_free(copy);
-            g_free(f->framelabel);
-            return FALSE;
+            fprintf(stderr, "Warning: failed to load single SVG stream: %s\nTry extracting embedded PNGs instead.\n", err->message);
+            err = NULL;
+            if (!(f->handle = extract_base64((const guint8 *)copy, RSVG_HANDLE_FLAGS_NONE, NULL, &err))) {
+                fprintf(stderr, "Failed to load single SVG stream: %s\n", err->message);
+                g_free(f->framelabel);
+                g_free(copy);
+                return FALSE;
+            } 
         }
 
 #if LIBRSVG_CHECK_VERSION(2,46,0)
@@ -418,4 +630,36 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
     g_free(copy);
     seq->playing = (seq->count > 1);
     return seq->count > 0;
+}
+
+
+
+void svg_sequence_free(SvgSequence *seq) {
+    for (int i = 0; i < seq->count; i++) {
+        SvgFrame *f = &seq->frames[i];
+        if (f->handle) g_object_unref(f->handle);
+        if (f->surface) cairo_surface_destroy(f->surface);
+        if (f->path) g_free(f->path);
+        if (f->framelabel) g_free(f->framelabel);
+    }
+    seq->count = 0;
+
+    for (int i = 0; i < npng; i++) {
+        if (png_paths[i]) {
+            remove(png_paths[i]);
+            fprintf(stderr, "Removed temporary PNG file %s\n", png_paths[i]);
+            g_free(png_paths[i]);
+            png_paths[i] = NULL;
+        }
+    }
+    npng = 0;
+
+    for (int i = 0; i < nsvg; i++) {
+        if (tmp_svg_paths[i]) {
+            remove(tmp_svg_paths[i]);
+            fprintf(stderr, "Removed temporary SVG file %s\n", tmp_svg_paths[i]);
+            g_free(tmp_svg_paths[i]);
+            tmp_svg_paths[i] = NULL;
+        }
+    }
 }
