@@ -78,6 +78,7 @@
     \t\033[4mbool\033[0m\t\033[1mscalebar/colorbar=n\033[0m [y/n] if y, draw scalebar
     \t\033[4mfloat\033[0m\t\033[1mscreenheight/height=6.\033[0m figure height in inches (default 6)
     \t\033[4mfloat\033[0m\t\033[1mscreenwidth/width=8.\033[0m figure width in inches (default 8)
+    \t\033[4mstring\033[0m\t\033[1mtexfont=3\033[0m font family for TEX. choose one from: '0'/'dejavusans', '1'/'dejavuserig', '2'/'cm', '3'/'stix', '4'/'stixsans'  (default: '3')
     \t\033[4mstring\033[0m\t\033[1mtickfat/tickweight=normal\033[0m tick font weight: normal, bold, light, etc. (Can be numbers like 700)
     \t\033[4mfloat\033[0m\t\033[1mticksz/ticksize=10.\033[0m tick font size (default 12)
     \t\033[4mstring\033[0m\t\033[1mtitlefat/titleweight=bold\033[0m title font weight: normal, bold, light, etc. (Can be numbers like 700)
@@ -231,6 +232,7 @@ def main():
     fontsz = getfloat(par_dict, 'fontsz',
                       getfloat(par_dict, 'fontsize', 12.))
     font_family = par_dict.get('font', 'sans-serif')
+    tex_family = par_dict.get('texfont', '3')
     fontweight = par_dict.get('fontfat', par_dict.get('fontweight', 'normal'))
     labelsz = getfloat(par_dict, 'labelsz',
                        getfloat(par_dict, 'labelsize', fontsz)
@@ -460,11 +462,12 @@ def main():
         '-1': 'Sans-serif',
         '1': 'Sans-serif',
         '2': 'Nimbus Roman',
-        '3': 'Courier New',
+        '3': 'monospace',
         '4': 'Noto Sans CJK',
         '0': 'Arial',
         'Chinese': 'Noto Sans CJK SC',
     }
+
     if font_family in easy_font_name.keys():
         plt.rcParams['font.family'] = [easy_font_name.get(font_family, 'Sans-serif'), 'Sans-serif']
     elif os.path.exists(font_family):
@@ -472,6 +475,21 @@ def main():
         new_font = font_manager.FontProperties(fname=font_family)
         plt.rcParams['font.family'] = [new_font.get_name(), 'Sans-serif']
     else: plt.rcParams['font.family'] = [font_family, 'Sans-serif']
+
+    easy_tex_name = {
+        'dejavusans': 'dejavusans',
+        '0': 'dejavusans',
+        'dejavuserig': 'dejavuserig',
+        '1': 'dejavuserig',
+        'cm': 'cm',
+        '2': 'cm',
+        'stix': 'stix',
+        '3': 'stix',
+        'stixsans': 'stixsans',
+        '4': 'stixsans',
+    }
+
+    plt.rcParams['mathtext.fontset'] = easy_tex_name.get(tex_family, 'dejavusans')
     plt.rcParams['axes.unicode_minus'] = False
     plt.rcParams['svg.fonttype'] = 'none'
 
