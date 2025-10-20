@@ -145,6 +145,7 @@ from matplotlib import use as use_backend
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter, ScalarFormatter
 import sys, subprocess, os, re
 from textwrap import dedent
+import logging
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re, _get_stdname
@@ -158,7 +159,7 @@ DESCRIPTION = {
     "rsfgrey3": "display RSF data as a 3-D cube plot using matplotlib.",
 }
 __description__ = DESCRIPTION.get(__progname__, DESCRIPTION["rsfgrey"])
-__doc__ = __doc__.replace(DESCRIPTION["rsfgrey"],DESCRIPTION[__progname__])
+__doc__ = __doc__.replace(DESCRIPTION["rsfgrey"],__description__)
 __doc__ = __doc__.replace("author_label",__author__)
 __doc__ = __doc__.replace("email_label",__email__)
 __doc__ = __doc__.replace("github_label",__github__)
@@ -457,24 +458,26 @@ def main():
         check_font_weight(fontweight, labelfat, tickfat, titlefat, barlabelfat,
                           default=fontweight)
 
+    valid_font_families = ['DejaVu Sans']
     easy_font_name = {
-        'Times': 'Nimbus Roman', #Embrace open source
-        '-1': 'Sans-serif',
-        '1': 'Sans-serif',
-        '2': 'Nimbus Roman',
-        '3': 'monospace',
-        '4': 'Noto Sans CJK',
-        '0': 'Arial',
-        'Chinese': 'Noto Sans CJK SC',
+        'times': ['Nimbus Roman', 'Times New Roman'], 
+        '-1': ['Sans-serif'],
+        '1': ['Sans-serif'],
+        '2': ['Nimbus Roman', 'Times New Roman'] + valid_font_families, 
+        '3': ['monospace'] + valid_font_families,
+        '4': ['Noto Sans CJK',] + valid_font_families,
+        '0': ['Arial',] + valid_font_families,
+        'chinese': ['Noto Sans CJK', 'SimSun', 'SimHei', 'Microsoft Yahei'] + valid_font_families,
     }
 
-    if font_family in easy_font_name.keys():
-        plt.rcParams['font.family'] = [easy_font_name.get(font_family, 'Sans-serif'), 'Sans-serif']
+    if font_family.lower() in easy_font_name.keys():
+        plt.rcParams['font.family'] = easy_font_name.get(font_family, ['Sans-serif']) + ['Sans-serif']
     elif os.path.exists(font_family):
         font_manager.fontManager.addfont(font_family)
         new_font = font_manager.FontProperties(fname=font_family)
-        plt.rcParams['font.family'] = [new_font.get_name(), 'Sans-serif']
-    else: plt.rcParams['font.family'] = [font_family, 'Sans-serif']
+        plt.rcParams['font.family'] = [new_font.get_name()] + ['Sans-serif']
+    else: plt.rcParams['font.family'] = [font_family] + ['Sans-serif']
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
     easy_tex_name = {
         'dejavusans': 'dejavusans',

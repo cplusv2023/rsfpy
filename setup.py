@@ -22,6 +22,9 @@ class CustomInstall(install):
         subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
                                f"-o {target_dir}/svgviewer "
                                "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
+        
+        subprocess.check_call(" ".join(["cc", "-O3", "-fPIC", "-shared", "src/rsfpy/plot/utils.c",
+                               f"-o src/rsfpy/plot/librsfpy_utils.so"]), shell=True)
         super().run()
 
 class CustomDevelop(develop):
@@ -31,6 +34,8 @@ class CustomDevelop(develop):
         subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
                                f"-o {target_dir}/svgviewer "
                                "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
+        subprocess.check_call(" ".join(["cc", "-O3", "-fPIC", "-shared", "src/rsfpy/plot/utils.c",
+                               f"-o src/rsfpy/plot/librsfpy_utils.so"]), shell=True)
         super().run()
 
 version_ns = {}
@@ -77,4 +82,7 @@ setup(
         "install": CustomInstall,
         "develop": CustomDevelop,
     },
+    package_data={
+        "rsfpy": ["plot/librsfpy_utils.so"],
+        }
 )

@@ -149,21 +149,23 @@ class Rsfdata(np.ndarray):
         ]
 
         if func is np.squeeze:
-            # 处理 axis
+            arr = base_args[0]
             if len(base_args) > 1:
                 sq_axis = base_args[1]
                 if isinstance(sq_axis, int):
                     sq_axis = (sq_axis,)
+            elif arr.ndim > 1 and all(s==1 for s in arr.shape[1:]):
+                sq_axis = []
             else:
-                sq_axis = tuple(i for i, s in enumerate(base_args[0].shape) if s == 1)
+                sq_axis = tuple(i for i, s in enumerate(arr.shape) if s == 1)
 
-            # 更新 header
-            sq_axis = sorted(sq_axis)
-            for iax in sq_axis:
-                for idim in range(base_args[0].ndim+ len(sq_axis)):
-                    if idim > iax:
-                        for key in ('d', 'o', 'label', 'unit'):
-                            header_all[f'{key}{idim}'] = header_all.get(f'{key}{idim+1}', defaults.get(f'{key}{idim+1}', None))
+            for iax in sorted(sq_axis, reverse=True):
+                for idim in range(iax+1, arr.ndim):
+                    for key in ('d', 'o', 'label', 'unit'):
+                        header_all[f'{key}{idim}'] = header_all.get(
+                            f'{key}{idim+1}', defaults.get(f'{key}{idim+1}', None)
+                        )
+            
             res = np.squeeze(*base_args, **kwargs)
 
         else:
@@ -314,7 +316,7 @@ class Rsfdata(np.ndarray):
         """
         if isinstance(axis, (list, tuple, np.ndarray)):
             return [self.axis(ax) for ax in axis]
-        elif axis < self.ndim:
+        elif axis < 9:
             n = self.n(axis)
             o = self.o(axis)
             d = self.d(axis)
