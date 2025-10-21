@@ -1,17 +1,16 @@
 # setup.py
 import io, subprocess, os
-from setuptools import setup, find_packages
+import numpy
+from setuptools import setup, find_packages, Extension
 from setuptools.command.install import install
 from setuptools.command.develop import develop
 
-# 读取 requirements 文件
 with io.open("requirements.txt", encoding="utf-8") as f:
     install_requires = [
         line.strip() for line in f
         if line.strip() and not line.startswith("#")
     ]
 
-# 读取 README 作为 long_description
 with io.open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
@@ -22,9 +21,6 @@ class CustomInstall(install):
         subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
                                f"-o {target_dir}/svgviewer "
                                "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
-        
-        subprocess.check_call(" ".join(["cc", "-O3", "-fPIC", "-shared", "src/rsfpy/plot/utils.c",
-                               f"-o src/rsfpy/plot/librsfpy_utils.so"]), shell=True)
         super().run()
 
 class CustomDevelop(develop):
@@ -34,9 +30,9 @@ class CustomDevelop(develop):
         subprocess.check_call(" ".join(["cc", "src/rsfpy/tools/svgviewer.c", "src/rsfpy/tools/svgsequence.c",
                                f"-o {target_dir}/svgviewer "
                                "$(pkg-config --cflags --libs x11 cairo glib-2.0 librsvg-2.0)"]), shell=True)
-        subprocess.check_call(" ".join(["cc", "-O3", "-fPIC", "-shared", "src/rsfpy/plot/utils.c",
-                               f"-o src/rsfpy/plot/librsfpy_utils.so"]), shell=True)
         super().run()
+
+
 
 version_ns = {}
 here = os.path.abspath(os.path.dirname(__file__))
@@ -60,7 +56,7 @@ setup(
     package_dir={"": "src"},
     include_package_data=True,
     install_requires=install_requires,
-    extra_require={
+    extras_require={
         "rsfsvgpen": ["lxml"],
     },
     classifiers=[
@@ -82,7 +78,9 @@ setup(
         "install": CustomInstall,
         "develop": CustomDevelop,
     },
-    package_data={
-        "rsfpy": ["plot/librsfpy_utils.so"],
-        }
+    ext_modules= [Extension(
+        'rsfpy_utils',
+        sources=['src/rsfpy/plot/utils.c'],
+        include_dirs=[numpy.get_include()],
+    )],
 )

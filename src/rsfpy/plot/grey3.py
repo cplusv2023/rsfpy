@@ -320,9 +320,9 @@ def grey3flat(
     gattr.vlines.append(ax3.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol))
 
     tlabelpad = 0.01
-    gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=f"{axis1[frame1]:.3g}", ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
-    gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=f"{axis3[frame3]:.3g}", ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
-    gattr.ticklabels.append(ax3.text(x=frame2/nx, y=1+tlabelpad, s=f"{axis2[frame2]:.3g}", ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
+    gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=np.format_float_positional(axis1[frame1], trim='-'), ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
+    gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=np.format_float_positional(axis3[frame3], trim='-'), ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
+    gattr.ticklabels.append(ax3.text(x=frame2/nx, y=1+tlabelpad, s=np.format_float_positional(axis2[frame2], trim='-'), ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
 
     def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
         hline1 = gattr.hlines[0].get_segments()
@@ -365,11 +365,11 @@ def grey3flat(
         #              rotation=0, transform=ax3.transAxes))
 
         gattr.ticklabels[-3].set_position([1+tlabelpad, 1 - frame1/ny])
-        gattr.ticklabels[-3].set_text(f"{axis1[frame1]:.3g}")
+        gattr.ticklabels[-3].set_text(np.format_float_positional(axis1[frame1]))
         gattr.ticklabels[-2].set_position([frame3 / nz, 1 + tlabelpad])
-        gattr.ticklabels[-2].set_text(f"{axis3[frame3]:.3g}")
+        gattr.ticklabels[-2].set_text(np.format_float_positional(axis3[frame3]))
         gattr.ticklabels[-1].set_position([frame2 / nx, 1 + tlabelpad])
-        gattr.ticklabels[-1].set_text(f"{axis2[frame2]:.3g}")
+        gattr.ticklabels[-1].set_text(np.format_float_positional(axis2[frame2]))
 
     setattr(gattr, 'set_indicator_frame', _set_indicator_frame)
 
@@ -731,20 +731,20 @@ def grey3cube(
 
     # Indicating labels
     lab1 = str(axis2[frame2])
-    lab11 = "%.2f" % axis2[frame2]
+    lab11 = np.format_float_positional(axis2[frame2])
     lab1 = lab11 if len(lab11) < len(lab1) else lab1
     lab2 = str(axis1[frame1])
-    lab21 = "%.2f" % axis1[frame1]
+    lab21 = np.format_float_positional(axis1[frame1])
     lab2 = lab21 if len(lab21) < len(lab2) else lab2
     lab3 = str(axis3[frame3])
-    lab31 = "%.2f" % axis3[frame3]
+    lab31 = np.format_float_positional(axis3[frame3])
     lab3 = lab31 if len(lab31) < len(lab3) else lab3
-    gattr.ticklabels.append(axbase.text(l221, 1*hei_ax, "%s" % lab1, va='bottom',
+    gattr.ticklabels.append(axbase.text(l221, 1*hei_ax, lab1, va='bottom',
                 ha='center', color=lcol))
-    gattr.ticklabels.append(axbase.text(1, l31*hei_ax, "%s" % lab2, va='center',
+    gattr.ticklabels.append(axbase.text(1, l31*hei_ax, lab2, va='center',
                 ha='left', color=lcol, rotation=-90))
     gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
-                "%s" % lab3, va='top', ha='left', color=lcol))
+                lab3, va='top', ha='left', color=lcol))
 
     def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
         l11 = (amax1 - axis1[frame1]) / len1 * point1
