@@ -61,7 +61,6 @@ def grey(
     plt.Axes
         The axes object with the image plot.
     """
-    # Check dimensions
     data = np.squeeze(data)
     if data.ndim < 2:
         raise ValueError("Input data must be at least 2D.")
@@ -83,14 +82,12 @@ def grey(
     }
     params = {**defaults, **plot_params}
 
-    # ---- 1. Axes 创建 ----
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
 
     data = data if transp else data.T
-    # ---- 2. 数据属性获取 ----
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", None)
         d2 = d2 if d2 is not None else getattr(data, "d2", None)
@@ -105,7 +102,6 @@ def grey(
     if o1 is None: o1 = 0.
     if o2 is None: o2 = 0.
 
-    # ---- 3. extent 计算 ----
     ny, nx = data.shape
     if yreverse:
         params['origin'] = 'upper'
@@ -123,7 +119,6 @@ def grey(
     if min2 is None: min2 = o2
     if max2 is None: max2 = o2 + d2 * (nx-1)
 
-    # ---- 4. 计算 vmin / vmax ----
     vmin = params['vmin']
     vmax = params['vmax']
     clip = params['clip']
@@ -134,10 +129,8 @@ def grey(
     if bias is None:
         bias = 0
 
-    # 优先级 1: pclip
     if pclip is not None and (clip is None) and (vmin is None and vmax is None):
         if hasattr(data, "pclip"):
-            # Rsfarray 自带方法
             clip = data.pclip(pclip)
         else:
             clip = np.percentile(np.abs(data), pclip)
@@ -146,9 +139,6 @@ def grey(
         else:
             vmin, vmax = bias - clip, bias + clip
 
-
-
-    # 优先级 2: clip
     if clip is not None:
         clip = abs(clip)
         if allpos:
@@ -156,7 +146,6 @@ def grey(
         else:
             vmin, vmax = bias - clip, bias + clip
 
-    # 优先级 3: vmax/vmin 输入，但前面 clip/pclip 都没走时
     elif vmin is not None or vmax is not None:
         if vmin is None and vmax is not None:
             vmin = -vmax
@@ -164,26 +153,21 @@ def grey(
             vmax = -vmin
         if vmin > vmax:
             vmin, vmax = vmax, vmin
-        # clip/bias 未触发，不调整 bias
     
     if data.dtype == np.uint8:
         vmin, vmax = 0, 255
-    # 最终赋值
     imshow_kwargs = {k: v for k, v in params.items()
                      if k in ['cmap', 'origin', 'interpolation','aspect']}
     imshow_kwargs.update({'vmin': vmin, 'vmax': vmax})
 
-    # ---- 5. 绘制 ----
     im = ax.imshow(data, extent=extent, **imshow_kwargs)
 
-    # ---- 6. colorbar ----
     if colorbar:
         if cax is not None:
             fig.colorbar(im, cax=cax)
         else:
             fig.colorbar(im, ax=ax)
 
-    # ---- 7. 坐标轴标签 ----
     if label1:
         ax.set_ylabel(label1)
     if label2:

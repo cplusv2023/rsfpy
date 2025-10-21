@@ -68,8 +68,6 @@ typedef struct {
     cairo_surface_t *surface;
     double width, height;
     gboolean rendered;
-
-    // 新增：缓存生成时的缩放和窗口大小
     double cached_scale;
     int cached_win_w;
     int cached_win_h;

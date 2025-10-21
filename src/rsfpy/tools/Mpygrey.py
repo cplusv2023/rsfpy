@@ -1015,13 +1015,14 @@ def main():
     
 def check_font_weight(*args, default="normal"):
     """
-    检查并规范化 font-weight 参数，返回 Matplotlib 可识别的值列表。
-    - 支持关键字: ultralight, light, normal, regular, book, medium,
-                 semibold, demibold, bold, heavy, black
-    - 支持数值/字符串: 100–900
-    - 支持任意整数/浮点数，会向上取整到最近的 100，并限制在 100–900
-    - 无效输入会回退到 default
+    Validate and normalize the font-weight parameter, returning a list of values recognized by Matplotlib.
+    - Supported keywords: ultralight, light, normal, regular, book, medium,
+                        semibold, demibold, bold, heavy, black
+    - Supports numeric values or strings: 100-900
+    - Arbitrary integers or floats will be rounded up to the nearest hundred and clamped to 100-900
+    - Invalid inputs will fall back to the default
     """
+
     mapping = {
         100: "ultralight",
         200: "light",
@@ -1033,10 +1034,9 @@ def check_font_weight(*args, default="normal"):
         800: "heavy",
         900: "black",
     }
-    valid_keywords = set(mapping.values()) | {"regular", "demibold"}  # 兼容别名
+    valid_keywords = set(mapping.values()) | {"regular", "demibold"} 
     fats = []
 
-    # 处理默认值
     if default not in valid_keywords:
         try:
             num = float(default)
@@ -1048,7 +1048,6 @@ def check_font_weight(*args, default="normal"):
         except Exception:
             default = "normal"
 
-    # 处理输入参数
     for fat in args:
         if isinstance(fat, str):
             v = fat.lower()
@@ -1067,7 +1066,6 @@ def check_font_weight(*args, default="normal"):
                 fats.append(default)
                 continue
 
-        # 数值处理：向上取整到最近的 100
         if num <= 0:
             fats.append(default)
             continue

@@ -123,13 +123,11 @@ static PyObject* py_interp_cross(PyObject* self, PyObject* args) {
 }
 
 
-// 方法表
 static PyMethodDef InterpMethods[] = {
     {"interp_cross", py_interp_cross, METH_VARARGS, "Interpolation crossing"},
     {NULL, NULL, 0, NULL}
 };
 
-// 模块定义
 static struct PyModuleDef interpmodule = {
     PyModuleDef_HEAD_INIT,
     "rsfpy_utils",
@@ -138,7 +136,6 @@ static struct PyModuleDef interpmodule = {
     InterpMethods
 };
 
-// 初始化
 PyMODINIT_FUNC PyInit_rsfpy_utils(void) {
     import_array();
     return PyModule_Create(&interpmodule);

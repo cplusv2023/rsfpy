@@ -178,7 +178,6 @@ def movie(inputs, fontscale=1.0, fontfamily=None, fontweight=None):
     parser = etree.XMLParser(huge_tree=True)
 
     for item in inputs:
-        # 解析 SVG
         if hasattr(item, "read"):
             svg_tree = etree.parse(item, parser=parser)
         elif isinstance(item, str):
@@ -601,39 +600,26 @@ def sf_error(*args, **kwargs):
     sys.exit(1)
 
 def allinpx(s: str) -> float:
-    """
-    将带单位的长度字符串转换为像素(px)数值。
-    支持: px, pt, pc, in, cm, mm, em, ex, % (部分相对单位需上下文)
-    """
     s = s.strip().lower()
     if s.endswith('px'):
         return float(s.replace('px', ''))
     elif s.endswith('pt'):
-        # 1pt = 1/72 in, 1in = 96px → 1pt = 96/72 = 1.333...px
         return float(s.replace('pt', '')) * 96.0 / 72.0
     elif s.endswith('pc'):
-        # 1pc = 12pt = 16px
         return float(s.replace('pc', '')) * 16.0
     elif s.endswith('in'):
-        # 1in = 96px
         return float(s.replace('in', '')) * 96.0
     elif s.endswith('cm'):
-        # 1in = 2.54cm → 1cm = 96/2.54 px
         return float(s.replace('cm', '')) * 96.0 / 2.54
     elif s.endswith('mm'):
-        # 1cm = 10mm
         return float(s.replace('mm', '')) * 96.0 / 25.4
     elif s.endswith('em'):
-        # 1em = 当前字体大小 (假设16px)
         return float(s.replace('em', '')) * 16.0
     elif s.endswith('ex'):
-        # 1ex ≈ 0.5em (粗略估计)
         return float(s.replace('ex', '')) * 8.0
     elif s.endswith('%'):
-        # 百分比需要上下文，这里先返回原始数值
-        return float(s.replace('%', ''))  # 需结合父元素宽度解释
+        return float(s.replace('%', '')) 
     else:
-        # 默认当作 px
         return float(s)
 
 
@@ -642,7 +628,6 @@ def no_pixel_unit(s: str) -> str:
     去掉长度字符串里的单位，只保留数值部分（含正负号、小数点、科学计数法 e/E）。
     """
     s = s.strip()
-    # 用正则保留数字、正负号、小数点、e/E
     cleaned = re.sub(r'[^0-9eE\+\-\.]', '', s)
     return float(cleaned)
 

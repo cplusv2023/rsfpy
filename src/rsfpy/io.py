@@ -110,7 +110,6 @@ def read_rsf(file, order='F'):
         }
         dtype = dtype_map[fmt_B]
 
-        # 读取数据
         if fmt_A == "ascii":
             ascii_text = data_file.read().decode("utf-8", errors="ignore").strip()
             parts = ascii_text.split()
@@ -200,7 +199,6 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     dtype = arr.dtype.name
     dtype = ''.join([c for c in dtype if c.isalpha()])
     outheader.update({"data_format": f"{form}_{dtype}"})
-    # cast outheader to string
     header_str = ""
     for key, value in outheader.items():
         if isinstance(value, str):
@@ -209,7 +207,6 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
         else:
             header_str += f"{key}={str(value)}\n"
 
-    # Write header
     try:
         uname = os.getlogin()
         hostname = socket.gethostname()
@@ -222,7 +219,6 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     file_fp.write(header_str.encode('utf-8') + b"\n\n")
     if out is None or out == 'stdout': file_fp.write(RSFHSPLITER)
 
-    # Write data
     if form == "ascii":
         np.savetxt(out_fp, arr, fmt=fmt)
     elif form == "native":

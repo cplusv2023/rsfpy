@@ -5,49 +5,6 @@ from matplotlib.collections import LineCollection, PolyCollection
 import ctypes, os, warnings
 from rsfpy_utils import interp_cross
 
-# here = os.path.dirname(__file__)
-# _lib = ctypes.CDLL(f"{here}/librsfpy_utils.so")
-
-# _lib.interp_cross.argtypes = [
-#     ctypes.POINTER(ctypes.c_float), 
-#     ctypes.POINTER(ctypes.c_float),
-#     ctypes.c_int,
-#     ctypes.c_int,    
-#     ctypes.POINTER(ctypes.c_float), 
-#     ctypes.POINTER(ctypes.c_float)
-# ]
-# _lib.interp_cross.restype = ctypes.c_int
-
-# def interp_cross(X: np.ndarray, Y: np.ndarray):
-    
-#     if X.dtype != np.float32:
-#         X = X.astype(np.float32)
-#     if Y.dtype != np.float32:
-#         Y = Y.astype(np.float32)
-
-#     n, m = Y.shape
-
-#     newX = np.zeros(2*n*m, dtype=np.float32)
-#     newY = np.zeros(2*n*m, dtype=np.float32)
-
-#     YY = np.ascontiguousarray(Y.T, dtype=np.float32) 
-
-#     count = _lib.interp_cross(
-#         X.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-#         YY.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-#         n,
-#         m,
-#         newX.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-#         newY.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-#     )
-
-#     newX = newX.reshape((m, 2*n)).T
-#     newY = newY.reshape((m, 2*n)).T
-#     return newX[:count], newY[:count, :]
-
-
-
-
 def wiggle(
     data: Union[np.ndarray, "Rsfarray"],
     *,
@@ -195,7 +152,6 @@ def wiggle(
     wiggles = sel_xpos[None, :] + sel_data * scale
     if pcolor != 'none':
         newtp, pwiggles, maxlen = interp_cross(t, sel_data)
-        import sys
         newtp = newtp[:maxlen, :]
         pwiggles = pwiggles[:maxlen, :]
         pwiggles = sel_xpos[None, :] + pwiggles * scale

@@ -45,3 +45,20 @@ Finally decided to add this changelog.
 - Difficulty reading oversized SVG files with **svgviewer** (librsvg2).
 - Low efficiency in movie mode for **rsfgrey** and **rsfgrey3**. Use *maxframe=* to control the maximum number of frames.
 - Stretched subfigures in **svgviewer** may sometimes look odd. Try adjusting the figure height/width parameters when drawing.
+
+## Version 0.1.3 - 2025-10-21
+### Added
+- Support for TeX font rendering in text labels for **rsfgraph**, **rsfgrey**, **rsfwiggle**, and **rsfgrey3**.
+- C API integration to accelerate **rsfwiggle** plot rendering.
+
+
+
+### Fixed
+- Improved SCons compatibility for **m8r**; resolved potential issues with the *PATH* environment variable.
+- Corrected rsfgraph rendering bug where curves always appeared black instead of following the color cycle.
+- Fixed SVG parsing failure in **svgviewer** when encountering oversized base64-encoded images (librsvg2-related).
+
+### Knwon Issues
+- Low efficiency in movie mode for **rsfgrey** and **rsfgrey3**. Use *maxframe=* to control the maximum number of frames.
+- Stretched subfigures in **svgviewer** may sometimes look odd. Try adjusting the figure height/width parameters when drawing.
+- Reduced *X11* rendering performance in **svgviewer** during image dragging and zooming, especially over *SSH tunnels*.

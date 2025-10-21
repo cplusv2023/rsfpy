@@ -31,39 +31,33 @@ typedef struct {
 
 
 typedef struct {
+    /* --- Window configuration --- */
     Display *dpy;
     int screen;
     Window win;
     cairo_surface_t *surface;
     cairo_t *cr;
     int win_w, win_h;
+    /* --- Elements --- */
     int toolbar_h;
     int hintbar_h;
-
     Button buttons[MAX_BUTTONS];
     int num_buttons;
-
+    /* --- Data structure --- */
     SvgSequence sequence;
+    /* --- Behaviors --- */
     gboolean resize_pending;
     struct timespec last_resize_time;
     int resize_w, resize_h;
-
     double pan_x, pan_y;
     int drag_start_x, drag_start_y;
     gboolean dragging;
     struct timespec last_drag_time;
-
     double zoom_scale;
-
     gboolean drag_mode;
     gboolean zoom_mode;
-
     struct timespec last_zoom_time;
     gboolean zooming;
-
-    
-
-
 } App;
 
 
@@ -161,7 +155,7 @@ static char *but_labels[] = {
     "</svg>"
 };
 
-
+/* Maybe make copy works */
 /* static unsigned char *clipboard_png_data;
 static size_t clipboard_png_size;
 static cairo_status_t
@@ -248,6 +242,7 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR);
+        /* More is good */
         RsvgHandle *handle = rsvg_handle_new_from_data(
             (const guint8 *)svg_buf,
             strlen(svg_buf),
