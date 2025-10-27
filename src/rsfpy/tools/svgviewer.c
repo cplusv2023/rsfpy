@@ -365,10 +365,10 @@ void draw_hintbar(App *app, int hintbar_h) {
                  app->sequence.frames[app->sequence.current_index].path);
     }
 
-    int padding = 10;
+    int padding = DEFAULT_FONT_HEIGHT;
     cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
     cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(app->cr, 12);
+    cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT * app->hintbar_h / MIN_BAR_HEIGHT);
 
     cairo_text_extents_t ext;
     cairo_text_extents(app->cr, hint, &ext);
@@ -454,12 +454,12 @@ void draw_toolbar(App *app) {
 
     cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
     cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT);
+    cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT * app->toolbar_h / MIN_BAR_HEIGHT);
 
     cairo_text_extents_t ext;
     char test_text[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     cairo_text_extents(app->cr, test_text, &ext);
-    double text_y = app->toolbar_h/ 2 ;
+    double text_y = app->toolbar_h * 0.75 ;
     cairo_text_extents(app->cr, fps_text, &ext);
 
     double text_x = app->win_w - ext.width - padding;
@@ -779,7 +779,7 @@ static void run_loop(App *app) {
                 app->win_h = app->resize_h;
                 create_cairo(app);
                 adjust_bar(app);
-                app->hintbar_h = 32;
+                // app->hintbar_h = MIN_BAR_HEIGHT * app->win_h / DEFAULT_HEIGHT;
                 draw_all(app);
                 // copy_cairo_region_to_clipboard(app, app->dpy, app->win, app->sequence.frames[app->sequence.current_index].surface);
                 /* Copy test */
@@ -791,7 +791,7 @@ static void run_loop(App *app) {
                 app->win_h = new_h;
                 create_cairo(app);
                 adjust_bar(app);
-                app->hintbar_h = 32;
+                // app->hintbar_h = MIN_BAR_HEIGHT * app->win_h / DEFAULT_HEIGHT;
                 draw_all(app);
             }
             app->resize_pending = FALSE;
