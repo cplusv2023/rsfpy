@@ -67,7 +67,8 @@ svgviewer < rows.svg cols.svg
 ```
 You can also use the python API.
 
-![svgviewer](./img/rows.png)
+
+![svgviewer-wavefield snapshot](https://raw.githubusercontent.com/cplusv2023/something/046a5760218bfccde34c9e0231e776eaa9be1e2c/sources/wfl_demo.gif)
 ![svgviewer](./img/cols.png)
 ### Python API
 #### import 
