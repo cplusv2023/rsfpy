@@ -23,7 +23,7 @@
 #define MIN_ZOOM_SCALE 0.01
 
 /* Playback */
-#define MAX_FPS 20
+#define MAX_FPS 50
 #define MIN_FPS 1
 
 #define RUNMSG "Running"
@@ -50,7 +50,7 @@
 
 #define WAIT_TIME_MS 100
 
-#define MAX_FRAMES 200
+#define MAX_FRAMES 1000
 #define MAX_TMP_FILES 1000
 
 #define PXPT_TRANS 1.066667f /* 96/90 */

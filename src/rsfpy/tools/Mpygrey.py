@@ -143,13 +143,14 @@ import matplotlib.font_manager as font_manager
 import numpy as np
 from matplotlib import use as use_backend
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter, ScalarFormatter
-import sys, subprocess, os, re
+import sys, subprocess, os, re, io
 from textwrap import dedent
 import logging
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re, _get_stdname
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME
+from rsfpy.plot import prepare_svg_template, replace_png, arr2png, extract_ax_info, set_text, set_line
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME
 
 __progname__ = os.path.basename(sys.argv[0])
 DESCRIPTION = {
@@ -274,8 +275,8 @@ def main():
     barlabelsz = getfloat(par_dict, 'barlabelsz',
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
-    movie = par_dict.get('movie', 'n').endswith('y')
-    maxframe = int(getfloat(par_dict, 'maxframe', 30))
+    movie = par_dict.get('movie', 'y').lower().startswith('y', 'ok', '3')
+    maxframe = int(getfloat(par_dict, 'maxframe', 300))
 
     # Check plot type
     plottype = par_dict.get('plottype', 'grey').lower()
@@ -432,7 +433,9 @@ def main():
     if datatype == np.complex64 and plottype!= 'graph':
         sf_warning(f"Got {datatype}, converting to float32 using abs.")
         data = Rsfarray(np.abs(data), header=data.header)
-
+    
+    outbuf = io.StringIO() if pformat == 'svg' else sys.stdout.buffer
+    svgcontent = []
 
 
     # Verbose Message
@@ -508,9 +511,9 @@ def main():
     frame_suffix = ""
     if pformat.lower() != 'svg':
         movie = False
+        sf_warning(f"Movie mode only supports svg output, got format={pformat}.")
     elif movie:
         databin = data
-        dpi = getfloat(par_dict, 'dpi', 50)
 
         # determine number of frames
         if plottype == 'grey':
@@ -525,8 +528,7 @@ def main():
             if nframes == 1:
                 movie = False
         if plottype == 'grey3':
-            if movie == 0: movie = False
-            elif movie < 4:
+            if movie < 4 and movie > 0:
                 databin = data.reshape((data.n1, data.n2, data.n3, -1))
                 nframes = databin.n(movie - 1)
                 if nframes > maxframe:
@@ -537,6 +539,8 @@ def main():
                 frame_suffix = f" ({databin.unit(movie-1)})" if databin.unit(movie-1) is not None else ""
                 if nframes == 1:
                     movie = False
+            else:
+                movie = False
 
     if not movie: maxframe = 1
 
@@ -545,7 +549,9 @@ def main():
     cbar = None
     for iframe in range(min(nframes, maxframe)):
         if plottype == 'grey':
-            if movie: data = databin.window(n3=1, f3=iframe*frame_step)
+            if movie: 
+                data = databin.window(n3=1, f3=iframe*frame_step, copy=False)
+                sf_warning(f"{data.shape}")
 
             if iframe==0:
                 data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
@@ -553,17 +559,40 @@ def main():
                     min1=min1, max1=max1, min2=min2, max2=max2,
                     colorbar=False, show=False, interpolation="none")
             else:
-                ax.images[0].set_data(data)
-                newbar = bar_arrays.window(n3=1, f3=iframe*frame_step)
-                new_min_max_vals = np.frombuffer(newbar[:8].tobytes(), dtype=np.float32)
-                new_min, new_max = tuple(new_min_max_vals)
-                cbar.ax.images[0].set_extent([0, 1, new_min, new_max])
-                cbar.ax.yaxis.set_major_formatter(
-                    FormatStrFormatter(formatbar) if formatbar is not None
-                    else ScalarFormatter())
-                cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=nticbar))
+                if movie:
+                    sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                    vmin, vmax = ax.images[0].get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
+                    splitter = (__SVG_SPLITTER[:-3] +
+                            f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                            f"{frame_axis[(iframe) * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
+                            __SVG_SPLITTER[-3:])
+                    old_splitter = (__SVG_SPLITTER[:-3] +
+                            f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                            f"{frame_axis[(iframe-1) * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
+                            __SVG_SPLITTER[-3:])
+                    svgcontent[0] = svgcontent[0].replace(old_splitter, splitter)
+                    svgcontent = redraw_svg_movie(data, outbuf, svgcontent, clip=clip, pclip=pclip, bias=bias,
+                                     allpos=allpos, color=color,
+                                     min1=min1, max1=max1, min2=min2, max2=max2,
+                                     dpi=dpi,plottype='grey')
+                    sys.stdout.write(outbuf.getvalue())
+                    # sys.stdout.flush()
+                    continue
+                    
+                if scalebar:
+                    ax.images[0].set_data(data)
+                    newbar = bar_arrays.window(n3=1, f3=iframe*frame_step)
+                    new_min_max_vals = np.frombuffer(newbar[:8].tobytes(), dtype=np.float32)
+                    new_min, new_max = tuple(new_min_max_vals)
+                    cbar.ax.images[0].set_extent([0, 1, new_min, new_max])
+                    cbar.ax.yaxis.set_major_formatter(
+                        FormatStrFormatter(formatbar) if formatbar is not None
+                        else ScalarFormatter())
+                    cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=nticbar))
 
-                cbar.ax.images[0].set_data(255 - newbar[8:, np.newaxis])
+                    cbar.ax.images[0].set_data(255 - newbar[8:, np.newaxis])
 
                 sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
                 # save or show figure
@@ -688,7 +717,7 @@ def main():
                                    format1=format1, format2=format2, format3=format3,
                            flat=isflat, show=False)
                 gattr.set_title(title, fontsize=titlesz, fontweight=titlefat, color=frame_color)
-                gattr.title_text.set_gid(f"{__BASE_AX_NAME}_title")
+                if gattr.title_text is not None: gattr.title_text.set_gid(f"{__BASE_AX_NAME}_title")
                 gattr.set_lines(color=frame_color,width=frame_width)
                 gattr.set_spines(color=frame_color,width=frame_width)
                 gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
@@ -729,9 +758,27 @@ def main():
                         iblabel.set_fontweight(tickfat)
                         iblabel.set_fontsize(ticksz)
             else:
-                if movie == 1:gattr.ax2.images[0].set_data(data.window(n1=1, f1=frame1))
-                if movie == 2:gattr.ax3.images[0].set_data(data.window(n2=1, f2=frame2))
-                if movie == 3:gattr.ax1.images[0].set_data(data.window(n3=1, f3=frame3))
+                sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                vmin, vmax = gattr.im1.get_clim()
+                bias = (vmin + vmax) / 2.0
+                clip = vmax - bias
+                splitter = (__SVG_SPLITTER[:-3] +
+                            f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                            f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
+                            __SVG_SPLITTER[-3:])
+                old_splitter = (__SVG_SPLITTER[:-3] +
+                        f"framelabel=\"{frame_prefix}{frame_suffix}: " +
+                        f"{frame_axis[(iframe-1) * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
+                        __SVG_SPLITTER[-3:])
+                svgcontent[0] = svgcontent[0].replace(old_splitter, splitter)
+                svgcontent = redraw_svg_movie(arr=data, outbuf=outbuf, svgcontent=svgcontent,
+                                 plottype='grey3', frame1=frame1, frame2=frame2, frame3=frame3,
+                                 point1=point1, point2=point2, isflat=isflat, movie=movie,
+                                 clip=clip, pclip=pclip, bias=bias,
+                                 allpos=allpos, color=color)
+                sys.stdout.write(outbuf.getvalue())
+                sys.stdout.flush()
+                continue
                 gattr.set_indicator_frame(gattr, frame1, frame2, frame3)
                 fig.canvas.draw_idle()
 
@@ -869,7 +916,7 @@ def main():
                                     fontsize=titlesz,
                                     fontweight=titlefat,
                                     color=frame_color)
-                title_text.set_gid(f"{__BASE_AX_NAME}_title")
+                if title_text is not None: title_text.set_gid(f"{__BASE_AX_NAME}_title")
             if label1loc in ['left', 'right']:
                 ax.yaxis.set_label_position(label1loc)
             else:
@@ -997,22 +1044,124 @@ def main():
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
                             f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
                             __SVG_SPLITTER[-3:])
-                sys.stdout.write(f"\n{splitter}\n")
+                outbuf.write(f"\n{splitter}\n")
+                outbuf.flush()
+                fig.savefig(outbuf, bbox_inches='tight', format=pformat, dpi=dpi,
+                            transparent=None)
+                if plottype == 'grey3':
+                    vmin, vmax = gattr.im1.get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
+                    svgcontent = redraw_svg_movie(data, outbuf, svgcontent, frame1=frame1, frame2=frame2, frame3=frame3,
+                                     point1=point1, point2=point2, isflat=isflat, color=color, clip=clip,
+                                     allpos=allpos, pclip=pclip, bias=bias, dpi=dpi, movie=movie, plottype=plottype)
+                elif plottype == 'grey':
+                    vmin, vmax = ax.images[0].get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
+                    svgcontent = redraw_svg_movie(data, outbuf, svgcontent, clip=clip, pclip=pclip, bias=bias,
+                                     allpos=allpos, color=color,
+                                     min1=min1, max1=max1, min2=min2, max2=max2,
+                                     dpi=dpi,plottype='grey')
+
+                sys.stdout.write(outbuf.getvalue())
                 sys.stdout.flush()
-            fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
-                        transparent=None)
+            else:
+                fig.savefig(sys.stdout.buffer, bbox_inches='tight', format=pformat, dpi=dpi,
+                            transparent=None)
             sys.stdout.flush()
         else:
-            if movie: plt.pause(0.01)
-            else: plt.show()
-    if not sys.stdout.isatty():
-        sys.stdout.buffer.close()
-    else:
-        plt.show()
+            sf_warning('No out, set movie=n and show figure.')
+            plt.show()
+            break
 
     plt.close(fig)
     sys.exit(0)
     
+def redraw_svg_movie(arr, outbuf, svgcontent, frame1=0, frame2=0, frame3=0,
+                     point1=0, point2=0, isflat=False, color='gray', clip=None,
+                     allpos=False, pclip=None, bias=0.0, dpi=50, movie=3, plottype='grey3',
+                     min1=None, max1=None, min2=None, max2=None):
+                     
+    outbuf.seek(0)
+    if plottype == 'grey3':
+        sf_warning(f"movie={movie}, frame1={frame1}, frame2={frame2}, frame3={frame3}")
+        if movie == 1:newpng = arr.window(n1=1, f1=frame1, copy=False).T
+        if movie == 2:newpng = arr.window(n2=1, f2=frame2, copy=False)[::-1,:]
+        if movie == 3:newpng = arr.window(n3=1, f3=frame3, copy=False)[::-1,:]
+        if movie in (1,2,3):
+            newpng = arr2png(newpng, clip=clip, pclip=pclip, bias=bias, allpos=allpos, cmap=color,
+                            dpi=dpi)
+            indexs = [2, 1, 0] if isflat else [1, 2, 0]
+            if not svgcontent: svgcontent = prepare_svg_template(outbuf.getvalue(),
+                                                                indexs[movie -1])
+
+            # Find indicator line and label
+            if not hasattr(redraw_svg_movie, "axinfo1"):
+                axinfo1 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX1_NAME.split('%')[0])
+                axinfo2 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX2_NAME.split('%')[0])
+                axinfo3 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX3_NAME.split('%')[0])
+            if axinfo1 is not None:
+                ax1_x0, ax1_x1, ax1_y0, ax1_y1 = axinfo1.get("data_range")
+                ax1_xx0, ax1_xx1, ax1_yy0, ax1_yy1 = axinfo1.get("svg_rect")
+
+            if axinfo2 is not None:
+                ax2_x0, ax2_x1, ax2_y0, ax2_y1 = axinfo2.get("data_range")
+                ax2_xx0, ax2_xx1, ax2_yy0, ax2_yy1 = axinfo2.get("svg_rect")
+            if axinfo3 is not None:
+                ax3_x0, ax3_x1, ax3_y0, ax3_y1 = axinfo3.get("data_range")
+                ax3_xx0, ax3_xx1, ax3_yy0, ax3_yy1 = axinfo3.get("svg_rect")
+            if axinfo1 is None or axinfo2 is None or axinfo3 is None:
+                new_contents = svgcontent[:2]
+            elif movie == 1:
+                indicator_y_val = arr.axis1[frame1]
+                indicator_y_pos = ax1_yy0 + (indicator_y_val - ax1_y0) / (ax1_y1 - ax1_y0) * (ax1_yy1 - ax1_yy0)
+                cords1 = [None, None, indicator_y_pos, indicator_y_pos]
+                cords2 = [None, None, indicator_y_pos, indicator_y_pos + (ax2_yy0 - ax1_yy0)]
+                new_contents = set_text(__FRAME1_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis1[frame1], trim='-', precision=6),y0=indicator_y_pos +  (ax2_yy0 - ax1_yy0))
+                find_line_1 = set_line(__AX1_HLINE_NAME, __AX2_HLINE_NAME)
+                new_contents = find_line_1(new_contents, cords1=cords1, cords2=cords2)
+            elif movie == 2:
+                indicator_x_val = arr.axis2[frame2]
+                indicator_x_pos = ax1_xx0 + (indicator_x_val - ax1_x0) / (ax1_x1 - ax1_x0) * (ax1_xx1 - ax1_xx0)
+                cords1 = [indicator_x_pos, indicator_x_pos, None, None]
+                cords2 = [indicator_x_pos, indicator_x_pos + (ax3_xx1 - ax1_xx1), None, None]
+                new_contents = set_text(__FRAME2_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis2[frame2], trim='-', precision=6), x0=indicator_x_pos + (ax3_xx1 - ax1_xx1))
+                find_line_2 = set_line(__AX1_VLINE_NAME, __AX3_VLINE_NAME)
+                new_contents = find_line_2(new_contents, cords1=cords1, cords2=cords2)
+            elif movie == 3:
+                indicator_x_val = arr.axis3[frame3]
+                indicator_x_pos = ax2_xx0 + (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax2_xx1 - ax2_xx0)
+                indicator_y_pos = ax1_yy0 - (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax1_yy0 - ax2_yy0) 
+                cords1 = [indicator_x_pos, indicator_x_pos, ax2_yy1 - ax1_yy0 + indicator_y_pos, indicator_y_pos]
+                if not isflat: 
+                    cords2 = [ax1_xx0 + (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax2_xx1 - ax2_xx0), ax3_xx1, indicator_y_pos, indicator_y_pos]
+                    new_contents = set_text(__FRAME3_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis3[frame3], trim='-', precision=6), x0=indicator_x_pos, y0=(ax2_yy1-ax1_yy0+indicator_y_pos)*1.025)
+                else: 
+                    cords2 = [ax3_xx1, ax3_xx0, ax1_yy0 - (indicator_x_val - ax3_y0)/ (ax3_y1 - ax3_y0) * (ax3_yy1 - ax3_yy0), 
+                              ax1_yy0 - (indicator_x_val - ax3_y0)/ (ax3_y1 - ax3_y0) * (ax3_yy1 - ax3_yy0)]
+                    new_contents = set_text(__FRAME3_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis3[frame3], trim='-', precision=6), x0=indicator_x_pos, y0=ax1_yy0 * 0.95)
+                find_line_3 = set_line(__AX2_VLINE_NAME, __AX3_HLINE_NAME)
+                new_contents = find_line_3(new_contents, cords1=cords1, cords2=cords2)
+
+            outbuf.seek(0)
+            outbuf.truncate(0)
+            outbuf.write(replace_png(*new_contents[:2], svgcontent[2], new_b64=newpng, shear=not isflat and (movie in (1,2)),
+                                    point1=point1, point2=point2, which='x' if movie==1 else 'y'))
+
+
+    elif plottype == 'grey':
+        newpng = arr2png(arr, clip=clip, pclip=pclip, bias=bias, allpos=allpos, cmap=color,
+                                     min1=min1, max1=max1, min2=min2, max2=max2,
+                                     cords1=arr.axis1, cords2=arr.axis2,
+                                     dpi=dpi)
+        if not svgcontent: svgcontent = prepare_svg_template(outbuf.getvalue())
+        outbuf.seek(0)
+        outbuf.truncate(0)
+        outbuf.write(replace_png(*svgcontent[:3], new_b64=newpng))
+    return list(svgcontent)
+
+
 def check_font_weight(*args, default="normal"):
     """
     Validate and normalize the font-weight parameter, returning a list of values recognized by Matplotlib.

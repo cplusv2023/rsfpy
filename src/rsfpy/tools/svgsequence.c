@@ -189,7 +189,7 @@ RsvgHandle *extract_base64(const guint8 *svg_content,
         return NULL;
     }
 
-    g_string_free(out, FALSE);
+    g_string_free(out, TRUE);
 
     GFile *gfile = g_file_new_for_path(svg_filename);
     RsvgHandle *handle = rsvg_handle_new_from_gfile_sync(
@@ -243,7 +243,7 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
          **segments, *segment;
 
     seq->current_index = seq->count;
-    seq->fps = 4;
+    seq->fps = 12;
     for (int i = 0; i < num && seq->count < MAX_FRAMES; i++) {
         path = paths[i];
         err = NULL;
@@ -526,7 +526,7 @@ void svg_sequence_advance(SvgSequence *seq) {
 gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_t len) {
     seq->count = 0;
     seq->current_index = 0;
-    seq->fps = 4;
+    seq->fps = 12;
     seq->playing = TRUE;
 
     char *copy = g_strndup(data, len);

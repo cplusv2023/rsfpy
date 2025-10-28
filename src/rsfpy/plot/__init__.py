@@ -22,5 +22,6 @@
 from .grey import grey
 from .grey3 import grey3, grey3cube, grey3flat
 from .wiggle import wiggle
+from .png import arr2png, prepare_svg_template, replace_png, extract_ax_info, set_line, set_text
 
-__all__ = ["grey", "wiggle", "grey3", "grey3cube", "grey3flat"]
+__all__ = ["grey", "wiggle", "grey3", "grey3cube", "grey3flat", "arr2png", "prepare_svg_template", "replace_png", "extract_ax_info", "set_line", "set_text"]

@@ -485,7 +485,7 @@ class Rsfdata(np.ndarray):
         """
         return self.transpose()
     
-    def window(self, cmd=None, squeeze=True, **kwargs):
+    def window(self, cmd=None, squeeze=True, copy=False, **kwargs):
         """
         Apply simple windowing with only n#, j#, f# parameters.
 
@@ -544,7 +544,15 @@ class Rsfdata(np.ndarray):
             if f >= self.n(ax): f= self.n(ax) - 1
             slices = np.arange(f, f + n * j, j, dtype=int)
             slices = slices[np.where((slices >= 0) & (slices < self.n(ax)))]
-            new_data = np.take(new_data, slices, axis=ax)
+            if not copy:
+                istart = slices[0]
+                istep = slices[1] - slices[0] if len(slices) > 1 else 1
+                iend = slices[-1] + istep
+                slicer = [slice(None)] * new_data.ndim
+                slicer[ax] = slice(istart, iend, istep)
+                new_data = new_data[tuple(slicer)]
+            else:
+                new_data = np.take(new_data, slices, axis=ax)
 
             new_meta[f'n{ax+1}'] = len(slices)
             new_meta[f'o{ax+1}'] = f * self.d(ax) + self.o(ax)
