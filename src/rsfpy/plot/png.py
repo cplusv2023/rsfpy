@@ -232,145 +232,152 @@ def extract_ax_info(svg_str, prefix=__AX1_NAME.split("%")[0]):
 
 
 
-def set_line(line_prefix):
-    """
-    返回一个闭包函数 set_line(lines, x0, x1, y0, y1)，
-    第一次调用时会在 lines 中查找目标行并缓存 prefix/suffix，
-    后续调用直接替换，不再查找。
-    x0, x1, y0, y1 可以为 None，表示保留原值。
-    """
+def set_line(line_prefix1, line_prefix2):
     cache = {}
 
-    def set_line_inner(lines, x0=None, x1=None, y0=None, y1=None):
+    def set_line_inner(lines, cords1, cords2):
         nonlocal cache
-        if "index" not in cache:
+        if "index1" not in cache:
             for i, line in enumerate(lines):
-                if f'id="{line_prefix}"' in line:
-                    # 捕获 prefix_all, d_content, suffix
+                if f'id="{line_prefix1}"' in line:
                     pattern = re.compile(
-                        r'^(.*?<g\s+id="' + re.escape(line_prefix) +
+                        r'^(.*?<g\s+id="' + re.escape(line_prefix1) +
                         r'".*?<path[^>]*d=")([^"]*)(".*)$',
                         re.MULTILINE | re.DOTALL
                     )
                     m = pattern.search(line)
                     if not m:
-                        raise ValueError(f"未找到 id={line_prefix} 的 <path>")
+                        raise ValueError(f"Cannot find <path> with id={line_prefix1}")
                     prefix_all, d_content, suffix = m.groups()
 
-                    # 解析原始坐标
                     tokens = d_content.replace("\n", " ").split()
                     if len(tokens) < 6 or tokens[0] != "M" or tokens[3] != "L":
-                        raise ValueError(f"d 属性格式不符合预期: {d_content}")
+                        raise ValueError(f"Unexpected <path> format: {d_content}")
                     orig_x0, orig_y0 = float(tokens[1]), float(tokens[2])
                     orig_x1, orig_y1 = float(tokens[4]), float(tokens[5])
 
                     cache = {
-                        "index": i,
-                        "prefix": prefix_all,
-                        "suffix": suffix,
-                        "coords": [orig_x0, orig_x1, orig_y0, orig_y1]
+                        "index1": i,
+                        "prefix1": prefix_all,
+                        "suffix1": suffix,
+                        "coords1": [orig_x0, orig_x1, orig_y0, orig_y1]
                     }
                     break
             else:
-                raise ValueError(f"未找到 id={line_prefix} 的行")
+                raise ValueError(f"Cannot find id={line_prefix1} in lines")
+        if cache["index1"] == 1:
+            lines1 = [lines[0], cache["prefix1"], cache["suffix1"]]
+        else:
+            lines1 = [cache["prefix1"], cache["suffix1"], lines[1]]
+        if "index2" not in cache:
+            for j, line in enumerate(lines1):
+                if f'id="{line_prefix2}"' in line:
+                    pattern = re.compile(
+                        r'^(.*?<g\s+id="' + re.escape(line_prefix2) +
+                        r'".*?<path[^>]*d=")([^"]*)(".*)$',
+                        re.MULTILINE | re.DOTALL
+                    )
+                    m = pattern.search(line)
+                    if not m:
+                        raise ValueError(f"Cannot find <path> with id={line_prefix2} in {line[:200]}")
+                    prefix_all, d_content, suffix = m.groups()
+                    tokens = d_content.replace("\n", " ").split()
+                    if len(tokens) < 6 or tokens[0] != "M" or tokens[3] != "L":
+                        raise ValueError(f"Unexpected <path> format: {d_content}")
+                    orig_x0, orig_y0 = float(tokens[1]), float(tokens[2])
+                    orig_x1, orig_y1 = float(tokens[4]), float(tokens[5])
 
-        prefix, suffix = cache["prefix"], cache["suffix"]
-        orig_x0, orig_x1, orig_y0, orig_y1 = cache["coords"]
+                    cache["index2"] = j
+                    cache["prefix2"] = prefix_all
+                    cache["suffix2"] = suffix
+                    cache["coords2"] = [orig_x0, orig_x1, orig_y0, orig_y1]
+                    break
+            else:
+                raise ValueError(f"Cannot find id={line_prefix2} in lines")
 
-        new_x0 = orig_x0 if x0 is None else x0
-        new_x1 = orig_x1 if x1 is None else x1
-        new_y0 = orig_y0 if y0 is None else y0
-        new_y1 = orig_y1 if y1 is None else y1
+        lines1.pop(cache["index2"])
+        lines1.insert(cache["index2"], cache["suffix2"])
+        lines1.insert(cache["index2"], cache["prefix2"])
+        
 
-        cache["coords"] = [new_x0, new_x1, new_y0, new_y1]
+        x0, x1, y0, y1 = cords1
+        xx0, xx1, yy0, yy1 = cords2
 
-        new_d = f'M {new_x0:.6f} {new_y0:.6f} L {new_x1:.6f} {new_y1:.6f}'
-        new_line = f'{prefix}{new_d}{suffix}'
 
-        new_lines = list(lines)
-        new_lines[cache["index"]] = new_line
+
+        new_x0 = cache["coords1"][0] if x0 is None else x0
+        new_x1 = cache["coords1"][1] if x1 is None else x1
+        new_y0 = cache["coords1"][2] if y0 is None else y0
+        new_y1 = cache["coords1"][3] if y1 is None else y1
+
+        new_xx0 = cache["coords2"][0] if xx0 is None else xx0
+        new_xx1 = cache["coords2"][1] if xx1 is None else xx1
+        new_yy0 = cache["coords2"][2] if yy0 is None else yy0
+        new_yy1 = cache["coords2"][3] if yy1 is None else yy1
+
+        cache["coords1"] = [new_x0, new_x1, new_y0, new_y1]
+        cache["coords2"] = [new_xx0, new_xx1, new_yy0, new_yy1]
+
+        new_d1 = f'M {new_x0:.6f} {new_y0:.6f} L {new_x1:.6f} {new_y1:.6f}'
+        new_d2 = f'M {new_xx0:.6f} {new_yy0:.6f} L {new_xx1:.6f} {new_yy1:.6f}'
+
+        new_lines = list(lines1)
+        new_lines[cache["index2"]] = f'{new_lines[cache["index2"]]}{new_d2}{new_lines[cache["index2"]+1]}'
+        new_lines.pop(cache["index2"] + 1)
+        new_lines[cache["index1"]] = f'{new_lines[cache["index1"]]}{new_d1}{new_lines[cache["index1"]+1]}'
+        new_lines.pop(cache["index1"] + 1)
         return new_lines
 
     return set_line_inner
 
 
 
-def set_text(text_prefix):
-    """
-    返回一个闭包函数 set_text(lines, new_text, x0, y0)，
-    第一次调用时会在 lines 中查找目标行并缓存位置和模板，
-    后续调用直接替换，不再查找。
-    new_text, x0, y0 可以为 None，表示保留原值。
-    """
-    cache = {}
+def set_text(text_prefix, lines, new_text=None, x0=None, y0=None):
 
-    def set_text_inner(lines, new_text=None, x0=None, y0=None):
-        nonlocal cache
-        if "index" not in cache:
-            # 第一次：查找目标行
-            for i, line in enumerate(lines):
-                if f'id="{text_prefix}"' in line:
-                    # 匹配 transform 和内容
-                    pattern = re.compile(
-                        r'(<g\s+id="' + re.escape(text_prefix) + r'".*?>\s*<text[^>]*?)'
-                        r'transform="([^"]+)"([^>]*)>(.*?)</text>',
-                        re.MULTILINE | re.DOTALL
-                    )
-                    m = pattern.search(line)
-                    if not m:
-                        raise ValueError(f"未找到 id={text_prefix} 的 <text>")
-                    before, transform, after, old_text = m.groups()
+    for i, line in enumerate(lines):
+        if f'id="{text_prefix}"' in line:
+            pattern = re.compile(
+                r'^(.*?<g\s+id="' + re.escape(text_prefix) + r'".*?>\s*<text[^>]*?)'
+                r'transform="([^"]+)"([^>]*)>(.*?)</text>(.*)$',
+                re.MULTILINE | re.DOTALL
+            )
+            m = pattern.search(line)
+            if not m:
+                raise ValueError(f"未找到 id={text_prefix} 的 <text>")
+            before, transform, after, old_text, suffix = m.groups()
 
-                    # 提取角度
-                    theta = None
-                    m_rot = re.match(r'rotate\(\s*([\-0-9\.eE]+)\s+[\-0-9\.eE]+\s+[\-0-9\.eE]+\s*\)', transform)
-                    if m_rot:
-                        theta = m_rot.group(1)
-                        orig_x, orig_y = float(m_rot.group(2)), float(m_rot.group(3))
-                    else:
-                        m_trans = re.match(
-                            r'translate\(\s*([\-0-9\.eE]+)\s+([\-0-9\.eE]+)\s*\)\s*rotate\(\s*([\-0-9\.eE]+)\s*\)',
-                            transform
-                        )
-                        if m_trans:
-                            orig_x, orig_y, theta = float(m_trans.group(1)), float(m_trans.group(2)), m_trans.group(3)
-                        else:
-                            # 默认值
-                            orig_x, orig_y, theta = 0.0, 0.0, "0"
-
-                    # 缓存
-                    cache = {
-                        "index": i,
-                        "before": before,
-                        "after": after,
-                        "theta": theta,
-                        "coords": [orig_x, orig_y],
-                        "text": old_text
-                    }
-                    break
+            theta = None
+            m_rot = re.match(r'rotate\(\s*([\-0-9\.eE]+)\s+[\-0-9\.eE]+\s+[\-0-9\.eE]+\s*\)', transform)
+            if m_rot:
+                theta = m_rot.group(1)
+                orig_x, orig_y = float(m_rot.group(2)), float(m_rot.group(3))
             else:
-                raise ValueError(f"未找到 id={text_prefix} 的行")
+                m_trans = re.match(
+                    r'translate\(\s*([\-0-9\.eE]+)\s+([\-0-9\.eE]+)\s*\)\s*rotate\(\s*([\-0-9\.eE]+)\s*\)',
+                    transform
+                )
+                if m_trans:
+                    orig_x, orig_y, theta = float(m_trans.group(1)), float(m_trans.group(2)), m_trans.group(3)
+                else:
+                    orig_x, orig_y, theta = 0.0, 0.0, "0"
 
-        # 使用缓存拼接新行
-        before, after, theta = cache["before"], cache["after"], cache["theta"]
-        orig_x, orig_y = cache["coords"]
-        orig_text = cache["text"]
 
-        # 如果传入 None，就保留原值
-        new_x = orig_x if x0 is None else x0
-        new_y = orig_y if y0 is None else y0
-        final_text = orig_text if new_text is None else new_text
+            break
+    else:
+        raise ValueError(f"未找到 id={text_prefix} 的行")
 
-        # 更新缓存
-        cache["coords"] = [new_x, new_y]
-        cache["text"] = final_text
 
-        new_transform = f'translate({new_x:.6f} {new_y:.6f}) rotate({theta})'
-        new_line = f'{before}transform="{new_transform}"{after}>{final_text}</text>'
 
-        # 替换并返回新列表
-        new_lines = list(lines)
-        new_lines[cache["index"]] = new_line
-        return new_lines
+    # 如果传入 None，就保留原值
+    new_x = orig_x if x0 is None else x0
+    new_y = orig_y if y0 is None else y0
+    final_text = old_text if new_text is None else new_text
 
-    return set_text_inner
+
+    new_transform = f'translate({new_x:.6f} {new_y:.6f}) rotate({theta})'
+    new_line = f'{before} transform="{new_transform}" {after}>{final_text}</text> {suffix}'
+
+    # 替换并返回新列表
+    new_lines = list(lines)
+    new_lines[i] = new_line
+    return new_lines

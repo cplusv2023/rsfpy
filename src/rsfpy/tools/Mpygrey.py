@@ -1100,8 +1100,19 @@ def redraw_svg_movie(arr, outbuf, svgcontent, frame1=0, frame2=0, frame3=0,
             if movie == 1 and axinfo1 is not None and axinfo2 is not None:
                 indicator_y_val = arr.axis1[frame1]
                 indicator_y_pos = ax1_yy0 + (indicator_y_val - ax1_y0) / (ax1_y1 - ax1_y0) * (ax1_yy1 - ax1_yy0)
-                find_line_1 = set_line(__AX1_HLINE_NAME)
-                new_contents = find_line_1(svgcontent[:2], y0=indicator_y_pos, y1=indicator_y_pos)
+                find_line_1 = set_line(__AX1_HLINE_NAME, __AX2_HLINE_NAME)
+                cords1 = [None, None, indicator_y_pos, indicator_y_pos]
+                cords2 = [None, None, indicator_y_pos, indicator_y_pos + (ax2_yy0 - ax1_yy0)]
+                new_contents = find_line_1(svgcontent[:2], cords1=cords1, cords2=cords2)
+                new_contents = set_text(__FRAME1_LABEL_NAME,new_contents, np.format_float_positional(arr.axis1[frame1], trim='-', precision=6),y0=indicator_y_pos +  (ax2_yy0 - ax1_yy0))
+            elif movie == 2 and axinfo1 is not None and axinfo3 is not None:
+                indicator_x_val = arr.axis2[frame2]
+                indicator_x_pos = ax1_xx0 + (indicator_x_val - ax1_x0) / (ax1_x1 - ax1_x0) * (ax1_xx1 - ax1_xx0)
+                find_line_2 = set_line(__AX1_VLINE_NAME, __AX3_VLINE_NAME)
+                cords1 = [indicator_x_pos, indicator_x_pos, None, None]
+                cords2 = [indicator_x_pos, indicator_x_pos + (ax3_xx0 - ax1_xx0), None, None]
+                new_contents = find_line_2(svgcontent[:2], cords1=cords1, cords2=cords2)
+                new_contents = set_text(__FRAME2_LABEL_NAME,new_contents, np.format_float_positional(arr.axis2[frame2], trim='-', precision=6), x0=indicator_x_pos + (ax3_xx0 - ax1_xx0))
             else:
                 new_contents = svgcontent[:2]
                 

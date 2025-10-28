@@ -311,19 +311,32 @@ def grey3flat(
         ax3.xaxis.get_ticklabels() + \
         ax3.yaxis.get_ticklabels():
         gattr.ticklabels.append(itklabel)
+    
+    ax1.set_gid(__AX1_NAME %(axis1[0], axis1[-1], axis2[0], axis2[-1]))
+    ax2.set_gid(__AX2_NAME %(axis1[0], axis1[-1], axis3[0], axis3[-1]))
+    ax3.set_gid(__AX3_NAME %(axis3[0], axis3[-1], axis2[0], axis2[-1]))
 
     lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
     gattr.hlines.append(ax1.hlines(y=axis1[frame1], xmin=axis2[0], xmax=axis2[-1], color=lcol))
+    gattr.hlines[-1].set_gid(__AX1_HLINE_NAME)
     gattr.vlines.append(ax1.vlines(x=axis2[frame2], ymin=axis1[0], ymax=axis1[-1], color=lcol))
+    gattr.vlines[-1].set_gid(__AX1_VLINE_NAME)
     gattr.hlines.append(ax2.hlines(y=axis1[frame1], xmin=axis3[0], xmax=axis3[-1], color=lcol))
+    gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
     gattr.vlines.append(ax2.vlines(x=axis3[frame3], ymin=axis1[0], ymax=axis1[-1], color=lcol))
+    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
     gattr.hlines.append(ax3.hlines(y=axis3[frame3], xmin=axis2[0], xmax=axis2[-1], color=lcol))
+    gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
     gattr.vlines.append(ax3.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol))
+    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
 
     tlabelpad = 0.01
     gattr.ticklabels.append(ax2.text(x=1+tlabelpad,  y=1 - frame1/ny, s=np.format_float_positional(axis1[frame1], trim='-'), ha="left", va="center", color=lcol, rotation=90, transform=ax2.transAxes))
     gattr.ticklabels.append(ax2.text(x=frame3/nz,     y=1+tlabelpad, s=np.format_float_positional(axis3[frame3], trim='-'), ha="left", va="bottom", color=lcol, rotation=0, transform=ax2.transAxes))
     gattr.ticklabels.append(ax3.text(x=frame2/nx, y=1+tlabelpad, s=np.format_float_positional(axis2[frame2], trim='-'), ha="center", va="bottom", color=lcol, rotation=0, transform=ax3.transAxes))
+    gattr.ticklabels[-3].set_gid(__FRAME1_LABEL_NAME)
+    gattr.ticklabels[-2].set_gid(__FRAME3_LABEL_NAME)
+    gattr.ticklabels[-1].set_gid(__FRAME2_LABEL_NAME)
 
     def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
         hline1 = gattr.hlines[0].get_segments()
@@ -732,13 +745,13 @@ def grey3cube(
     gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes))
     gattr.vlines[-1].set_gid(__AX1_VLINE_NAME)
     gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes)[0])
-    gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
-    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes)[0])
-    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
-    gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes))
-    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
-    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes)[0])
     gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
+    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes)[0])
+    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
+    gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes))
+    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
+    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes)[0])
+    gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
 
 
     # Indicating labels
