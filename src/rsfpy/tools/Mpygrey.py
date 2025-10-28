@@ -275,7 +275,7 @@ def main():
     barlabelsz = getfloat(par_dict, 'barlabelsz',
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
-    movie = par_dict.get('movie', 'n').endswith('y')
+    movie = par_dict.get('movie', 'y').lower().startswith('y', 'ok', '3')
     maxframe = int(getfloat(par_dict, 'maxframe', 300))
 
     # Check plot type
@@ -511,9 +511,9 @@ def main():
     frame_suffix = ""
     if pformat.lower() != 'svg':
         movie = False
+        sf_warning(f"Movie mode only supports svg output, got format={pformat}.")
     elif movie:
         databin = data
-        dpi = getfloat(par_dict, 'dpi', 50)
 
         # determine number of frames
         if plottype == 'grey':
@@ -528,8 +528,7 @@ def main():
             if nframes == 1:
                 movie = False
         if plottype == 'grey3':
-            if movie == 0: movie = False
-            elif movie < 4:
+            if movie < 4 and movie > 0:
                 databin = data.reshape((data.n1, data.n2, data.n3, -1))
                 nframes = databin.n(movie - 1)
                 if nframes > maxframe:
@@ -540,6 +539,8 @@ def main():
                 frame_suffix = f" ({databin.unit(movie-1)})" if databin.unit(movie-1) is not None else ""
                 if nframes == 1:
                     movie = False
+            else:
+                movie = False
 
     if not movie: maxframe = 1
 
@@ -560,6 +561,9 @@ def main():
             else:
                 if movie:
                     sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                    vmin, vmax = ax.images[0].get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
                     splitter = (__SVG_SPLITTER[:-3] +
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
                             f"{frame_axis[(iframe) * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
@@ -755,6 +759,9 @@ def main():
                         iblabel.set_fontsize(ticksz)
             else:
                 sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
+                vmin, vmax = gattr.im1.get_clim()
+                bias = (vmin + vmax) / 2.0
+                clip = vmax - bias
                 splitter = (__SVG_SPLITTER[:-3] +
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
                             f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
@@ -1042,10 +1049,16 @@ def main():
                 fig.savefig(outbuf, bbox_inches='tight', format=pformat, dpi=dpi,
                             transparent=None)
                 if plottype == 'grey3':
+                    vmin, vmax = gattr.im1.get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
                     svgcontent = redraw_svg_movie(data, outbuf, svgcontent, frame1=frame1, frame2=frame2, frame3=frame3,
                                      point1=point1, point2=point2, isflat=isflat, color=color, clip=clip,
                                      allpos=allpos, pclip=pclip, bias=bias, dpi=dpi, movie=movie, plottype=plottype)
                 elif plottype == 'grey':
+                    vmin, vmax = ax.images[0].get_clim()
+                    bias = (vmin + vmax) / 2.0
+                    clip = vmax - bias
                     svgcontent = redraw_svg_movie(data, outbuf, svgcontent, clip=clip, pclip=pclip, bias=bias,
                                      allpos=allpos, color=color,
                                      min1=min1, max1=max1, min2=min2, max2=max2,
@@ -1091,31 +1104,46 @@ def redraw_svg_movie(arr, outbuf, svgcontent, frame1=0, frame2=0, frame3=0,
             if axinfo1 is not None:
                 ax1_x0, ax1_x1, ax1_y0, ax1_y1 = axinfo1.get("data_range")
                 ax1_xx0, ax1_xx1, ax1_yy0, ax1_yy1 = axinfo1.get("svg_rect")
+
             if axinfo2 is not None:
                 ax2_x0, ax2_x1, ax2_y0, ax2_y1 = axinfo2.get("data_range")
                 ax2_xx0, ax2_xx1, ax2_yy0, ax2_yy1 = axinfo2.get("svg_rect")
             if axinfo3 is not None:
                 ax3_x0, ax3_x1, ax3_y0, ax3_y1 = axinfo3.get("data_range")
                 ax3_xx0, ax3_xx1, ax3_yy0, ax3_yy1 = axinfo3.get("svg_rect")
-            if movie == 1 and axinfo1 is not None and axinfo2 is not None:
+            if axinfo1 is None or axinfo2 is None or axinfo3 is None:
+                new_contents = svgcontent[:2]
+            elif movie == 1:
                 indicator_y_val = arr.axis1[frame1]
                 indicator_y_pos = ax1_yy0 + (indicator_y_val - ax1_y0) / (ax1_y1 - ax1_y0) * (ax1_yy1 - ax1_yy0)
-                find_line_1 = set_line(__AX1_HLINE_NAME, __AX2_HLINE_NAME)
                 cords1 = [None, None, indicator_y_pos, indicator_y_pos]
                 cords2 = [None, None, indicator_y_pos, indicator_y_pos + (ax2_yy0 - ax1_yy0)]
-                new_contents = find_line_1(svgcontent[:2], cords1=cords1, cords2=cords2)
-                new_contents = set_text(__FRAME1_LABEL_NAME,new_contents, np.format_float_positional(arr.axis1[frame1], trim='-', precision=6),y0=indicator_y_pos +  (ax2_yy0 - ax1_yy0))
-            elif movie == 2 and axinfo1 is not None and axinfo3 is not None:
+                new_contents = set_text(__FRAME1_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis1[frame1], trim='-', precision=6),y0=indicator_y_pos +  (ax2_yy0 - ax1_yy0))
+                find_line_1 = set_line(__AX1_HLINE_NAME, __AX2_HLINE_NAME)
+                new_contents = find_line_1(new_contents, cords1=cords1, cords2=cords2)
+            elif movie == 2:
                 indicator_x_val = arr.axis2[frame2]
                 indicator_x_pos = ax1_xx0 + (indicator_x_val - ax1_x0) / (ax1_x1 - ax1_x0) * (ax1_xx1 - ax1_xx0)
-                find_line_2 = set_line(__AX1_VLINE_NAME, __AX3_VLINE_NAME)
                 cords1 = [indicator_x_pos, indicator_x_pos, None, None]
-                cords2 = [indicator_x_pos, indicator_x_pos + (ax3_xx0 - ax1_xx0), None, None]
-                new_contents = find_line_2(svgcontent[:2], cords1=cords1, cords2=cords2)
-                new_contents = set_text(__FRAME2_LABEL_NAME,new_contents, np.format_float_positional(arr.axis2[frame2], trim='-', precision=6), x0=indicator_x_pos + (ax3_xx0 - ax1_xx0))
-            else:
-                new_contents = svgcontent[:2]
-                
+                cords2 = [indicator_x_pos, indicator_x_pos + (ax3_xx1 - ax1_xx1), None, None]
+                new_contents = set_text(__FRAME2_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis2[frame2], trim='-', precision=6), x0=indicator_x_pos + (ax3_xx1 - ax1_xx1))
+                find_line_2 = set_line(__AX1_VLINE_NAME, __AX3_VLINE_NAME)
+                new_contents = find_line_2(new_contents, cords1=cords1, cords2=cords2)
+            elif movie == 3:
+                indicator_x_val = arr.axis3[frame3]
+                indicator_x_pos = ax2_xx0 + (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax2_xx1 - ax2_xx0)
+                indicator_y_pos = ax1_yy0 - (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax1_yy0 - ax2_yy0) 
+                cords1 = [indicator_x_pos, indicator_x_pos, ax2_yy1 - ax1_yy0 + indicator_y_pos, indicator_y_pos]
+                if not isflat: 
+                    cords2 = [ax1_xx0 + (indicator_x_val - ax2_x0) / (ax2_x1 - ax2_x0) * (ax2_xx1 - ax2_xx0), ax3_xx1, indicator_y_pos, indicator_y_pos]
+                    new_contents = set_text(__FRAME3_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis3[frame3], trim='-', precision=6), x0=indicator_x_pos, y0=(ax2_yy1-ax1_yy0+indicator_y_pos)*1.025)
+                else: 
+                    cords2 = [ax3_xx1, ax3_xx0, ax1_yy0 - (indicator_x_val - ax3_y0)/ (ax3_y1 - ax3_y0) * (ax3_yy1 - ax3_yy0), 
+                              ax1_yy0 - (indicator_x_val - ax3_y0)/ (ax3_y1 - ax3_y0) * (ax3_yy1 - ax3_yy0)]
+                    new_contents = set_text(__FRAME3_LABEL_NAME,svgcontent[:2], np.format_float_positional(arr.axis3[frame3], trim='-', precision=6), x0=indicator_x_pos, y0=ax1_yy0 * 0.95)
+                find_line_3 = set_line(__AX2_VLINE_NAME, __AX3_HLINE_NAME)
+                new_contents = find_line_3(new_contents, cords1=cords1, cords2=cords2)
+
             outbuf.seek(0)
             outbuf.truncate(0)
             outbuf.write(replace_png(*new_contents[:2], svgcontent[2], new_b64=newpng, shear=not isflat and (movie in (1,2)),

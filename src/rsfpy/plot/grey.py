@@ -157,7 +157,7 @@ def grey(
     if data.dtype == np.uint8:
         vmin, vmax = 0, 255
     imshow_kwargs = {k: v for k, v in params.items()
-                     if k in ['cmap', 'origin', 'interpolation','aspect']}
+                     if k in ['cmap', 'origin', 'interpolation','aspect', 'zorder']}
     imshow_kwargs.update({'vmin': vmin, 'vmax': vmax})
 
     im = ax.imshow(data, extent=extent, **imshow_kwargs)

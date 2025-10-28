@@ -23,7 +23,7 @@
 #define MIN_ZOOM_SCALE 0.01
 
 /* Playback */
-#define MAX_FPS 20
+#define MAX_FPS 50
 #define MIN_FPS 1
 
 #define RUNMSG "Running"

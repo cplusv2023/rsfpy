@@ -141,7 +141,6 @@ def replace_png(prefix: str, suffix: str, pnglabel: dict, new_b64: str,
         matrix = ""
 
         if which == 'x':
-            k = (th * (1 - point2)) * 0.94
             k =  1 / th * (1-point2)
             x0 = float(pnglabel.get("x", "0"))
             y0 = float(pnglabel.get("y", "0"))
@@ -151,7 +150,7 @@ def replace_png(prefix: str, suffix: str, pnglabel: dict, new_b64: str,
             newdict.update({'width': f"{ww * (1 - point2):.6f}"})
 
         elif which == 'y':
-            k = th * point1
+            k = th * (1 -point1)
             x0 = float(pnglabel.get("x", "0"))
             y0 = float(pnglabel.get("y", "0"))
             e = 0
@@ -333,51 +332,87 @@ def set_line(line_prefix1, line_prefix2):
 
 
 def set_text(text_prefix, lines, new_text=None, x0=None, y0=None):
+    if hasattr(set_text, "cache") is False:
+        set_text.cache = {}
 
-    for i, line in enumerate(lines):
-        if f'id="{text_prefix}"' in line:
-            pattern = re.compile(
-                r'^(.*?<g\s+id="' + re.escape(text_prefix) + r'".*?>\s*<text[^>]*?)'
-                r'transform="([^"]+)"([^>]*)>(.*?)</text>(.*)$',
-                re.MULTILINE | re.DOTALL
-            )
-            m = pattern.search(line)
-            if not m:
-                raise ValueError(f"未找到 id={text_prefix} 的 <text>")
-            before, transform, after, old_text, suffix = m.groups()
-
-            theta = None
-            m_rot = re.match(r'rotate\(\s*([\-0-9\.eE]+)\s+[\-0-9\.eE]+\s+[\-0-9\.eE]+\s*\)', transform)
-            if m_rot:
-                theta = m_rot.group(1)
-                orig_x, orig_y = float(m_rot.group(2)), float(m_rot.group(3))
-            else:
-                m_trans = re.match(
-                    r'translate\(\s*([\-0-9\.eE]+)\s+([\-0-9\.eE]+)\s*\)\s*rotate\(\s*([\-0-9\.eE]+)\s*\)',
-                    transform
+        for i, line in enumerate(lines):
+            if f'id="{text_prefix}"' in line:
+                pattern = re.compile(
+                    r'^(.*?)'                                   # before
+                    r'(<g\s+id="' + re.escape(text_prefix) +    # prefix 开头
+                    r'".*?>\s*<text[^>]*?)'
+                    r'(?:x="([\-0-9\.eE]+)"\s*)?'               # x_str 可选
+                    r'(?:y="([\-0-9\.eE]+)"\s*)?'               # y_str 可选
+                    r'transform="([^"]+)"'                      # transform
+                    r'([^>]*)>'                                 # others
+                    r'(.*?)'                                    # old_text
+                    r'(</text>.*?</g>)'                         # suffix (非贪婪，停在第一个 </g>)
+                    r'(.*)$',                                   # after
+                    re.MULTILINE | re.DOTALL
                 )
-                if m_trans:
-                    orig_x, orig_y, theta = float(m_trans.group(1)), float(m_trans.group(2)), m_trans.group(3)
+
+                m = pattern.search(line)
+                if not m:
+                    raise ValueError(f"未找到 id={text_prefix} 的 <text>")
+                before, prefix, x_str, y_str, transform, others, old_text, suffix, after = m.groups()
+
+                x_cord = float(x_str) if x_str is not None else None
+                y_cord = float(y_str) if y_str is not None else None
+
+                theta = None
+                m_rot = re.match(r'rotate\(\s*([\-0-9\.eE]+)\s+[\-0-9\.eE]+\s+[\-0-9\.eE]+\s*\)', transform)
+                if m_rot and len(m_rot.groups()) == 3:
+                    theta = m_rot.group(1)
+                    orig_x, orig_y = float(m_rot.group(2)), float(m_rot.group(3))
                 else:
-                    orig_x, orig_y, theta = 0.0, 0.0, "0"
+                    m_trans = re.match(
+                        r'translate\(\s*([\-0-9\.eE]+)\s+([\-0-9\.eE]+)\s*\)\s*rotate\(\s*([\-0-9\.eE]+)\s*\)',
+                        transform
+                    )
+                    if m_trans:
+                        orig_x, orig_y, theta = float(m_trans.group(1)), float(m_trans.group(2)), m_trans.group(3)
+                    else:
+                        orig_x, orig_y, theta = 0.0, 0.0, "0"
 
 
-            break
-    else:
-        raise ValueError(f"未找到 id={text_prefix} 的行")
+                break
+        else:
+            raise ValueError(f"未找到 id={text_prefix} 的行")
 
+        if x_cord is not None:
+            orig_x = x_cord
+        if y_cord is not None:
+            orig_y = y_cord
 
-
-    # 如果传入 None，就保留原值
-    new_x = orig_x if x0 is None else x0
-    new_y = orig_y if y0 is None else y0
-    final_text = old_text if new_text is None else new_text
-
-
+        # 如果传入 None，就保留原值
+        new_x = orig_x
+        new_y = orig_y
+        set_text.cache = {
+            "prefix": prefix,
+            "others": others,
+            "suffix": suffix,
+            "theta": theta,
+            "new_x": new_x,
+            "new_y": new_y,
+            "final_text": old_text if new_text is None else new_text,
+        }
+    final_text = set_text.cache["final_text"] if new_text is None else new_text
+    new_x = set_text.cache["new_x"] if x0 is None else x0
+    new_y = set_text.cache["new_y"] if y0 is None else y0
+    theta = set_text.cache["theta"]
+    others = set_text.cache["others"]
+    prefix = set_text.cache["prefix"]
+    suffix = set_text.cache["suffix"]
+    
     new_transform = f'translate({new_x:.6f} {new_y:.6f}) rotate({theta})'
-    new_line = f'{before} transform="{new_transform}" {after}>{final_text}</text> {suffix}'
+    new_line = f'{prefix} transform="{new_transform}" {others}>{final_text}{suffix}'
 
-    # 替换并返回新列表
-    new_lines = list(lines)
-    new_lines[i] = new_line
+    if set_text.cache.get("endline",None) is None:
+        new_lines = list(lines)
+        new_lines[i] = before + after
+        set_text.cache["begline"] = new_lines[0]
+        set_text.cache["endline"] = new_lines[-1].split("</svg>")[0]
+    else:
+        new_lines = [set_text.cache["begline"], set_text.cache["endline"]]
+    new_lines[-1] = set_text.cache["endline"] + new_line + "\n</svg>"
     return new_lines
