@@ -7,6 +7,7 @@ import matplotlib.ticker as mticker
 from typing import Optional, Union
 from .grey import grey
 from .wiggle import wiggle
+from ..version import __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME
 import matplotlib.transforms as transforms
 # from mpl_toolkits.axisartist.floating_axes import \
     # GridHelperCurveLinear
@@ -675,6 +676,10 @@ def grey3cube(
     ax3.axis[:].major_ticks.set(visible=False)
     ax3.axis["right"].major_ticks.set(visible=False)
 
+    ax1.set_gid(__AX1_NAME % (axis1[0], axis1[-1], axis2[0], axis2[-1]))
+    ax2.set_gid(__AX3_NAME % (axis3[0], axis3[-1], axis2[0], axis2[-1]))
+    ax3.set_gid(__AX2_NAME % (axis1[0], axis1[-1], axis3[0], axis3[-1]))
+
     if format1 is not None: ax1.xaxis.set_major_formatter(mticker.FormatStrFormatter(format1))
     if format2 is not None: ax1.yaxis.set_major_formatter(mticker.FormatStrFormatter(format2))
 
@@ -697,6 +702,7 @@ def grey3cube(
     ax1.spines[:].set_zorder(10)
     ax2.axis[:].line.set_zorder(10)
     ax3.axis[:].line.set_zorder(10)
+    
 
 
     # Colorbar
@@ -722,11 +728,17 @@ def grey3cube(
     lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
 
     gattr.hlines.append(ax1.hlines(l11*hei_ax,0,point2, color=lcol,transform=axbase.transAxes))
+    gattr.hlines[-1].set_gid(__AX1_HLINE_NAME)
     gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes))
-    gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes))
-    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes))
+    gattr.vlines[-1].set_gid(__AX1_VLINE_NAME)
+    gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes)[0])
+    gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
+    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes)[0])
+    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
     gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes))
-    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes))
+    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
+    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes)[0])
+    gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
 
 
     # Indicating labels
@@ -745,6 +757,9 @@ def grey3cube(
                 ha='left', color=lcol, rotation=-90))
     gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
                 lab3, va='top', ha='left', color=lcol))
+    gattr.ticklabels[-3].set_gid(__FRAME2_LABEL_NAME)
+    gattr.ticklabels[-2].set_gid(__FRAME1_LABEL_NAME)
+    gattr.ticklabels[-1].set_gid(__FRAME3_LABEL_NAME)
 
     def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
         l11 = (amax1 - axis1[frame1]) / len1 * point1

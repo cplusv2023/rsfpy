@@ -2,6 +2,7 @@ import struct, zlib, base64, re
 import numpy as np
 from matplotlib import cm, colors
 import xml.etree.ElementTree as ET
+from ..version import __AX1_NAME
 
 def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
     """Create PNG chunk"""
@@ -10,7 +11,7 @@ def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
     return length + chunk_type + data + crc
 
 
-def arr2png(arr: np.ndarray, clip=None, pclip=None, bias=None, allpos=False, cmap: str = "viridis", dpi: int = 100,
+def arr2png(arr: np.ndarray, clip=None, pclip=None, bias=0, allpos=False, cmap: str = "viridis", dpi: int = 100,
             min1=None, max1=None, min2=None, max2=None, cords1=None, cords2=None) -> str:
     """
     Transform a grayscale/color array to PNG and return StringIO
@@ -134,25 +135,29 @@ def replace_png(prefix: str, suffix: str, pnglabel: dict, new_b64: str,
     """
     newdict = pnglabel.copy()
     if shear:
-        th = (1 - point1) / (1 - point2) 
-
+        ww = float(pnglabel.get("width", "0"))
+        hh = float(pnglabel.get("height", "0"))
+        th = hh / ww 
         matrix = ""
 
         if which == 'x':
-            k = 1. / (th * (1 - point2)) * 1.01
+            k = (th * (1 - point2)) * 0.94
+            k =  1 / th * (1-point2)
             x0 = float(pnglabel.get("x", "0"))
             y0 = float(pnglabel.get("y", "0"))
-            e = x0 - (k * y0 + point2 * x0)
+            e = - k * y0
             f = 0
-            matrix = f"matrix({point2:.6f} 0 {k:.6f} 1 {e:.6f} {f:.6f})"
+            matrix = f"matrix(1 0 {k:.6f} 1 {e:.6f} {f:.6f})  "
+            newdict.update({'width': f"{ww * (1 - point2):.6f}"})
 
         elif which == 'y':
-            k = th * point1 * 0.99
+            k = th * point1
             x0 = float(pnglabel.get("x", "0"))
             y0 = float(pnglabel.get("y", "0"))
             e = 0
-            f = y0 - (k * x0 + point1 * y0)
-            matrix = f"matrix(1 {k:.6f} 0 {point1:.6f} {e:.6f} {f:.6f})"
+            f = - (k * x0)
+            matrix = f"matrix(1 {k:.6f} 0 1 {e:.6f} {f:.6f})"
+            newdict.update({'height': f"{hh * ( point1):.6f}"})
 
 
         if "transform" in newdict:
@@ -168,11 +173,11 @@ def replace_png(prefix: str, suffix: str, pnglabel: dict, new_b64: str,
 
 
 
-def clip2val(arr, clip=None, bias=None, pclip=None, allpos=False):
+def clip2val(arr, clip=None, bias=0, pclip=None, allpos=False):
     if bias is None:
         bias = 0
 
-    if pclip is not None and (clip is None) and (vmin is None and vmax is None):
+    if pclip is not None and (clip is None) :
         if hasattr(arr, "pclip"):
             clip = arr.pclip(pclip)
         else:
@@ -197,3 +202,175 @@ def clip2val(arr, clip=None, bias=None, pclip=None, allpos=False):
         if vmin > vmax:
             vmin, vmax = vmax, vmin
     return vmin, vmax
+
+
+def extract_ax_info(svg_str, prefix=__AX1_NAME.split("%")[0]):
+
+    group_pattern = re.compile(
+        r'<g\s+id="' + re.escape(prefix) +
+        r'([\d\.\-eE]+)_([\d\.\-eE]+)_([\d\.\-eE]+)_([\d\.\-eE]+)".*?>'
+        r'.*?<path[^>]+d="M\s+([\d\.\-eE]+)\s+([\d\.\-eE]+)\s+'
+        r'L\s+([\d\.\-eE]+)\s+([\d\.\-eE]+)\s+'
+        r'L\s+([\d\.\-eE]+)\s+([\d\.\-eE]+)\s+'
+        r'L\s+([\d\.\-eE]+)\s+([\d\.\-eE]+)',
+        re.MULTILINE | re.DOTALL
+    )
+
+    match = group_pattern.search(svg_str)
+    if not match:
+        return None
+
+    miny, maxy, minx, maxx = map(float, match.group(1,2,3,4))
+    coords = list(map(float, match.groups()[4:]))
+    xs, ys = coords[0::2], coords[1::2]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+
+    return {
+        "data_range": (minx, maxx, miny, maxy),
+        "svg_rect": (x0, x1, y0, y1)
+    }
+
+
+
+def set_line(line_prefix):
+    """
+    返回一个闭包函数 set_line(lines, x0, x1, y0, y1)，
+    第一次调用时会在 lines 中查找目标行并缓存 prefix/suffix，
+    后续调用直接替换，不再查找。
+    x0, x1, y0, y1 可以为 None，表示保留原值。
+    """
+    cache = {}
+
+    def set_line_inner(lines, x0=None, x1=None, y0=None, y1=None):
+        nonlocal cache
+        if "index" not in cache:
+            for i, line in enumerate(lines):
+                if f'id="{line_prefix}"' in line:
+                    # 捕获 prefix_all, d_content, suffix
+                    pattern = re.compile(
+                        r'^(.*?<g\s+id="' + re.escape(line_prefix) +
+                        r'".*?<path[^>]*d=")([^"]*)(".*)$',
+                        re.MULTILINE | re.DOTALL
+                    )
+                    m = pattern.search(line)
+                    if not m:
+                        raise ValueError(f"未找到 id={line_prefix} 的 <path>")
+                    prefix_all, d_content, suffix = m.groups()
+
+                    # 解析原始坐标
+                    tokens = d_content.replace("\n", " ").split()
+                    if len(tokens) < 6 or tokens[0] != "M" or tokens[3] != "L":
+                        raise ValueError(f"d 属性格式不符合预期: {d_content}")
+                    orig_x0, orig_y0 = float(tokens[1]), float(tokens[2])
+                    orig_x1, orig_y1 = float(tokens[4]), float(tokens[5])
+
+                    cache = {
+                        "index": i,
+                        "prefix": prefix_all,
+                        "suffix": suffix,
+                        "coords": [orig_x0, orig_x1, orig_y0, orig_y1]
+                    }
+                    break
+            else:
+                raise ValueError(f"未找到 id={line_prefix} 的行")
+
+        prefix, suffix = cache["prefix"], cache["suffix"]
+        orig_x0, orig_x1, orig_y0, orig_y1 = cache["coords"]
+
+        new_x0 = orig_x0 if x0 is None else x0
+        new_x1 = orig_x1 if x1 is None else x1
+        new_y0 = orig_y0 if y0 is None else y0
+        new_y1 = orig_y1 if y1 is None else y1
+
+        cache["coords"] = [new_x0, new_x1, new_y0, new_y1]
+
+        new_d = f'M {new_x0:.6f} {new_y0:.6f} L {new_x1:.6f} {new_y1:.6f}'
+        new_line = f'{prefix}{new_d}{suffix}'
+
+        new_lines = list(lines)
+        new_lines[cache["index"]] = new_line
+        return new_lines
+
+    return set_line_inner
+
+
+
+def set_text(text_prefix):
+    """
+    返回一个闭包函数 set_text(lines, new_text, x0, y0)，
+    第一次调用时会在 lines 中查找目标行并缓存位置和模板，
+    后续调用直接替换，不再查找。
+    new_text, x0, y0 可以为 None，表示保留原值。
+    """
+    cache = {}
+
+    def set_text_inner(lines, new_text=None, x0=None, y0=None):
+        nonlocal cache
+        if "index" not in cache:
+            # 第一次：查找目标行
+            for i, line in enumerate(lines):
+                if f'id="{text_prefix}"' in line:
+                    # 匹配 transform 和内容
+                    pattern = re.compile(
+                        r'(<g\s+id="' + re.escape(text_prefix) + r'".*?>\s*<text[^>]*?)'
+                        r'transform="([^"]+)"([^>]*)>(.*?)</text>',
+                        re.MULTILINE | re.DOTALL
+                    )
+                    m = pattern.search(line)
+                    if not m:
+                        raise ValueError(f"未找到 id={text_prefix} 的 <text>")
+                    before, transform, after, old_text = m.groups()
+
+                    # 提取角度
+                    theta = None
+                    m_rot = re.match(r'rotate\(\s*([\-0-9\.eE]+)\s+[\-0-9\.eE]+\s+[\-0-9\.eE]+\s*\)', transform)
+                    if m_rot:
+                        theta = m_rot.group(1)
+                        orig_x, orig_y = float(m_rot.group(2)), float(m_rot.group(3))
+                    else:
+                        m_trans = re.match(
+                            r'translate\(\s*([\-0-9\.eE]+)\s+([\-0-9\.eE]+)\s*\)\s*rotate\(\s*([\-0-9\.eE]+)\s*\)',
+                            transform
+                        )
+                        if m_trans:
+                            orig_x, orig_y, theta = float(m_trans.group(1)), float(m_trans.group(2)), m_trans.group(3)
+                        else:
+                            # 默认值
+                            orig_x, orig_y, theta = 0.0, 0.0, "0"
+
+                    # 缓存
+                    cache = {
+                        "index": i,
+                        "before": before,
+                        "after": after,
+                        "theta": theta,
+                        "coords": [orig_x, orig_y],
+                        "text": old_text
+                    }
+                    break
+            else:
+                raise ValueError(f"未找到 id={text_prefix} 的行")
+
+        # 使用缓存拼接新行
+        before, after, theta = cache["before"], cache["after"], cache["theta"]
+        orig_x, orig_y = cache["coords"]
+        orig_text = cache["text"]
+
+        # 如果传入 None，就保留原值
+        new_x = orig_x if x0 is None else x0
+        new_y = orig_y if y0 is None else y0
+        final_text = orig_text if new_text is None else new_text
+
+        # 更新缓存
+        cache["coords"] = [new_x, new_y]
+        cache["text"] = final_text
+
+        new_transform = f'translate({new_x:.6f} {new_y:.6f}) rotate({theta})'
+        new_line = f'{before}transform="{new_transform}"{after}>{final_text}</text>'
+
+        # 替换并返回新列表
+        new_lines = list(lines)
+        new_lines[cache["index"]] = new_line
+        return new_lines
+
+    return set_text_inner

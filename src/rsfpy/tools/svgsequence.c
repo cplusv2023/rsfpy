@@ -189,7 +189,7 @@ RsvgHandle *extract_base64(const guint8 *svg_content,
         return NULL;
     }
 
-    g_string_free(out, FALSE);
+    g_string_free(out, TRUE);
 
     GFile *gfile = g_file_new_for_path(svg_filename);
     RsvgHandle *handle = rsvg_handle_new_from_gfile_sync(

@@ -149,8 +149,8 @@ import logging
 
 from rsfpy import Rsfarray
 from rsfpy.utils import _str_match_re, _get_stdname
-from rsfpy.plot import prepare_svg_template, replace_png, arr2png
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME
+from rsfpy.plot import prepare_svg_template, replace_png, arr2png, extract_ax_info, set_text, set_line
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME
 
 __progname__ = os.path.basename(sys.argv[0])
 DESCRIPTION = {
@@ -548,7 +548,9 @@ def main():
     cbar = None
     for iframe in range(min(nframes, maxframe)):
         if plottype == 'grey':
-            if movie: data = databin.window(n3=1, f3=iframe*frame_step)
+            if movie: 
+                data = databin.window(n3=1, f3=iframe*frame_step, copy=False)
+                sf_warning(f"{data.shape}")
 
             if iframe==0:
                 data.grey(ax=ax, transp=transp, yreverse=yreverse, xreverse=xreverse,
@@ -558,15 +560,6 @@ def main():
             else:
                 if movie:
                     sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
-                    # newpng = arr2png(data, clip=clip, pclip=pclip, bias=bias, allpos=allpos, cmap=color,
-                    #                  min1=min1, max1=max1, min2=min2, max2=max2,
-                    #                  cords1=data.axis1, cords2=data.axis2,
-                    #                  dpi=dpi)
-                    # outbuf.seek(0)
-                    # if not svgcontent: svgcontent = prepare_svg_template(outbuf.getvalue())
-                    # outbuf.seek(0)
-                    # outbuf.truncate(0)
-                    # outbuf.write(replace_png(*svgcontent[:2], new_b64=newpng))
                     splitter = (__SVG_SPLITTER[:-3] +
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
                             f"{frame_axis[(iframe) * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
@@ -581,7 +574,7 @@ def main():
                                      min1=min1, max1=max1, min2=min2, max2=max2,
                                      dpi=dpi,plottype='grey')
                     sys.stdout.write(outbuf.getvalue())
-                    sys.stdout.flush()
+                    # sys.stdout.flush()
                     continue
                     
                 if scalebar:
@@ -761,6 +754,7 @@ def main():
                         iblabel.set_fontweight(tickfat)
                         iblabel.set_fontsize(ticksz)
             else:
+                sf_warning(f"Frame {iframe + 1} of {min(nframes, maxframe)};")
                 splitter = (__SVG_SPLITTER[:-3] +
                             f"framelabel=\"{frame_prefix}{frame_suffix}: " +
                             f"{frame_axis[iframe * frame_step]:5g} of {frame_axis[-1]:5g}\"" +
@@ -772,7 +766,7 @@ def main():
                 svgcontent[0] = svgcontent[0].replace(old_splitter, splitter)
                 svgcontent = redraw_svg_movie(arr=data, outbuf=outbuf, svgcontent=svgcontent,
                                  plottype='grey3', frame1=frame1, frame2=frame2, frame3=frame3,
-                                 point1=point1, point2=point2, isflat=isflat,
+                                 point1=point1, point2=point2, isflat=isflat, movie=movie,
                                  clip=clip, pclip=pclip, bias=bias,
                                  allpos=allpos, color=color)
                 sys.stdout.write(outbuf.getvalue())
@@ -1078,19 +1072,45 @@ def redraw_svg_movie(arr, outbuf, svgcontent, frame1=0, frame2=0, frame3=0,
                      
     outbuf.seek(0)
     if plottype == 'grey3':
-        if movie == 1:newpng = arr.window(n1=1, f1=frame1).T
-        if movie == 2:newpng = arr.window(n2=1, f2=frame2)[::-1,:]
-        if movie == 3:newpng = arr.window(n3=1, f3=frame3)
+        sf_warning(f"movie={movie}, frame1={frame1}, frame2={frame2}, frame3={frame3}")
+        if movie == 1:newpng = arr.window(n1=1, f1=frame1, copy=False).T
+        if movie == 2:newpng = arr.window(n2=1, f2=frame2, copy=False)[::-1,:]
+        if movie == 3:newpng = arr.window(n3=1, f3=frame3, copy=False)[::-1,:]
         if movie in (1,2,3):
             newpng = arr2png(newpng, clip=clip, pclip=pclip, bias=bias, allpos=allpos, cmap=color,
                             dpi=dpi)
             indexs = [2, 1, 0] if isflat else [1, 2, 0]
             if not svgcontent: svgcontent = prepare_svg_template(outbuf.getvalue(),
                                                                 indexs[movie -1])
+
+            # Find indicator line and label
+            if not hasattr(redraw_svg_movie, "axinfo1"):
+                axinfo1 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX1_NAME.split('%')[0])
+                axinfo2 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX2_NAME.split('%')[0])
+                axinfo3 = extract_ax_info(svgcontent[0]+svgcontent[1], prefix=__AX3_NAME.split('%')[0])
+            if axinfo1 is not None:
+                ax1_x0, ax1_x1, ax1_y0, ax1_y1 = axinfo1.get("data_range")
+                ax1_xx0, ax1_xx1, ax1_yy0, ax1_yy1 = axinfo1.get("svg_rect")
+            if axinfo2 is not None:
+                ax2_x0, ax2_x1, ax2_y0, ax2_y1 = axinfo2.get("data_range")
+                ax2_xx0, ax2_xx1, ax2_yy0, ax2_yy1 = axinfo2.get("svg_rect")
+            if axinfo3 is not None:
+                ax3_x0, ax3_x1, ax3_y0, ax3_y1 = axinfo3.get("data_range")
+                ax3_xx0, ax3_xx1, ax3_yy0, ax3_yy1 = axinfo3.get("svg_rect")
+            if movie == 1 and axinfo1 is not None and axinfo2 is not None:
+                indicator_y_val = arr.axis1[frame1]
+                indicator_y_pos = ax1_yy0 + (indicator_y_val - ax1_y0) / (ax1_y1 - ax1_y0) * (ax1_yy1 - ax1_yy0)
+                find_line_1 = set_line(__AX1_HLINE_NAME)
+                new_contents = find_line_1(svgcontent[:2], y0=indicator_y_pos, y1=indicator_y_pos)
+            else:
+                new_contents = svgcontent[:2]
+                
             outbuf.seek(0)
             outbuf.truncate(0)
-            outbuf.write(replace_png(*svgcontent[:3], new_b64=newpng, shear=not isflat and (movie in (1,2)),
+            outbuf.write(replace_png(*new_contents[:2], svgcontent[2], new_b64=newpng, shear=not isflat and (movie in (1,2)),
                                     point1=point1, point2=point2, which='x' if movie==1 else 'y'))
+
+
     elif plottype == 'grey':
         newpng = arr2png(arr, clip=clip, pclip=pclip, bias=bias, allpos=allpos, cmap=color,
                                      min1=min1, max1=max1, min2=min2, max2=max2,

@@ -21,6 +21,6 @@
 
 from .io import read_rsf, write_rsf
 from .array import Rsfdata, Rsfarray
-from .version import __version__
+from .version import *
 
 __all__ = ["read_rsf", "write_rsf", "Rsfdata", "Rsfarray"]
