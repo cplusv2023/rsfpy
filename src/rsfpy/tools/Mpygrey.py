@@ -275,7 +275,7 @@ def main():
     barlabelsz = getfloat(par_dict, 'barlabelsz',
                           getfloat(par_dict, 'barlabelsize', fontsz))
     pformat = par_dict.get('format', suffix[1:])
-    movie = par_dict.get('movie', 'y').lower().startswith('y', 'ok', '3')
+    movie = par_dict.get('movie', 'y').lower().startswith('y')
     maxframe = int(getfloat(par_dict, 'maxframe', 300))
 
     # Check plot type
