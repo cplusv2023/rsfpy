@@ -58,6 +58,8 @@ typedef struct {
     gboolean zoom_mode;
     struct timespec last_zoom_time;
     gboolean zooming;
+    struct timespec last_press_time[MAX_BUTTONS];
+    gboolean pressing;
 } App;
 
 
@@ -225,7 +227,8 @@ void handle_selection_request(Display *dpy, XEvent *e) {
 
 
 Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
-                   double height, gboolean enabled, gboolean pressed) {
+                   double height, gboolean enabled, gboolean pressed,
+                   long last_pressed_time_ms) {
     int btn_w = 0;
     int btn_h = (int)(0.8 * height);
     char svg_buf[1024];
@@ -233,7 +236,8 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
     if (svg_label) {
         GError *err = NULL;
         snprintf(svg_buf, sizeof(svg_buf), svg_label,
-                /* background color */ pressed? PRESSED_COLOR:WHITE,
+                /* background color */ 
+                pressed || last_pressed_time_ms <= 2* WAIT_TIME_MS? PRESSED_COLOR:WHITE,
                 /* stroke color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
                 /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
@@ -249,7 +253,7 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
             &err
         );
         if (handle) {
-            RsvgDimensionData dim;
+            // RsvgDimensionData dim;
             double svg_w, svg_h;
 
         #if LIBRSVG_CHECK_VERSION(2, 46, 0)
@@ -309,25 +313,25 @@ static void fatal(const char *msg) {
 }
 
 
-static gboolean slurp_stdin(GBytes **out_bytes) {
-    GByteArray *buf = g_byte_array_new();
-    const size_t CHUNK = 64 * 1024;
-    guint8 *tmp = g_malloc(CHUNK);
-    size_t n;
-    while ((n = fread(tmp, 1, CHUNK, stdin)) > 0) {
-        g_byte_array_append(buf, tmp, (guint)n);
-    }
-    g_free(tmp);
-    if (ferror(stdin)) {
-        g_byte_array_free(buf, TRUE);
-        return FALSE;
-    }
-    GBytes *bytes = g_bytes_new_take(buf->data, buf->len);
-    // buf container freed but data owned by GBytes now
-    g_free(buf); // only frees struct; safe because we used new_take
-    *out_bytes = bytes;
-    return TRUE;
-}
+// static gboolean slurp_stdin(GBytes **out_bytes) {
+//     GByteArray *buf = g_byte_array_new();
+//     const size_t CHUNK = 64 * 1024;
+//     guint8 *tmp = g_malloc(CHUNK);
+//     size_t n;
+//     while ((n = fread(tmp, 1, CHUNK, stdin)) > 0) {
+//         g_byte_array_append(buf, tmp, (guint)n);
+//     }
+//     g_free(tmp);
+//     if (ferror(stdin)) {
+//         g_byte_array_free(buf, TRUE);
+//         return FALSE;
+//     }
+//     GBytes *bytes = g_bytes_new_take(buf->data, buf->len);
+//     // buf container freed but data owned by GBytes now
+//     g_free(buf); // only frees struct; safe because we used new_take
+//     *out_bytes = bytes;
+//     return TRUE;
+// }
 
 
 static void create_cairo(App *app) {
@@ -394,6 +398,9 @@ void draw_toolbar(App *app) {
     int padding = 10;
     int x = padding, y = 0;
     double button_height = 0.9 * app->toolbar_h;
+    long last_press_interval_ms = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
 
 
     app->num_buttons = 0;
@@ -401,6 +408,8 @@ void draw_toolbar(App *app) {
         gboolean enabled = TRUE;
         gboolean pressed = (i == MOVE_BUTTON);
 
+        last_press_interval_ms = (now.tv_sec - app->last_press_time[i].tv_sec) * 1000 +
+                                 (now.tv_nsec - app->last_press_time[i].tv_nsec) / 1000000;
         switch(i) {
             case RUN_BUTTON:
                 enabled = !app->sequence.playing;
@@ -412,9 +421,23 @@ void draw_toolbar(App *app) {
                 if (app->sequence.count <= 1 ) enabled = FALSE;
                 break;
             case PAUSE_BUTTON:
-            case FASTER_BUTTON:
-            case SLOWER_BUTTON:
                 enabled = app->sequence.playing;
+                if (app->sequence.count <= 1 ) enabled = FALSE;
+                break;
+            case FASTER_BUTTON:
+                if (app->sequence.fps >= MAX_FPS) {
+                    enabled = FALSE;
+                }else{
+                    enabled = app->sequence.playing;
+                }
+                if (app->sequence.count <= 1 ) enabled = FALSE;
+                break;
+            case SLOWER_BUTTON:
+                if (app->sequence.fps <= MIN_FPS) {
+                    enabled = FALSE;
+                }else{
+                    enabled = app->sequence.playing;
+                }
                 if (app->sequence.count <= 1 ) enabled = FALSE;
                 break;
             case HOME_BUTTON:
@@ -436,7 +459,7 @@ void draw_toolbar(App *app) {
                 break;
         }
 
-        Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled, pressed);
+        Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled, pressed, last_press_interval_ms);
         b.index = i;
         app->buttons[app->num_buttons++] = b;
         x += b.width + padding;
@@ -488,7 +511,7 @@ static void draw_all(App *app) {
 
 static void run_loop(App *app) {
     struct timespec now;
-    long elapsed_ms = 0;
+    long elapsed_ms = 0, press_interval_ms = 0;
     XSelectInput(app->dpy, app->win,
              ExposureMask | StructureNotifyMask | KeyPressMask |
              ButtonPressMask | ButtonReleaseMask | PointerMotionMask
@@ -618,7 +641,8 @@ static void run_loop(App *app) {
                     if (!btn->enabled) continue;
                     if (x >= btn->x && x <= btn->x + btn->width &&
                         y >= btn->y && y <= btn->y + btn->height) {
-
+                        app->last_press_time[btn->index] = now;
+                        app->pressing = TRUE;
                         if (btn->index == PAUSE_BUTTON) {
                             app->sequence.playing = FALSE;
                             draw_all(app);
@@ -644,12 +668,14 @@ static void run_loop(App *app) {
                             {
                                 app->sequence.fps++;
                             }
+                            draw_toolbar(app);
                         }
                         else if (btn->index == SLOWER_BUTTON) {
                             if (app->sequence.fps > MIN_FPS)
                             {
                                 app->sequence.fps--;
                             }
+                            draw_toolbar(app);
                         }
                         else if (btn->index == HOME_BUTTON) {
                             app->zoom_scale = 1.0;
@@ -797,6 +823,20 @@ static void run_loop(App *app) {
             app->resize_pending = FALSE;
         }
     }
+
+    for (int i = 0; i < app->num_buttons && app->pressing; i++) {
+        press_interval_ms = (now.tv_sec - app->last_press_time[i].tv_sec) * 1000 +
+                                 (now.tv_nsec - app->last_press_time[i].tv_nsec) / 1000000;
+        if (press_interval_ms >= 2 * WAIT_TIME_MS){
+            if (i==app->num_buttons -1){
+                app->pressing = FALSE;
+                draw_toolbar(app);
+            } else continue;
+        }else{
+            app->pressing = TRUE;
+            break;
+        }
+    }
     /* half of WAIT_TIME_MS */
     nanosleep(&(struct timespec){0, WAIT_TIME_MS * 500000L}, NULL);
 
@@ -841,6 +881,8 @@ int main(int argc, char **argv) {
 
     app.sequence.count = 0;
     app.sequence.current_index = 0;
+    memset(app.last_press_time, 0, sizeof(app.last_press_time));
+    app.pressing = FALSE;
 
 
 

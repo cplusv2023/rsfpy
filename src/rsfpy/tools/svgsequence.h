@@ -31,8 +31,8 @@
 
 /* Buttons */
 #define MAX_BUTTONS 9
-#define NEXT_BUTTON 0
-#define PREV_BUTTON 1
+#define NEXT_BUTTON 1
+#define PREV_BUTTON 0
 #define RUN_BUTTON 2
 #define PAUSE_BUTTON 3
 #define SLOWER_BUTTON 4
