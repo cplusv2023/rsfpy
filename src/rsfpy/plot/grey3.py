@@ -513,7 +513,8 @@ def grey3cube(
 
     n1tic, n2tic, n3tic = plot_params.get("n1tic", 5), plot_params.get("n2tic", 5), plot_params.get("n3tic", 5)
     format1, format2, format3 = plot_params.get("format1", None), plot_params.get("format2", None), plot_params.get("format3", None)
-    
+
+
     amax1, amax2, amax3 = axis1[-1], axis2[-1], axis3[-1]
     len1, len2, len3 = amax1 - o1, amax2 - o2, amax3 - o3
     if len1==0:
@@ -528,67 +529,24 @@ def grey3cube(
         len3 = 1
         o3 = 0
         amax3 = 1
-    extents = [
-        [o2, amax2, amax1, o1],
-        [0, len2, len3, 0],
-        [0, len3, 0, len1],
-    ]
+    # Determine extents
 
-    axis_xlims = [
-        [o2, amax2],
-        [o2, amax2 + len2 / point2 * (1 - point2)],
-        [o3, amax3]
-    ]
-    axis_ylims = [
-        [amax1, o1],
-        [o3, amax3],
-        [o1, amax1 + len1 / point1 * (1 - point1)]
-    ]
+    xreverse, yreverse, zreverse = \
+        plot_params.get("xreverse", False), \
+        plot_params.get("yreverse", True), \
+        plot_params.get("zreverse", False)
+    min1, max1 = axis1.min(), axis1.max()
+    min2, max2 = axis2.min(), axis2.max()
+    min3, max3 = axis3.min(), axis3.max()
 
 
-    axshear = (1 - point2) / len3 * len2 / point2
-    axshift = -(1 - point2) / len3 * len2 / point2 * o3
-    dxshear = (1 - point2) / len3
-    dxshift = 0
-    ayshear = (1 - point1) / len3 * len1 / point1
-    ayshift = -(1 - point1) / len3 * len1 / point1 * o3
-    dyshear = (1 - point1) / len3
-    dyshift = 0
+    if xreverse:
+        min2, max2 = max2, min2
+    if yreverse:
+        min1, max1 = max1, min1
+    # if zreverse:
+    #     min3, max3 = max3, min3
 
-
-
-    dtrans1 = transforms.Affine2D(
-        np.array([[point2 / len2, dxshear, 0],
-         [0, 1 / len3, 0],
-         [0, 0, 1]])
-    )
-    dtrans2 = transforms.Affine2D(
-        np.array([[1 / len3, 0, 0],
-         [dyshear, point1 / len1, 0],
-         [0, 0, 1]])
-    )
-    atrans1 = transforms.Affine2D(
-        np.array([[1, axshear, axshift],
-         [0, 1, 0],
-         [0, 0, 1]])
-    )
-    atrans2 = transforms.Affine2D(
-        np.array([[1, 0, 0],
-         [ayshear, 1, ayshift],
-         [0, 0, 1]])
-    )
-
-    grid_helper = artist.floating_axes.GridHelperCurveLinear(atrans1,
-                                        extremes=[o2, amax2, o3, amax3],
-                                        grid_locator1=artist.grid_finder.MaxNLocator(nbins=n2tic),
-                                        grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic),
-                                         tick_formatter2 = mticker.FormatStrFormatter(format3) if format3 is not None else None,
-                                                             )
-    grid_helper1 = artist.floating_axes.GridHelperCurveLinear(atrans2,
-                                         extremes=[o3, amax3, o1, amax1],
-                                         grid_locator1=artist.grid_finder.MaxNLocator(nbins=n1tic),
-                                         grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic),
-                                         )
 
     topmargin = 0.05
 
@@ -620,6 +578,25 @@ def grey3cube(
     hei_ax = 1 - topmargin
     
 
+    ax3_rect_axis = [(min3, min1), (max3, min1), (max3, max1), (min3, max1)]
+    ax2_rect_axis = [(min2, max3), (max2, max3), (max2, min3), (min2, min3)]
+
+    ax3_rect_data = [(0, 0), (1, (1-point1)), (1, 1), (0, (point1))]
+    ax2_rect_data = [((1-point2), 1), (1, 1), (point2, 0), (0, 0)]
+
+    newbase = [(ix, iy * hei_ax) for (ix, iy) in ax3_rect_data]
+    ax3_rect_data = newbase
+    newbase = [(ix, iy * hei_ax) for (ix, iy) in ax2_rect_data]
+    ax2_rect_data = newbase
+
+    dtrans2 = affine_from_parallelograms(ax2_rect_axis, ax2_rect_data)
+    dtrans3 = affine_from_parallelograms(ax3_rect_axis, ax3_rect_data)
+
+
+    ax3_grid_helper = artist.floating_axes.GridHelperCurveLinear(dtrans3, [min3, max3, min1, max1], grid_locator1=artist.grid_finder.MaxNLocator(nbins=n3tic),grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic),)
+    ax2_grid_helper = artist.floating_axes.GridHelperCurveLinear(dtrans2, [min2, max2, min3, max3], grid_locator1=artist.grid_finder.MaxNLocator(nbins=n2tic), grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic),)
+
+
     if colorbar and cax is None:
         axbase = axbase0.inset_axes(bounds=[0, 0, 0.85, 1 - topmargin], facecolor="none")
         gattr.main_ax = axbase
@@ -634,60 +611,76 @@ def grey3cube(
     ax1.set_label("Axes 1 [n1, n2]")
     gattr.ax1 = ax1
 
-    im0 = ax1.imshow(slice1, aspect="auto", extent=extents[0],
+    im0 = ax1.imshow(slice1, aspect="auto", extent=[min2, max2, min1, max1],
                      cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
     gattr.im1 = im0
 
     ax1.yaxis.set_major_locator(MaxNLocator1(nbins=n1tic))
-    ax1.set_xlim(axis_xlims[0])
-    ax1.set_ylim(axis_ylims[0])
 
     ax2 = axbase.inset_axes(bounds=[0, point1*hei_ax, 1, (1 - point1)*hei_ax],
-                            axes_class=artist.Axes, grid_helper=grid_helper,
+                            axes_class=artist.Axes, grid_helper=ax2_grid_helper,
                             facecolor="none")
     ax2.set_label("Axes 3 [n1, n3]")
     gattr.ax2 = ax2
 
-    im1 = ax2.imshow(slice3.T, aspect="auto", extent=extents[1],
+    ax2.transData1 = dtrans2 + ax2.transAxes
+    ax2._imshow_orig = ax2.imshow
+    
+    def imshow2(*args, **kwargs):
+        transform = kwargs.pop('transform', None)
+        if transform is not None:
+            kwargs['transform'] = transform
+        else:
+            kwargs['transform'] = ax2.transData1
+        return ax2._imshow_orig(*args, **kwargs)
+
+    def null(*args, **kwargs):
+        # Do nothing
+        return None
+    ax2.imshow = imshow2
+    ax2.set_ylim(0, 1)
+    ax2.set_xlim = null
+    ax2.set_ylim = null
+
+    im1 = ax2.imshow(slice3, aspect="auto", extent=[min2, max2, min3, max3],
                      cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
     gattr.im2 = im1
  
-    im1.set_transform(dtrans1 + ax2.transAxes)
-
-    #
-    ax2.set_ylim(axis_ylims[1])
-    ax2.set_xlim(axis_xlims[1])
-    # ax2.axis["t1"] = ax2.new_floating_axis(0,-5)
-
     ax3 = axbase.inset_axes(bounds=[point2, 0, 1 - point2, hei_ax],
-                            axes_class=artist.Axes, grid_helper=grid_helper1,
+                            axes_class=artist.Axes, grid_helper=ax3_grid_helper,
                             facecolor="none")
     ax3.set_label("Axes 2 [n2, n3]")
     gattr.ax3 = ax3
 
-    im2 = ax3.imshow(slice2, aspect="auto", extent=extents[2],
+    ax3.transData1 = dtrans3 + ax3.transAxes
+    ax3._imshow_orig = ax3.imshow
+    def imshow3(*args, **kwargs):
+        transform = kwargs.pop('transform', None)
+        if transform is not None:
+            kwargs['transform'] = transform
+        else:
+            kwargs['transform'] = ax3.transData1
+        return ax3._imshow_orig(*args, **kwargs)
+    ax3.imshow = imshow3
+    ax3.set_xlim = null
+    ax3.set_ylim = null
+
+    im2 = ax3.imshow(slice2, aspect="auto", extent=[min3, max3, min1, max1],
                      cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
-    im2.set_transform(dtrans2 + ax3.transAxes)
     gattr.im3 = im2
-    #
-    ax3.set_xlim(axis_xlims[2])
-    ax3.set_ylim(axis_ylims[2])
 
     ax2.axis[:].major_ticklabels.set(visible=False)
     ax2.axis[:].major_ticks.set(visible=False)
 
-  
-
-    
-    ax2.axis["left"].major_ticks.set(tick_out=True, visible=True)
-    ax2.axis["right"].set(visible=False)
-    ax2.axis["left"].major_ticklabels.set(visible=True)
-
-
-
     ax3.axis[:].major_ticklabels.set(visible=False)
     ax3.axis[:].major_ticks.set(visible=False)
-    ax3.axis["right"].major_ticks.set(visible=False)
+
+    ax2.axis["left"].major_ticks.set(visible=True)
+    ax2.axis["left"].major_ticklabels.set(visible=True)
+    ax3.axis["bottom"].major_ticks.set(visible=True)
+    ax3.axis["bottom"].major_ticklabels.set(visible=True)
+    ax3.axis["right"].major_ticks.set(visible=True)
+    # ax3.axis["right"].major_ticklabels.set(visible=True)
 
     ax1.set_gid(__AX1_NAME % (axis1[0], axis1[-1], axis2[0], axis2[-1]))
     ax2.set_gid(__AX3_NAME % (axis3[0], axis3[-1], axis2[0], axis2[-1]))
@@ -699,8 +692,10 @@ def grey3cube(
     # Labels
     ax1.set_xlabel(label2)
     ax1.set_ylabel(label1)
-
     ax2.axis["left"].label.set(text=label3)
+    ax3.axis["bottom"].label.set(text=label2)
+
+    # ax2.axis["left"].label.set(text=label3)
 
     gattr.labels.append(ax1.xaxis.label)
     gattr.labels.append(ax1.yaxis.label)
@@ -724,115 +719,177 @@ def grey3cube(
         cbar = fig.colorbar(im0, cax=axbar, cmap=cmap, label=plot_params.get('bartitle', ''),)
         gattr.cbar = cbar
 
-    # Indicating lines
-    l11 = (amax1 - axis1[frame1]) / len1 * point1
-    l12 = (axis2[frame2] - o2) / len2 * point2
-
-    loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
-    loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
-
-    l21 = point1 + loff1
-    l22 = point2 + loff2
-    l221 = l12 +  (1-point2)
-
-    l31 = l11 + 1 - point1
-    l32 = point1 + loff1
 
     lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
-
-    gattr.hlines.append(ax1.hlines(l11*hei_ax,0,point2, color=lcol,transform=axbase.transAxes, zorder=10))
+    gattr.hlines.append(ax1.hlines(y=axis1[frame1], xmin=axis2[0], xmax=axis2[-1], color=lcol, zorder=10))
     gattr.hlines[-1].set_gid(__AX1_HLINE_NAME)
-    gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes, zorder=10))
+    gattr.vlines.append(ax1.vlines(x=axis2[frame2], ymin=axis1[0], ymax=axis1[-1], color=lcol, zorder=10))
     gattr.vlines[-1].set_gid(__AX1_VLINE_NAME)
-    gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
-    gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
-    gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
-    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
-    gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes, zorder=10))
-    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
-    gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
+    gattr.hlines.append(ax2.hlines(y=axis3[frame3], xmin=axis2[0], xmax=axis2[-1], color=lcol, zorder=10, transform=dtrans2 + ax2.transAxes))
     gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
+    gattr.vlines.append(ax2.vlines(x=axis2[frame2], ymin=axis3[0], ymax=axis3[-1], color=lcol, zorder=10, transform=dtrans2 + ax2.transAxes))
+    gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
+    gattr.hlines.append(ax3.hlines(y=axis1[frame1], xmin=axis3[0], xmax=axis3[-1], color=lcol, zorder=10, transform=dtrans3 + ax3.transAxes))
+    gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
+    gattr.vlines.append(ax3.vlines(x=axis3[frame3], ymin=axis1[0], ymax=axis1[-1], color=lcol, zorder=10, transform=dtrans3 + ax3.transAxes))
+    gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
 
-
-    # Indicating labels
-    lab1 = str(axis2[frame2])
-    lab11 = np.format_float_positional(axis2[frame2])
-    lab1 = lab11 if len(lab11) < len(lab1) else lab1
-    lab2 = str(axis1[frame1])
-    lab21 = np.format_float_positional(axis1[frame1])
-    lab2 = lab21 if len(lab21) < len(lab2) else lab2
-    lab3 = str(axis3[frame3])
-    lab31 = np.format_float_positional(axis3[frame3])
-    lab3 = lab31 if len(lab31) < len(lab3) else lab3
-    gattr.ticklabels.append(axbase.text(l221, 1*hei_ax, lab1, va='bottom',
-                ha='center', color=lcol, zorder=10))
-    gattr.ticklabels.append(axbase.text(1, l31*hei_ax, lab2, va='center',
-                ha='left', color=lcol, rotation=-90, zorder=10))
-    gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
-                lab3, va='top', ha='left', color=lcol, zorder=10))
-    gattr.ticklabels[-3].set_gid(__FRAME2_LABEL_NAME)
-    gattr.ticklabels[-2].set_gid(__FRAME1_LABEL_NAME)
-    gattr.ticklabels[-1].set_gid(__FRAME3_LABEL_NAME)
+    tlabelpad = 0.01
+    gattr.ticklabels.append(ax3.text(x=max3 + tlabelpad*(max3-min3),  y=axis1[frame1], s=np.format_float_positional(axis1[frame1], trim='-'), ha="left", va="center", color=lcol, rotation=90, transform=dtrans3 + ax3.transAxes, zorder=10))
+    gattr.ticklabels.append(ax1.text(x=0,     y=0, s=" ", ha="left", va="bottom", color=lcol, rotation=0, transform=axbase.transAxes, zorder=10))
+    gattr.ticklabels.append(ax2.text(x=axis1[frame1], y=max3 + tlabelpad*(max3-min3), s=np.format_float_positional(axis2[frame2], trim='-'), ha="center", va="bottom", color=lcol, rotation=0, transform=dtrans2+ax2.transAxes, zorder=10))
+    gattr.ticklabels[-3].set_gid(__FRAME1_LABEL_NAME)
+    gattr.ticklabels[-2].set_gid(__FRAME3_LABEL_NAME)
+    gattr.ticklabels[-1].set_gid(__FRAME2_LABEL_NAME)
 
     def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
-        l11 = (amax1 - axis1[frame1]) / len1 * point1
-        l12 = (axis2[frame2] - o2) / len2 * point2
-
-        loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
-        loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
-
-        l21 = point1 + loff1
-        l22 = point2 + loff2
-        l221 = l12 + (1 - point2)
-
-        l31 = l11 + 1 - point1
-        l32 = point1 + loff1
-
         hline1 = gattr.hlines[0].get_segments()
-        hline1[0][0,1] = l11*hei_ax
-        hline1[0][1,1] = l11*hei_ax
+        hline1[0][0, 1] = axis1[frame1]
+        hline1[0][1, 1] = axis1[frame1]
         gattr.hlines[0].set_segments(hline1)
 
-        hline2, = gattr.hlines[1]
-        hline2.set_xdata([loff2,l22])
-        hline2.set_ydata([l21*hei_ax,l21*hei_ax])
+        hline2 = gattr.hlines[1].get_segments()
+        hline2[0][0, 1] = axis3[frame3]
+        hline2[0][1, 1] = axis3[frame3]
+        gattr.hlines[1].set_segments(hline2)
 
-        hline3, = gattr.hlines[2]
-        hline3.set_xdata([point2,1])
-        hline3.set_ydata([l11*hei_ax,l31*hei_ax])
+        hline3 = gattr.hlines[2].get_segments()
+        hline3[0][0, 1] = axis1[frame1]
+        hline3[0][1, 1] = axis1[frame3]
+        gattr.hlines[2].set_segments(hline3)
 
         vline1 = gattr.vlines[0].get_segments()
-        vline1[0][0,0] = l12
-        vline1[0][1,0] = l12
+        vline1[0][0, 0] = axis2[frame2]
+        vline1[0][1, 0] = axis2[frame2]
         gattr.vlines[0].set_segments(vline1)
 
-        vline2, = gattr.vlines[1]
-        vline2.set_xdata([l12,l221])
-        vline2.set_ydata([point1*hei_ax,1*hei_ax])
+        vline2 = gattr.vlines[1].get_segments()
+        vline2[0][0, 0] = axis2[frame2]
+        vline2[0][1, 0] = axis2[frame2]
+        gattr.vlines[1].set_segments(vline2)
 
         vline3 = gattr.vlines[2].get_segments()
-        vline3[0][0,0] = l22
-        vline3[0][1,0] = l22
-        vline3[0][0,1] = loff1 * hei_ax
-        vline3[0][1,1] = l32 * hei_ax
+        vline3[0][0, 0] = axis3[frame3]
+        vline3[0][1, 0] = axis3[frame3]
         gattr.vlines[2].set_segments(vline3)
 
-        # Indicating labels
-        lab1 = str(axis2[frame2])
-        lab11 = "%.2f" % axis2[frame2]
-        lab1 = lab11 if len(lab11) < len(lab1) else lab1
-        lab2 = str(axis1[frame1])
-        lab21 = "%.2f" % axis1[frame1]
-        lab2 = lab21 if len(lab21) < len(lab2) else lab2
-        lab3 = str(axis3[frame3])
-        lab31 = "%.2f" % axis3[frame3]
-        lab3 = lab31 if len(lab31) < len(lab3) else lab3
-        gattr.ticklabels[-3].set_position([l221, 1 * hei_ax])
-        gattr.ticklabels[-3].set_text("%s" % lab1)
-        gattr.ticklabels[-2].set_position([1, l31 * hei_ax])
-        gattr.ticklabels[-2].set_text("%s" % lab2)
-        gattr.ticklabels[-1].set_position([l22, loff1 * hei_ax])
-        gattr.ticklabels[-1].set_text("%s" % lab3)
+        gattr.ticklabels[-3].set_position([max3 + tlabelpad*(max3-min3), axis1[frame1]])
+        gattr.ticklabels[-3].set_text(np.format_float_positional(axis1[frame1]))
+        # gattr.ticklabels[-2].set_position([frame3 / nz, 1 + tlabelpad])
+        # gattr.ticklabels[-2].set_text(np.format_float_positional(axis3[frame3]))
+        gattr.ticklabels[-1].set_position([axis1[frame1], max3 + tlabelpad*(max3-min3)])
+        gattr.ticklabels[-1].set_text(np.format_float_positional(axis2[frame2]))
+
+
+    # Indicating lines
+    # l11 = (amax1 - axis1[frame1]) / len1 * point1
+    # l12 = (axis2[frame2] - o2) / len2 * point2
+
+    # loff1 = (axis3[frame3] - o3) / len3 * (1 - point1)
+    # loff2 = (axis3[frame3] - o3) / len3 * (1 - point2)
+
+    # l21 = point1 + loff1
+    # l22 = point2 + loff2
+    # l221 = l12 +  (1-point2)
+
+    # l31 = l11 + 1 - point1
+    # l32 = point1 + loff1
+
+    # lcol = plot_params.get('framelinecol', 'blue' if cmap == 'grey' else 'black')
+
+    # gattr.hlines.append(ax1.hlines(l11*hei_ax,0,point2, color=lcol,transform=axbase.transAxes, zorder=10))
+    # gattr.hlines[-1].set_gid(__AX1_HLINE_NAME)
+    # gattr.vlines.append(ax1.vlines(l12,0,point1*hei_ax, color=lcol, transform=axbase.transAxes, zorder=10))
+    # gattr.vlines[-1].set_gid(__AX1_VLINE_NAME)
+    # gattr.hlines.append(ax2.plot([loff2,l22],[l21*hei_ax,l21*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
+    # gattr.hlines[-1].set_gid(__AX3_HLINE_NAME)
+    # gattr.vlines.append(ax2.plot([l12,l221],[point1*hei_ax,1*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
+    # gattr.vlines[-1].set_gid(__AX3_VLINE_NAME)
+    # gattr.vlines.append(ax3.vlines(l22, loff1*hei_ax, l32*hei_ax, color=lcol,  transform=axbase.transAxes, zorder=10))
+    # gattr.vlines[-1].set_gid(__AX2_VLINE_NAME)
+    # gattr.hlines.append(ax3.plot([point2,1],[l11*hei_ax,l31*hei_ax], color=lcol, transform=axbase.transAxes, zorder=10)[0])
+    # gattr.hlines[-1].set_gid(__AX2_HLINE_NAME)
+
+
+    # # Indicating labels
+    # lab1 = str(axis2[frame2])
+    # lab11 = np.format_float_positional(axis2[frame2])
+    # lab1 = lab11 if len(lab11) < len(lab1) else lab1
+    # lab2 = str(axis1[frame1])
+    # lab21 = np.format_float_positional(axis1[frame1])
+    # lab2 = lab21 if len(lab21) < len(lab2) else lab2
+    # lab3 = str(axis3[frame3])
+    # lab31 = np.format_float_positional(axis3[frame3])
+    # lab3 = lab31 if len(lab31) < len(lab3) else lab3
+    # gattr.ticklabels.append(axbase.text(l221, 1*hei_ax, lab1, va='bottom',
+    #             ha='center', color=lcol, zorder=10))
+    # gattr.ticklabels.append(axbase.text(1, l31*hei_ax, lab2, va='center',
+    #             ha='left', color=lcol, rotation=-90, zorder=10))
+    # gattr.ticklabels.append(axbase.text(l22, loff1*hei_ax,
+    #             lab3, va='top', ha='left', color=lcol, zorder=10))
+    # gattr.ticklabels[-3].set_gid(__FRAME2_LABEL_NAME)
+    # gattr.ticklabels[-2].set_gid(__FRAME1_LABEL_NAME)
+    # gattr.ticklabels[-1].set_gid(__FRAME3_LABEL_NAME)
+
+    # def _set_indicator_frame(gattr=gattr, frame1=frame1, frame2=frame2, frame3=frame3):
+    #     l11 = abs((max1 - axis1[frame1]) / (max1-min1) * point1)
+    #     l12 = abs((axis2[frame2] - min2) / (max2-min2) * point2)
+
+    #     loff1 = abs((axis3[frame3] - o3) / (max3-min3) * (1 - point1))
+    #     loff2 = abs((axis3[frame3] - o3) / (max3-min3) * (1 - point2))
+
+    #     l21 = point1 + loff1
+    #     l22 = point2 + loff2
+    #     l221 = l12 + (1 - point2)
+
+    #     l31 = l11 + 1 - point1
+    #     l32 = point1 + loff1
+
+    #     hline1 = gattr.hlines[0].get_segments()
+    #     hline1[0][0,1] = l11*hei_ax
+    #     hline1[0][1,1] = l11*hei_ax
+    #     gattr.hlines[0].set_segments(hline1)
+
+    #     hline2, = gattr.hlines[1]
+    #     hline2.set_xdata([loff2,l22])
+    #     hline2.set_ydata([l21*hei_ax,l21*hei_ax])
+
+    #     hline3, = gattr.hlines[2]
+    #     hline3.set_xdata([point2,1])
+    #     hline3.set_ydata([l11*hei_ax,l31*hei_ax])
+
+    #     vline1 = gattr.vlines[0].get_segments()
+    #     vline1[0][0,0] = l12
+    #     vline1[0][1,0] = l12
+    #     gattr.vlines[0].set_segments(vline1)
+
+    #     vline2, = gattr.vlines[1]
+    #     vline2.set_xdata([l12,l221])
+    #     vline2.set_ydata([point1*hei_ax,1*hei_ax])
+
+    #     vline3 = gattr.vlines[2].get_segments()
+    #     vline3[0][0,0] = l22
+    #     vline3[0][1,0] = l22
+    #     vline3[0][0,1] = loff1 * hei_ax
+    #     vline3[0][1,1] = l32 * hei_ax
+    #     gattr.vlines[2].set_segments(vline3)
+
+    #     # Indicating labels
+    #     lab1 = str(axis2[frame2])
+    #     lab11 = "%.2f" % axis2[frame2]
+    #     lab1 = lab11 if len(lab11) < len(lab1) else lab1
+    #     lab2 = str(axis1[frame1])
+    #     lab21 = "%.2f" % axis1[frame1]
+    #     lab2 = lab21 if len(lab21) < len(lab2) else lab2
+    #     lab3 = str(axis3[frame3])
+    #     lab31 = "%.2f" % axis3[frame3]
+    #     lab3 = lab31 if len(lab31) < len(lab3) else lab3
+    #     gattr.ticklabels[-3].set_position([l221, 1 * hei_ax])
+    #     gattr.ticklabels[-3].set_text("%s" % lab1)
+    #     gattr.ticklabels[-2].set_position([1, l31 * hei_ax])
+    #     gattr.ticklabels[-2].set_text("%s" % lab2)
+    #     gattr.ticklabels[-1].set_position([l22, loff1 * hei_ax])
+    #     gattr.ticklabels[-1].set_text("%s" % lab3)
 
 
     setattr(gattr, 'set_indicator_frame', _set_indicator_frame)
@@ -844,3 +901,38 @@ def grey3(*args, **kargs):
         return grey3flat(*args, **kargs)
     else:
         return grey3cube(*args, **kargs)
+    
+def affine_from_parallelograms(src_pts, dst_pts):
+    """
+    计算从 src_pts 到 dst_pts 的仿射变换矩阵 (3x3)
+    
+    参数:
+        src_pts: [(x0,y0), (x1,y1), (x2,y2), (x3,y3)] 源平行四边形顶点
+        dst_pts: [(x0',y0'), (x1',y1'), (x2',y2'), (x3',y3')] 目标平行四边形顶点
+    
+    返回:
+        M: 3x3 仿射矩阵 (numpy.ndarray)
+    """
+    src = np.array(src_pts, dtype=float)
+    dst = np.array(dst_pts, dtype=float)
+
+    # 构造方程 A * params = B
+    A = []
+    B = []
+    for (x, y), (xp, yp) in zip(src, dst):
+        A.append([x, y, 1, 0, 0, 0])
+        A.append([0, 0, 0, x, y, 1])
+        B.append(xp)
+        B.append(yp)
+
+    A = np.array(A)
+    B = np.array(B)
+
+    # 最小二乘解
+    params, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+    a, b, c, d, e, f = params
+
+    M = np.array([[a, b, c],
+                  [d, e, f],
+                  [0, 0, 1]])
+    return transforms.Affine2D(M)
