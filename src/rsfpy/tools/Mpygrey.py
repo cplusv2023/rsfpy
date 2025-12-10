@@ -503,6 +503,8 @@ def main():
 
     ################################################################################
     # Support multiple frames
+    if plottype in ['graph', 'wiggle']:
+        movie = False
     if plottype == 'grey3':
         movie = int(getfloat(par_dict, 'movie', 0))
     databin = None
