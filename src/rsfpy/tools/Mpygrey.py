@@ -142,13 +142,14 @@ import matplotlib.colors as mcolors
 import matplotlib.font_manager as font_manager
 import numpy as np
 from matplotlib import use as use_backend
+from matplotlib import __version__ as mpl_version
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter, LogLocator, FuncFormatter, ScalarFormatter
 import sys, subprocess, os, re, io
 from textwrap import dedent
 import logging
 
 from rsfpy import Rsfarray
-from rsfpy.utils import _str_match_re, _get_stdname
+from rsfpy.utils import _str_match_re, _get_stdname, _version_compare
 from rsfpy.plot import prepare_svg_template, replace_png, arr2png, extract_ax_info, set_text, set_line
 from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __BASE_AX_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME
 
@@ -726,15 +727,16 @@ def main():
                 gattr.set_spines(color=frame_color,width=frame_width)
                 gattr.set_ticklabels(color=frame_color,fontsize=ticksz, fontweight=tickfat)
                 gattr.set_labels(color=frame_color,fontsize=labelsz, fontweight=labelfat)
-                if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
-                if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
-                if format3 is not None:
-                    gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
-                    gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
-                if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
-                if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
-                if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
-                if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+                if _version_compare(mpl_version, '3.9.0') >= 0:
+                    if format1 is not None: gattr.ax1.yaxis.set_major_formatter(FormatStrFormatter(format1))
+                    if format2 is not None: gattr.ax1.xaxis.set_major_formatter(FormatStrFormatter(format2))
+                    if format3 is not None:
+                        gattr.ax2.xaxis.set_major_formatter(FormatStrFormatter(format3))
+                        gattr.ax3.yaxis.set_major_formatter(FormatStrFormatter(format3))
+                    if ntic1 is not None: gattr.ax1.yaxis.set_major_locator(MaxNLocator(nbins=ntic1))
+                    if ntic2 is not None: gattr.ax1.xaxis.set_major_locator(MaxNLocator(nbins=ntic2))
+                    if ntic3 is not None: gattr.ax2.xaxis.set_major_locator(MaxNLocator(nbins=ntic3))
+                    if ntic3 is not None: gattr.ax3.yaxis.set_major_locator(MaxNLocator(nbins=ntic3))
 
                 if scalebar:
                     if datatype == np.uint8:

@@ -201,3 +201,29 @@ def flow(cmd, source=None, verb=False):
     out.write(sout)
     out.seek(0)
     return out
+
+def _version_compare(ver1: str, ver2: str) -> int:
+    """
+    Compare two version strings.
+    Returns:
+        -1 if ver1 < ver2
+         0 if ver1 == ver2
+         1 if ver1 > ver2
+    """
+    def parse_version(v):
+        return [int(x) for x in re.findall(r'\d+', v)]
+
+    v1_parts = parse_version(ver1)
+    v2_parts = parse_version(ver2)
+
+    # Extend the shorter version with zeros
+    length = max(len(v1_parts), len(v2_parts))
+    v1_parts.extend([0] * (length - len(v1_parts)))
+    v2_parts.extend([0] * (length - len(v2_parts)))
+
+    for a, b in zip(v1_parts, v2_parts):
+        if a < b:
+            return -1
+        elif a > b:
+            return 1
+    return 0

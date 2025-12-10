@@ -4,9 +4,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import warnings
 import matplotlib.ticker as mticker
+from matplotlib import __version__ as mpl_version
 from typing import Optional, Union
+import sys
 from .grey import grey
 from .wiggle import wiggle
+from ..utils import _version_compare
 from ..version import __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME
 import matplotlib.transforms as transforms
 # from mpl_toolkits.axisartist.floating_axes import \
@@ -577,18 +580,27 @@ def grey3cube(
          [ayshear, 1, ayshift],
          [0, 0, 1]])
     )
-
-    grid_helper = artist.floating_axes.GridHelperCurveLinear(atrans1,
-                                        extremes=[o2, amax2, o3, amax3],
-                                        grid_locator1=artist.grid_finder.MaxNLocator(nbins=n2tic),
-                                        grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic),
-                                         tick_formatter2 = mticker.FormatStrFormatter(format3) if format3 is not None else None,
-                                                             )
-    grid_helper1 = artist.floating_axes.GridHelperCurveLinear(atrans2,
-                                         extremes=[o3, amax3, o1, amax1],
-                                         grid_locator1=artist.grid_finder.MaxNLocator(nbins=n1tic),
-                                         grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic),
-                                         )
+    
+    if _version_compare(mpl_version, '3.9.0') >=0:
+        grid_helper = artist.floating_axes.GridHelperCurveLinear(atrans1,
+                                            extremes=[o2, amax2, o3, amax3],
+                                            grid_locator1=artist.grid_finder.MaxNLocator(nbins=n2tic),
+                                            grid_locator2=artist.grid_finder.MaxNLocator(nbins=n3tic),
+                                            tick_formatter2 = mticker.FormatStrFormatter(format3) if format3 is not None else None,
+                                                                )
+        grid_helper1 = artist.floating_axes.GridHelperCurveLinear(atrans2,
+                                            extremes=[o3, amax3, o1, amax1],
+                                            grid_locator1=artist.grid_finder.MaxNLocator(nbins=n1tic),
+                                            grid_locator2=artist.grid_finder.MaxNLocator(nbins=n1tic),
+                                            )
+    else:
+        print("Warning: Some formatting features require matplotlib >= 3.9.0", file=sys.stderr)
+        grid_helper = artist.floating_axes.GridHelperCurveLinear(atrans1,
+                                            extremes=[o2, amax2, o3, amax3],
+                                                                )
+        grid_helper1 = artist.floating_axes.GridHelperCurveLinear(atrans2,
+                                            extremes=[o3, amax3, o1, amax1],
+                                            )
 
     topmargin = 0.05
 
@@ -693,8 +705,9 @@ def grey3cube(
     ax2.set_gid(__AX3_NAME % (axis3[0], axis3[-1], axis2[0], axis2[-1]))
     ax3.set_gid(__AX2_NAME % (axis1[0], axis1[-1], axis3[0], axis3[-1]))
 
-    if format1 is not None: ax1.xaxis.set_major_formatter(mticker.FormatStrFormatter(format1))
-    if format2 is not None: ax1.yaxis.set_major_formatter(mticker.FormatStrFormatter(format2))
+    if _version_compare(mpl_version, '3.9.0') >= 0:
+        if format1 is not None: ax1.xaxis.set_major_formatter(mticker.FormatStrFormatter(format1))
+        if format2 is not None: ax1.yaxis.set_major_formatter(mticker.FormatStrFormatter(format2))
 
     # Labels
     ax1.set_xlabel(label2)
