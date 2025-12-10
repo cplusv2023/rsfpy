@@ -11,6 +11,12 @@ Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scient
 - 🌍 **Applications**: Geophysics, signal processing, seismic imaging, and more
 - 🔄 **Totally community**: Just started. Contributions are welcome!
 
+## 📦 Installation
+**Strongly recommended to use a virtual Python environment** to isolate dependencies and ensure reproducibility.
+```bash
+pip install . 
+```
+
 ### 📚 Requirements
 #### Python libraries
 - Python >= 3
@@ -18,7 +24,7 @@ Built on top of [*NumPy*](https://numpy.org/ "The fundamental package for scient
 - Matplotlib
 - (*optional*) lxml
 
-install by:
+Requirements installed by:
 ```bash
 pip install -r requirements.txt
 
@@ -30,7 +36,7 @@ pip install -r requirements.txt
 - rsvg2 (librsvg2-dev)
 - glib2.0 (libglib2.0-dev)
 
-install by:
+Other requirements installed by:
 ```bash
 sudo apt update
 sudo apt install build-essential \
@@ -39,11 +45,7 @@ sudo apt install build-essential \
 
 Note that the command-line tool **rsfsvgpen** needs **lxml** to deal with svg figures.
 
-## 📦 Installation
-**Strongly recommended to use a virtual Python environment** to isolate dependencies and ensure reproducibility.
-```bash
-pip install . 
-```
+
 
 ## 🚀 Quick start 
 ### Command-line tools

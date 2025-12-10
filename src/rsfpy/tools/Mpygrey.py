@@ -449,6 +449,8 @@ def main():
         'I':'gray',
         's':'seismic',
         'S':'seismic_r',
+        'kwr':mcolors.LinearSegmentedColormap.from_list("kwr", ['k','w','r']),
+        'rwk':mcolors.LinearSegmentedColormap.from_list("rwk", ['r','w','k']),
     }
     if color in cmapper.keys():
         color = cmapper[color]
