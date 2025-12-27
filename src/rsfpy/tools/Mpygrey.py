@@ -964,13 +964,14 @@ def main():
                     continue
                 min1, max1, min2, max2 = [float(v) for v in rect_vals[:4]]
                 rectcolor = par_dict.get(f'rect{irect+1}color', par_dict.get('rectcolor', frame_color))
+                rectfcolor = par_dict.get(f'rect{irect+1}facecolor', par_dict.get('rectfacecolor', 'none'))
                 rectwidth = getfloat(par_dict, f'rect{irect+1}width', getfloat(par_dict, 'rectwidth', frame_width))
                 rectstyle = par_dict.get(f'rect{irect+1}style', par_dict.get('rectstyle', '-'))
                 rect_alpha = getfloat(par_dict, f'rect{irect+1}alpha', getfloat(par_dict, 'rectalpha', 1.0))
                 xy = (min2, min1)
                 width = max2 - min2
                 height = max1 - min1
-                rect = plt.Rectangle(xy, width, height, fill=False, edgecolor=rectcolor, linewidth=rectwidth, linestyle=rectstyle, alpha=rect_alpha)
+                rect = plt.Rectangle(xy, width, height, fill=True, facecolor=rectfcolor, edgecolor=rectcolor, linewidth=rectwidth, linestyle=rectstyle, alpha=rect_alpha)
                 ax.add_patch(rect)
             except:
                 sf_warning(f"Warning: invalid rect{irect+1}={rectpar}, ignored.")
