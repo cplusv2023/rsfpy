@@ -134,11 +134,11 @@ USAGE = DOC
 
 
 def sf_warning(*msg):
-    print(f"{__file__}: ", *msg, file=sys.stderr, end="", flush=True, sep="")
+    print(f"{__progname__}: ", *msg, file=sys.stderr, end="", flush=True, sep="")
 
 
 def sf_error(*msg):
-    print(f"{__file__}: ", *msg, file=sys.stderr, end="", flush=True, sep="")
+    print(f"{__progname__}: ", *msg, file=sys.stderr, end="", flush=True, sep="")
     sys.exit(1)
 
 
