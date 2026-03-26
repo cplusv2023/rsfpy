@@ -222,9 +222,9 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
     if form == "ascii":
         np.savetxt(out_fp, arr, fmt=fmt)
     elif form == "native":
-        out_fp.write(arr.tobytes())
+        out_fp.write(arr.tobytes(order="F"))
     elif form == "xdr":
-        out_fp.write(arr.byteswap().tobytes())
+        out_fp.write(arr.byteswap().tobytes(order="F"))
 
     if close_after:
         file_fp.close()

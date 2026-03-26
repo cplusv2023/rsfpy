@@ -1,9 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, Union
-from matplotlib.collections import LineCollection, PolyCollection
-import ctypes, os, warnings
-from rsfpy_utils import interp_cross
+import warnings
 
 def wiggle(
     data: Union[np.ndarray, "Rsfarray"],
@@ -59,12 +57,8 @@ def wiggle(
     """
     # Check dimensions
     data = np.squeeze(data)
-    one_trace = False
-
     if data.ndim < 2:
-        # raise ValueError("Input data must be at least 2D.")
-        one_trace = True
-        data = data[:, np.newaxis]
+        raise ValueError("Input data must be at least 2D.")
     elif data.ndim > 2:
         warnings.warn("Got data dimensions > 2, use first slice.")
         data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
@@ -86,6 +80,7 @@ def wiggle(
         fig = ax.figure
 
     # data = data if transp else data.T
+    # 数据属性（Rsfarray 支持）
     if hasattr(data, "d1"):
         d1 = d1 if d1 is not None else getattr(data, "d1", None)
         d2 = d2 if d2 is not None else getattr(data, "d2", None)
@@ -110,18 +105,20 @@ def wiggle(
 
 
 
+    # 坐标范围
     if min1 is None: min1 = o1
     if max1 is None: max1 = o1 + d1 * (n1-1)
     if min2 is None: min2 = o2
     if max2 is None: max2 = o2 + d2 * (n2-1)
     
     t = axis1 
-    x_positions = axis2
+    x_positions = axis2 # 道位置
 
+    # ---- 振幅裁剪 ----
     clip = params['clip']
     bias = params['bias']
     pclip = params['pclip']
-
+    allpos = params['allpos']
 
     if clip is None:
         if pclip is not None:
@@ -133,73 +130,48 @@ def wiggle(
             clip = np.max(np.abs(data))
 
     clip = abs(clip)
+    if allpos:
+        vmin, vmax = 0, clip
+    else:
+        vmin, vmax = bias - clip, bias + clip
 
+    # ---- zplot 缩放系数 ----
     if zplot == 0:
         zplot = 1.0
-    
-    if not one_trace:
-        default_amp = abs((d2 * (n2-1)) /( 2 * (n2-1)))
-    else:
-        default_amp = d2 / 2
+    # 默认最大幅度
+    default_amp = (o2 + d2 * (n2-1) - o2) / n2 / 2
     scale = default_amp * abs(zplot) / clip
 
-    mask = (x_positions >= min2) & (x_positions <= max2)
-    sel_data = data[:, mask] - bias
-    sel_xpos = x_positions[mask]
-    nsel = sel_data.shape[1]
+    # ---- 绘制每道 ----
+    for i in range(n2):
+        if not x_positions[i] >= min2 and x_positions[i] <= max2:
+            continue
 
-    # wiggle trace offset
-    wiggles = sel_xpos[None, :] + sel_data * scale
-    if pcolor != 'none':
-        newtp, pwiggles, maxlen = interp_cross(t, sel_data)
-        newtp = newtp[:maxlen, :]
-        pwiggles = pwiggles[:maxlen, :]
-        pwiggles = sel_xpos[None, :] + pwiggles * scale
-    if ncolor != 'none':
-        newtn, nwiggles, maxlen = interp_cross(t, sel_data * -1)
-        newtn = newtn[:maxlen, :]
-        nwiggles = nwiggles[:maxlen, :]
-        nwiggles = sel_xpos[None, :] + nwiggles * scale * -1
-    
+        trace = data[:, i] - bias
+        wiggle_x = x_positions[i] + trace * scale
+        # 画线
+        if not transp:
+            ax.plot(t, wiggle_x, color=lcolor, linewidth=params['linewidth'])
+        else:
+            ax.plot(wiggle_x, t, color=lcolor, linewidth=params['linewidth'])
 
-    if not transp:
-        segs = [np.column_stack([t, wiggles[:, i]]) for i in range(nsel)]
-    else:
-        segs = [np.column_stack([wiggles[:, i], t]) for i in range(nsel)]
+        # 填充正值区
+        if pcolor != 'none' :
+            pos_mask = trace > 0
+            if not transp:
+                ax.fill_between(t, x_positions[i], wiggle_x, where=pos_mask, facecolor=pcolor, interpolate=params['interpolate'])
+            else:
+                ax.fill_betweenx(t, x_positions[i], wiggle_x, where=pos_mask, facecolor=pcolor, interpolate=params['interpolate'])
 
-    lc = LineCollection(segs, colors=lcolor, linewidths=params['linewidth'])
-    ax.add_collection(lc)
+        # 填充负值区
+        if ncolor != 'none':
+            neg_mask = trace < 0
+            if not transp:
+                ax.fill_between(t, wiggle_x, x_positions[i], where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
+            else:
+                ax.fill_betweenx(t, x_positions[i], wiggle_x, where=neg_mask, facecolor=ncolor, interpolate=params['interpolate'])
 
-    # fill positive
-    if pcolor != 'none':
-        polys = []
-        for i in range(nsel):
-            if np.any(sel_data[:, i] > 0):
-                if not transp:
-                    polys.append(np.column_stack([newtp[:, i], pwiggles[:, i]]))
-                else:
-                    polys.append(np.column_stack([pwiggles[:, i], newtp[:, i]]))
-        if polys:
-            pc = PolyCollection(polys, facecolors=pcolor, edgecolors='none')
-            ax.add_collection(pc)
-
-    # fill negative
-    if ncolor != 'none':
-        polys = []
-        for i in range(nsel):
-            if np.any(sel_data[:, i] < 0):
-                if not transp:
-                    polys.append(np.column_stack([newtn[:, i], nwiggles[:, i]]))
-                else:
-                    polys.append(np.column_stack([nwiggles[:, i], newtn[:, i]]))
-        if polys:
-            pc = PolyCollection(polys, facecolors=ncolor, edgecolors='none')
-            ax.add_collection(pc)
-
-    
-    min2 -= d2
-    max2 += d2
-
+    # max2 + trace
     if not transp:
         min1, max1, min2, max2 = min2, max2, min1, max1
 
