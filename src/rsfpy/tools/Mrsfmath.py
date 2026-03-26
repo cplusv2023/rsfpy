@@ -267,6 +267,26 @@ def _collect_cmds(kargs: dict):
 
     return cmds
 
+def _wrap_output(output, ref):
+    """
+    If output is a scalar, broadcast it to ref.shape.
+    If output is ndarray, optionally wrap as Rsfarray with ref header.
+    """
+    if np.isscalar(output):
+        arr = np.empty(ref.shape, dtype=np.result_type(output))
+        arr[...] = output
+        try:
+            return Rsfarray(arr, header=getattr(ref, "header", {}).copy())
+        except Exception:
+            return arr
+
+    if isinstance(output, np.ndarray) and not isinstance(output, Rsfarray):
+        try:
+            return Rsfarray(output, header=getattr(ref, "header", {}).copy())
+        except Exception:
+            return output
+
+    return output
 
 def main():
     no_filein = sys.stdin.isatty()
@@ -369,7 +389,9 @@ def main():
 
     if output is None:
         sf_error("No output produced. "
-                 "Please set output=... or assign variable `output` in cmd/cmd0/cmd1/...\n")
+                "Please set output=... or assign variable `output` in cmd/cmd0/cmd1/...\n")
+
+    output = _wrap_output(output, env["input"])
 
     # -------- Write output --------
     try:
