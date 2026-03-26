@@ -279,6 +279,8 @@ def main():
     cmds = _collect_cmds(kargs)
     outcmd = kargs.pop("output", None)
 
+    binary_out = kargs.pop("--out", None)
+
     if len(cmds) == 0 and outcmd is None:
         print(cmds, outcmd, file=sys.stderr)
         sf_error("Need cmd/cmd0/cmd1/... or output=.\n")
@@ -371,7 +373,7 @@ def main():
 
     # -------- Write output --------
     try:
-        output.write(sys.stdout.buffer)
+        output.write(sys.stdout.buffer, out=binary_out)
     except Exception as e:
         sf_error(f"Failed to write output RSF: {e}\n")
 
@@ -380,5 +382,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-else:
-    sf_warning("This module is not meant to be imported.\n")
