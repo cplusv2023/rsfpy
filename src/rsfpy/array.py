@@ -26,6 +26,7 @@ from typing import Optional, Union
 from .utils import _str_match_re, flow
 from .io import read_rsf, write_rsf
 from .plot import grey, wiggle, grey3
+from .fft import fft, ifft
 
 defaults = {
     "d1": 4.0e-3, "o1": 0., "label1": "Time", "unit1":"s",
@@ -614,7 +615,28 @@ class Rsfdata(np.ndarray):
 
     def grey3(self, *args, **kargs):
         return grey3(self, *args, **kargs)
+    
+    # FFT support
+    def rfft(self, *args, **kargs):
+        if not np.issubdtype(self.dtype, np.floating):
+            raise TypeError("rfft only supports real-valued float arrays.")
+        kargs["rfft"] = True
+        return fft(self, *args, **kargs)
 
+    def fft(self, *args, **kargs):
+        kargs.setdefault("rfft", False)
+        return fft(self, *args, **kargs)
+
+    def irfft(self, *args, **kargs):
+        if not np.issubdtype(self.dtype, np.complexfloating):
+            raise TypeError("irfft only supports complex-valued arrays.")
+        kargs["rfft"] = True
+        return ifft(self, *args, **kargs)
+
+    def ifft(self, *args, **kargs):
+        kargs.setdefault("rfft", False)
+        return ifft(self, *args, **kargs)
+    
 
 # add some properties for convenience
 for idim in range(9):

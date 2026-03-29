@@ -183,9 +183,17 @@ def _inject_axis_vars(env: dict, arr, prefix: str = ""):
     For prefix="b_":
         b_x1, b_x2, ... ; b_n1, ... etc.
 
-    Here x1, x2, ... are coordinate vectors from arr.axis1, arr.axis2, ...
+    Here x1, x2, ... are always forced to 1-D coordinate vectors.
     """
-    for i in range(1, 10):
+    ndim = 0
+    try:
+        ndim = len(arr.shape)
+    except Exception:
+        ndim = 0
+
+    hdr = getattr(arr, "header", None)
+
+    for i in range(1, ndim + 1):
         nkey = f"n{i}"
         okey = f"o{i}"
         dkey = f"d{i}"
@@ -197,18 +205,21 @@ def _inject_axis_vars(env: dict, arr, prefix: str = ""):
         val_x = None
 
         try:
-            if hasattr(arr, "shape") and len(arr.shape) >= i:
-                val_n = int(arr.shape[i - 1])
+            val_n = int(arr.shape[i - 1])
         except Exception:
             pass
 
         try:
-            val_x = getattr(arr, f"axis{i}")
+            ax = getattr(arr, f"axis{i}")
+            if ax is not None:
+                ax = np.asarray(ax)
+                if ax.ndim != 1:
+                    ax = ax.reshape(-1)
+                val_x = ax
         except Exception:
             val_x = None
 
         try:
-            hdr = getattr(arr, "header", None)
             if hdr is not None:
                 if okey in hdr:
                     val_o = float(hdr[okey])
@@ -217,14 +228,14 @@ def _inject_axis_vars(env: dict, arr, prefix: str = ""):
         except Exception:
             pass
 
-        if val_x is not None:
-            try:
-                if val_o is None and len(val_x) > 0:
+        try:
+            if val_x is not None and val_x.size > 0:
+                if val_o is None:
                     val_o = float(val_x[0])
-                if val_d is None and len(val_x) > 1:
+                if val_d is None and val_x.size > 1:
                     val_d = float(val_x[1] - val_x[0])
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         if val_n is not None:
             env[f"{prefix}{nkey}"] = val_n
@@ -309,6 +320,13 @@ def main():
     shape_in = []
     header = {}
 
+    # 先把 n/o/d/label/unit 都收集出来
+    nvals = {}
+    ovals = {}
+    dvals = {}
+    lvals = {}
+    uvals = {}
+
     for idim in range(1, 10):
         nkey = f"n{idim}"
         okey = f"o{idim}"
@@ -317,24 +335,40 @@ def main():
         ukey = f"unit{idim}"
 
         nn = kargs.pop(nkey, None)
-        if nn is not None:
-            shape_in.append(int(nn))
-        elif len(shape_in) > 0:
-            shape_in.append(1)
-
         vo = kargs.pop(okey, None)
         vd = kargs.pop(dkey, None)
         vl = kargs.pop(lkey, None)
         vu = kargs.pop(ukey, None)
 
+        if nn is not None:
+            nvals[idim] = int(nn)
         if vo is not None:
-            header[okey] = float(vo)
+            ovals[idim] = float(vo)
         if vd is not None:
-            header[dkey] = float(vd)
+            dvals[idim] = float(vd)
         if vl is not None:
-            header[lkey] = vl
+            lvals[idim] = vl
         if vu is not None:
-            header[ukey] = vu
+            uvals[idim] = vu
+
+    # shape 只扩展到“最大的已指定 n#”
+    if nvals:
+        max_n_dim = max(nvals.keys())
+        shape_in = [nvals.get(i, 1) for i in range(1, max_n_dim + 1)]
+    else:
+        max_n_dim = 0
+        shape_in = []
+
+    # header 也只写到 max_n_dim
+    for idim in range(1, max_n_dim + 1):
+        if idim in ovals:
+            header[f"o{idim}"] = ovals[idim]
+        if idim in dvals:
+            header[f"d{idim}"] = dvals[idim]
+        if idim in lvals:
+            header[f"label{idim}"] = lvals[idim]
+        if idim in uvals:
+            header[f"unit{idim}"] = uvals[idim]
 
     # -------- Build execution environment --------
     env = {

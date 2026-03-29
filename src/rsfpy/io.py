@@ -221,10 +221,21 @@ def write_rsf(arr: np.ndarray, file, header={}, history='', out=None, form="nati
 
     if form == "ascii":
         np.savetxt(out_fp, arr, fmt=fmt)
-    elif form == "native":
-        out_fp.write(arr.tobytes(order="F"))
-    elif form == "xdr":
-        out_fp.write(arr.byteswap().tobytes(order="F"))
+    else:
+        if dtype == "complex":
+            arr = arr.astype(np.complex64)
+        elif dtype == "float":
+            arr = arr.astype(np.float32)
+        elif dtype == "int":
+            arr = arr.astype(np.int32)
+        elif dtype == "uchar":
+            arr = arr.astype(np.uint8)
+        if form == "native":
+            out_fp.write(arr.tobytes(order="F"))
+        elif form == "xdr":
+            out_fp.write(arr.byteswap().tobytes(order="F"))
+        else:
+            raise ValueError(f"Unsupported form: {form}")
 
     if close_after:
         file_fp.close()
