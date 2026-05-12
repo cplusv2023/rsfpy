@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "svgsequence.h"
 
 
@@ -64,6 +65,22 @@ typedef struct {
     gboolean pressing;
 } App;
 
+static const char *APP_ICON_SVG =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 24 24'>"
+    "<rect x='0' y='0' width='24' height='24' rx='3' ry='3' fill='#ffffff'/>"
+    "<g fill='none' stroke='#20242a' stroke-width='0.18' stroke-linecap='square'>"
+    "<path d='M1 0 V24 M2 0 V24 M3 0 V24 M4 0 V24 M5 0 V24 M6 0 V24 "
+            "M7 0 V24 M8 0 V24 M9 0 V24 M10 0 V24 M11 0 V24 M12 0 V24 "
+            "M13 0 V24 M14 0 V24 M15 0 V24 M16 0 V24 M17 0 V24 M18 0 V24 "
+            "M19 0 V24 M20 0 V24 M21 0 V24 M22 0 V24 M23 0 V24'/>"
+    "<path d='M0 1 H24 M0 2 H24 M0 3 H24 M0 4 H24 M0 5 H24 M0 6 H24 "
+            "M0 7 H24 M0 8 H24 M0 9 H24 M0 10 H24 M0 11 H24 M0 12 H24 "
+            "M0 13 H24 M0 14 H24 M0 15 H24 M0 16 H24 M0 17 H24 M0 18 H24 "
+            "M0 19 H24 M0 20 H24 M0 21 H24 M0 22 H24 M0 23 H24'/>"
+    "</g>"
+    "<rect x='0.4' y='0.4' width='23.2' height='23.2' rx='2.6' ry='2.6' "
+            "fill='none' stroke='#20242a' stroke-width='0.6'/>"
+    "</svg>";
 
 static char *but_labels[] = {
     /* Prev */
@@ -173,6 +190,150 @@ static char *but_labels[] = {
     "</g>"
     "</svg>"
 };
+
+static void set_window_icon_from_svg(Display *dpy, Window win,
+                                     const char *svg_data,
+                                     int icon_size)
+{
+    GError *err = NULL;
+
+    RsvgHandle *handle = rsvg_handle_new_from_data(
+        (const guint8 *)svg_data,
+        strlen(svg_data),
+        &err
+    );
+
+    if (!handle) {
+        fprintf(stderr, "Failed to load window icon SVG: %s\n",
+                err ? err->message : "unknown error");
+        if (err) g_error_free(err);
+        return;
+    }
+
+    cairo_surface_t *surface = cairo_image_surface_create(
+        CAIRO_FORMAT_ARGB32,
+        icon_size,
+        icon_size
+    );
+
+    cairo_t *cr = cairo_create(surface);
+
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_paint(cr);
+
+#if LIBRSVG_CHECK_VERSION(2, 52, 0)
+    RsvgRectangle viewport = {
+        0.0,
+        0.0,
+        (double)icon_size,
+        (double)icon_size
+    };
+
+    if (!rsvg_handle_render_document(handle, cr, &viewport, &err)) {
+        fprintf(stderr, "Failed to render window icon SVG: %s\n",
+                err ? err->message : "unknown error");
+        if (err) g_error_free(err);
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        g_object_unref(handle);
+        return;
+    }
+#else
+    {
+        RsvgDimensionData dim;
+        rsvg_handle_get_dimensions(handle, &dim);
+
+        double sx = (double)icon_size / (double)dim.width;
+        double sy = (double)icon_size / (double)dim.height;
+
+        cairo_scale(cr, sx, sy);
+        rsvg_handle_render_cairo(handle, cr);
+    }
+#endif
+
+    cairo_surface_flush(surface);
+
+    unsigned char *src = cairo_image_surface_get_data(surface);
+    int stride = cairo_image_surface_get_stride(surface);
+
+    /*
+     * _NET_WM_ICON format:
+     *
+     * data[0] = width
+     * data[1] = height
+     * data[2...] = ARGB pixels, 0xAARRGGBB
+     */
+    unsigned long *icon_data = calloc(
+        2 + icon_size * icon_size,
+        sizeof(unsigned long)
+    );
+
+    if (!icon_data) {
+        fprintf(stderr, "Failed to allocate icon_data.\n");
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        g_object_unref(handle);
+        return;
+    }
+
+    icon_data[0] = icon_size;
+    icon_data[1] = icon_size;
+
+    for (int y = 0; y < icon_size; y++) {
+        uint32_t *row = (uint32_t *)(src + y * stride);
+
+        for (int x = 0; x < icon_size; x++) {
+            uint32_t p = row[x];
+
+            unsigned int a = (p >> 24) & 0xff;
+            unsigned int r = (p >> 16) & 0xff;
+            unsigned int g = (p >> 8)  & 0xff;
+            unsigned int b =  p        & 0xff;
+
+            /*
+             * Cairo ARGB32 is premultiplied alpha.
+             * _NET_WM_ICON expects ordinary ARGB.
+             * For opaque icons this barely matters, but this is safer.
+             */
+            if (a > 0 && a < 255) {
+                r = (r * 255) / a;
+                g = (g * 255) / a;
+                b = (b * 255) / a;
+
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+            }
+
+            icon_data[2 + y * icon_size + x] =
+                ((unsigned long)a << 24) |
+                ((unsigned long)r << 16) |
+                ((unsigned long)g << 8)  |
+                ((unsigned long)b);
+        }
+    }
+
+    Atom net_wm_icon = XInternAtom(dpy, "_NET_WM_ICON", False);
+    Atom cardinal    = XInternAtom(dpy, "CARDINAL", False);
+
+    XChangeProperty(
+        dpy,
+        win,
+        net_wm_icon,
+        cardinal,
+        32,
+        PropModeReplace,
+        (unsigned char *)icon_data,
+        2 + icon_size * icon_size
+    );
+
+    XFlush(dpy);
+
+    free(icon_data);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+    g_object_unref(handle);
+}
 
 /* Maybe make copy works */
 /* static unsigned char *clipboard_png_data;
@@ -1001,7 +1162,9 @@ int main(int argc, char **argv) {
 
     create_cairo(&app);
     adjust_bar(&app);
+
     XStoreName(app.dpy, app.win, WINDOW_TITLE);
+    set_window_icon_from_svg(app.dpy, app.win, APP_ICON_SVG, 128);
 
     run_loop(&app);
 
