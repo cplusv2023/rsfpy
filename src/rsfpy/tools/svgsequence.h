@@ -30,7 +30,7 @@
 #define PAUSEMSG "Paused"
 
 /* Buttons */
-#define MAX_BUTTONS 9
+#define MAX_BUTTONS 10
 #define NEXT_BUTTON 1
 #define PREV_BUTTON 0
 #define RUN_BUTTON 2
@@ -40,6 +40,7 @@
 #define MOVE_BUTTON 6
 #define ZOOM_BUTTON 7
 #define HOME_BUTTON 8 /* Reset button */
+#define STRETCH_BUTTON 9
 #define ENABLED_COLOR "#000"
 #define DISABLED_COLOR "#888"
 #define PRESSED_COLOR "#aaa"
@@ -71,6 +72,7 @@ typedef struct {
     double cached_scale;
     int cached_win_w;
     int cached_win_h;
+    gboolean cached_stretch_mode;
 } SvgFrame;
 
 typedef struct {
@@ -84,7 +86,7 @@ typedef struct {
 void sf_init(int argc, char **argv);
 void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str);
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num);
-void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr, int win_w, int win_h, int pan_x, int pan_y, double zoom_scale, int toolbar_h, int hintbar_h) ;
+void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr, int win_w, int win_h, int pan_x, int pan_y, double zoom_scale, gboolean stretch_mode, int toolbar_h, int hintbar_h) ;
 void svg_sequence_advance(SvgSequence *seq);
 void svg_sequence_free(SvgSequence *seq);
 gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_t len);

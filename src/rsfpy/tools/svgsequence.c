@@ -388,6 +388,7 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
                                int win_w, int win_h,
                                int pan_x, int pan_y,
                                double zoom_scale,
+                               gboolean stretch_mode,
                                int toolbar_h, int hintbar_h) {
     if (seq->count == 0) return;
     SvgFrame *f = &seq->frames[seq->current_index];
@@ -405,12 +406,19 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
     #endif
 
 
-    sx = (double)win_w / f->width;
-    sy = (double)content_h / f->height;
-    s = (sx < sy ? sx : sy) * zoom_scale;
-
-    dst_w = f->width * s;
-    dst_h = f->height * s;
+    if (stretch_mode) {
+        sx = (double)win_w / f->width;
+        sy = (double)content_h / f->height;
+        s = zoom_scale;
+        dst_w = win_w * zoom_scale;
+        dst_h = content_h * zoom_scale;
+    } else {
+        sx = (double)win_w / f->width;
+        sy = (double)content_h / f->height;
+        s = (sx < sy ? sx : sy) * zoom_scale;
+        dst_w = f->width * s;
+        dst_h = f->height * s;
+    }
     ox = (win_w - dst_w) / 2;
     oy = (content_h - dst_h) / 2;
 
@@ -429,6 +437,9 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
         if (fabs(zoom_scale - f->cached_scale) / f->cached_scale > 0.5) {
             cache_invalid = TRUE;
         }
+        if (stretch_mode != f->cached_stretch_mode) {
+            cache_invalid = TRUE;
+        }
     }
 
     if (cache_invalid) {
@@ -436,9 +447,11 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
             cairo_surface_destroy(f->surface);
             f->surface = NULL;
         }
+        int surface_w = stretch_mode ? (int)round(win_w * zoom_scale) : (int)round(f->width * s);
+        int surface_h = stretch_mode ? (int)round(content_h * zoom_scale) : (int)round(f->height * s);
         f->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
-                                                (int)f->width * s,
-                                                (int)f->height * s);
+                            surface_w,
+                            surface_h);
         if (cairo_surface_status(f->surface) != CAIRO_STATUS_SUCCESS) {
             snprintf(msg_buf, sizeof(msg_buf), "%s",
                      cairo_status_to_string(cairo_surface_status(f->surface)));
@@ -483,7 +496,13 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
             return;
         }
         cr_surf = cairo_create(f->surface);
-        cairo_scale(cr_surf, s, s);
+        if (stretch_mode) {
+            cairo_scale(cr_surf,
+                        ((double)surface_w / f->width),
+                        ((double)surface_h / f->height));
+        } else {
+            cairo_scale(cr_surf, s, s);
+        }
 
     #if LIBRSVG_CHECK_VERSION(2,52,0)
         
@@ -501,6 +520,7 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
         f->cached_scale = zoom_scale;
         f->cached_win_w = win_w;
         f->cached_win_h = win_h;
+        f->cached_stretch_mode = stretch_mode;
     }
     cairo_save(cr);
     cairo_rectangle(cr, 0, toolbar_h, win_w, content_h);

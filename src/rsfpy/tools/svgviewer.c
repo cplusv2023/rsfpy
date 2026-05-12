@@ -57,6 +57,7 @@ typedef struct {
     gboolean drag_mode;
     gboolean zoom_mode;
     gboolean stretch_mode;
+    int active_button;
     struct timespec last_zoom_time;
     gboolean zooming;
     struct timespec last_press_time[MAX_BUTTONS];
@@ -138,25 +139,38 @@ static char *but_labels[] = {
 
     "</svg>",
 
-    /* Stretch */
-    NULL,
-
     /* Reset */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' >"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
     "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
             "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<path d='M44 20 L52 20 L46 26 "
-            "C42 22 37 20 32 20 "
-            "C22 20 14 28 14 38 "
-            "C14 48 22 56 32 56 "
-            "C37 56 42 54 46 50 "
-            "L42 46 "
-            "C39 49 36 50 32 50 "
-            "C25 50 20 45 20 38 "
-            "C20 31 25 26 32 26 "
-            "C35 26 38 27 40 29 "
-            "L36 33 L52 33 Z' "
-            "fill='%s'  transform='translate(0, -5)'/>"
+    "<g transform='translate(8 8) scale(2)' "
+            "fill='none' stroke='%s' stroke-width='2' "
+            "stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/>"
+    "<path d='M21 3v5h-5'/>"
+    "</g>"
+    "</svg>",
+
+    /* Stretch */
+    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
+    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
+            "fill='%s' stroke='%s' stroke-width='2'/>"
+    "<g stroke='%s' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none'>"
+        "<path d='M27 27 L37 37'/>"
+        "<path d='M37 27 L27 37'/>"
+        "<path d='M28 28 L16 16'/>"
+        "<path d='M16 16 L16 27'/>"
+        "<path d='M16 16 L27 16'/>"
+        "<path d='M36 28 L48 16'/>"
+        "<path d='M48 16 L37 16'/>"
+        "<path d='M48 16 L48 27'/>"
+        "<path d='M28 36 L16 48'/>"
+        "<path d='M16 48 L27 48'/>"
+        "<path d='M16 48 L16 37'/>"
+        "<path d='M36 36 L48 48'/>"
+        "<path d='M48 48 L37 48'/>"
+        "<path d='M48 48 L48 37'/>"
+    "</g>"
     "</svg>"
 };
 
@@ -499,6 +513,10 @@ void draw_toolbar(App *app) {
                 enabled = TRUE;
                 pressed = app->zoom_mode;
                 break;
+            case STRETCH_BUTTON:
+                enabled = TRUE;
+                pressed = app->stretch_mode;
+                break;
             default:
                 break;
         }
@@ -537,6 +555,10 @@ void draw_toolbar(App *app) {
 
     cairo_move_to(app->cr, text_x, text_y);
     cairo_show_text(app->cr, fps_text);
+
+    cairo_restore(app->cr);
+    cairo_surface_flush(cairo_get_target(app->cr));
+    XFlush(app->dpy);
 }
 
 
@@ -547,6 +569,7 @@ static void draw_all(App *app) {
                               app->win_h >= MIN_HEIGHT ? app->win_h: MIN_HEIGHT,
                               app->pan_x, app->pan_y,
                               app->zoom_scale,
+                              app->stretch_mode,
                               app->toolbar_h, app->hintbar_h);
     draw_toolbar(app);
     draw_hintbar(app, app->hintbar_h);
@@ -589,11 +612,11 @@ static void run_loop(App *app) {
     }
 
     while (XPending(app->dpy)) {
-        XPeekEvent(app->dpy, &ev);
-        if (ev.type == Expose) {
-            XNextEvent(app->dpy, &ev);
-            continue;
-        }
+        // XPeekEvent(app->dpy, &ev);
+        // if (ev.type == Expose) {
+        //     XNextEvent(app->dpy, &ev);
+        //     continue;
+        // }
 
         XNextEvent(app->dpy, &ev);
         switch (ev.type) {
@@ -686,6 +709,7 @@ static void run_loop(App *app) {
                     if (x >= btn->x && x <= btn->x + btn->width &&
                         y >= btn->y && y <= btn->y + btn->height) {
                         app->last_press_time[btn->index] = now;
+                        app->active_button = btn->index;
                         app->pressing = TRUE;
                         if (btn->index == PAUSE_BUTTON) {
                             app->sequence.playing = FALSE;
@@ -729,11 +753,15 @@ static void run_loop(App *app) {
                         }
                         else if (btn->index == MOVE_BUTTON) {
                             app->drag_mode = !app->drag_mode;
-                            draw_toolbar(app);
+                            draw_all(app);
                         }
                         else if (btn->index == ZOOM_BUTTON) {
                             app->zoom_mode = !app->zoom_mode;
-                            draw_toolbar(app);
+                            draw_all(app);
+                        }
+                        else if (btn->index == STRETCH_BUTTON) {
+                            app->stretch_mode = !app->stretch_mode;
+                            draw_all(app);
                         }
                     }
                 }
@@ -832,9 +860,15 @@ static void run_loop(App *app) {
                               app->win_h >= MIN_HEIGHT ? app->win_h: MIN_HEIGHT,
                               app->pan_x, app->pan_y,
                               app->zoom_scale,
+                              app->stretch_mode,
                               app->toolbar_h, app->hintbar_h);
             last_frame_time = now;
             draw_hintbar(app, app->hintbar_h);
+            draw_toolbar(app);
+            draw_hintbar(app, app->hintbar_h);
+
+            cairo_surface_flush(cairo_get_target(app->cr));
+            XFlush(app->dpy);
         }
     }
 
@@ -868,17 +902,13 @@ static void run_loop(App *app) {
         }
     }
 
-    for (int i = 0; i < app->num_buttons && app->pressing; i++) {
-        press_interval_ms = (now.tv_sec - app->last_press_time[i].tv_sec) * 1000 +
-                                 (now.tv_nsec - app->last_press_time[i].tv_nsec) / 1000000;
-        if (press_interval_ms >= 2 * WAIT_TIME_MS){
-            if (i==app->num_buttons -1){
-                app->pressing = FALSE;
-                draw_toolbar(app);
-            } else continue;
-        }else{
-            app->pressing = TRUE;
-            break;
+    if (app->pressing && app->active_button >= 0) {
+        press_interval_ms = (now.tv_sec - app->last_press_time[app->active_button].tv_sec) * 1000 +
+                                 (now.tv_nsec - app->last_press_time[app->active_button].tv_nsec) / 1000000;
+        if (press_interval_ms >= 2 * WAIT_TIME_MS) {
+            app->pressing = FALSE;
+            app->active_button = -1;
+            draw_all(app);
         }
     }
     /* half of WAIT_TIME_MS */
@@ -918,6 +948,8 @@ int main(int argc, char **argv) {
     app.zoom_scale = 1.0;
     app.drag_mode = FALSE;
     app.zoom_mode = FALSE;
+    app.stretch_mode = FALSE;
+    app.active_button = -1;
     clock_gettime(CLOCK_MONOTONIC, &app.last_zoom_time);
     app.last_drag_time = app.last_zoom_time;
     app.last_resize_time = app.last_zoom_time;
