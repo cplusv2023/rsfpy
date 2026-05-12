@@ -213,8 +213,7 @@ def wiggle(
             pc = PolyCollection(polys, facecolors=ncolor, edgecolors='none')
             ax.add_collection(pc)
 
-    if not transp:
-        min1, max1, min2, max2 = min2, max2, min1, max1
+    # Do not swap min/max here — handle axis limits explicitly below
 
     if label1:
         if transp:
@@ -229,15 +228,26 @@ def wiggle(
     if title:
         ax.set_title(title)
 
-    if yreverse:
-        ax.set_ylim(max1, min1)
+    if transp:
+        # transp=True: axis1 on y, axis2 on x
+        if yreverse:
+            ax.set_ylim(max1, min1)
+        else:
+            ax.set_ylim(min1, max1)
+        if xreverse:
+            ax.set_xlim(max2, min2)
+        else:
+            ax.set_xlim(min2, max2)
     else:
-        ax.set_ylim(min1, max1)
-
-    if xreverse:
-        ax.set_xlim(max2, min2)
-    else:
-        ax.set_xlim(min2, max2)
+        # transp=False: axis1 on x, axis2 on y
+        if xreverse:
+            ax.set_xlim(max1, min1)
+        else:
+            ax.set_xlim(min1, max1)
+        if yreverse:
+            ax.set_ylim(max2, min2)
+        else:
+            ax.set_ylim(min2, max2)
 
     if plot_params.get('show', True):
         plt.show()

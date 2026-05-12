@@ -92,10 +92,10 @@
     \t\033[4mstring\033[0m\t\033[1munit2=\033[0m unit for axis 2
     \t\033[4mstring\033[0m\t\033[1munit3=\033[0m unit for axis 3
     \t\033[4mbool\033[0m\t\033[1mverb=n\033[0m [y/n] verbosity flag
+    \t\033[4mstring/float\033[0m\t\033[1mwheretitle=top\033[0m title position: top, bottom, or a numeric y coordinate (Not working in grey3 plot)
     \t\033[4mbool\033[0m\t\033[1mwheretitle=top\033[0m title position: top, bottom (Not working in grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mwhereylabel=left\033[0m axis 1 label position: left, right (Not working in grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mwherexlabel=bottom\033[0m axis 2 label position: top, bottom (Not working in grey3 plot)
-    \t\033[4mstring\033[0m\t\033[1mwherextick=bottom\033[0m horizontal axis tick position: top, bottom (Not working in grey3 plot)
     \t\033[4mstring\033[0m\t\033[1mwhereytick=left\033[0m vertical axis tick position: left, right (Not working in grey3 plot)
     \t\033[4mbool\033[0m\t\033[1mxreverse=n\033[0m [y/n] if y, reverse the horizontal axis (Not working in grey3 plot)
     \t\033[4mbool\033[0m\t\033[1myreverse=y\033[0m [y/n] if y, reverse the vertical axis (Not working in grey3 plot)
@@ -267,7 +267,17 @@ def main():
     label2loc = par_dict.get('wherexlabel', 'top').lower()
     tick1loc = par_dict.get('whereytick', label1loc).lower()
     tick2loc = par_dict.get('wherextick', label2loc).lower()
-    titleloc = getfloat(par_dict, 'wheretitle', None)
+    titleloc = par_dict.get('wheretitle', None)
+    if isinstance(titleloc, str):
+        titleloc_lower = titleloc.lower()
+        if titleloc_lower == 'top':
+            titleloc = 1.0
+        elif titleloc_lower == 'bottom':
+            titleloc = -0.08
+        else:
+            titleloc = getfloat(par_dict, 'wheretitle', None)
+    else:
+        titleloc = getfloat(par_dict, 'wheretitle', None)
     format1 = par_dict.get('format1', None)
     format2 = par_dict.get('format2', None)
     formatbar = par_dict.get('formatbar', par_dict.get('barformat', None))
@@ -624,6 +634,7 @@ def main():
                     linewidth=plotfat,
                     show=False)
         elif plottype == 'graph':
+            sf_warning(f"OK")
             if data.ndim < 2:
                 data = data.reshape((data.n1, 1))
             for itrace in range(data.n2):
@@ -659,8 +670,17 @@ def main():
                             label=legends[itrace] if legends else None,
                             marker=markers[itrace], markersize=markersize)
 
-            amin1, amax1 = ax.get_xlim()
-            amin2, amax2 = ax.get_ylim()
+            # Get default limits based on current axis state
+            # min1/max1 correspond to axis1, min2/max2 to axis2 (independent of transp)
+            if transp:
+                # transp=True: axis1 on y, axis2 on x
+                amin1, amax1 = ax.get_ylim()
+                amin2, amax2 = ax.get_xlim()
+            else:
+                # transp=False: axis1 on x, axis2 on y
+                amin1, amax1 = ax.get_xlim()
+                amin2, amax2 = ax.get_ylim()
+            
             min1 = min1 if min1 is not None else amin1
             max1 = max1 if max1 is not None else amax1
             min2 = min2 if min2 is not None else amin2
@@ -672,12 +692,24 @@ def main():
             if logy and logybase <= 0.:
                 sf_warning(f"Warning: invalid logybase={logybase}, use default 10.")
                 logybase = 10.
-            if logx and min1 <= 0.:
-                sf_warning(f"Warning: logx but min2={min1} <= 0, use normal x axis.")
-                logx = False
-            if logy and min2 <= 0.:
-                sf_warning(f"Warning: logy but min1={min2} <= 0, use normal y axis.")
-                logy = False
+            
+            # Check log scale validity based on transp
+            if transp:
+                # transp=True: logx applies to axis2, logy applies to axis1
+                if logx and min2 <= 0.:
+                    sf_warning(f"Warning: logx but min2={min2} <= 0, use normal x axis.")
+                    logx = False
+                if logy and min1 <= 0.:
+                    sf_warning(f"Warning: logy but min1={min1} <= 0, use normal y axis.")
+                    logy = False
+            else:
+                # transp=False: logx applies to axis1, logy applies to axis2
+                if logx and min1 <= 0.:
+                    sf_warning(f"Warning: logx but min1={min1} <= 0, use normal x axis.")
+                    logx = False
+                if logy and min2 <= 0.:
+                    sf_warning(f"Warning: logy but min2={min2} <= 0, use normal y axis.")
+                    logy = False
 
             if logx:
                 ax.set_xscale('log', base=logxbase)
@@ -685,14 +717,28 @@ def main():
             if logy:
                 ax.set_yscale('log', base=logybase)
                 ax.yaxis.set_major_locator(LogLocator(base=logybase, numticks=ntic1))
-            if xreverse:
-                ax.set_xlim(max1, min1)
+            
+            if transp:
+                # transp=True: axis1 on y, axis2 on x
+                if xreverse:
+                    ax.set_xlim(max2, min2)
+                else:
+                    ax.set_xlim(min2, max2)
+                if yreverse:
+                    ax.set_ylim(max1, min1)
+                else:
+                    ax.set_ylim(min1, max1)
             else:
-                ax.set_xlim(min1, max1)
-            if yreverse:
-                ax.set_ylim(max2, min2)
-            else:
-                ax.set_ylim(min2, max2)
+                # transp=False: axis1 on x, axis2 on y
+                if xreverse:
+                    ax.set_xlim(max1, min1)
+                else:
+                    ax.set_xlim(min1, max1)
+                if yreverse:
+                    ax.set_ylim(max2, min2)
+                else:
+                    ax.set_ylim(min2, max2)
+            
             if legendon:
                 legend = ax.legend(loc=wherelegend, fontsize=legendsize,
                                 frameon=legendbox, ncol=legendncol)

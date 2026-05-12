@@ -56,6 +56,7 @@ typedef struct {
     double zoom_scale;
     gboolean drag_mode;
     gboolean zoom_mode;
+    gboolean stretch_mode;
     struct timespec last_zoom_time;
     gboolean zooming;
     struct timespec last_press_time[MAX_BUTTONS];
@@ -63,7 +64,6 @@ typedef struct {
 } App;
 
 
-// static char *but_labels[] = {"Prev(m)", "Next(n)", "Run(r)", "Pause(p)", "Slower(-)", "Faster(+)", "Reset(h)" /* Home button */};
 static char *but_labels[] = {
     /* Prev */
     "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' transform='scale(-1, 1) translate(-64, 0)' >"
@@ -137,6 +137,9 @@ static char *but_labels[] = {
     "<rect x='25' y='16' width='6' height='24' rx='3' ry='3' fill='%s' />"
 
     "</svg>",
+
+    /* Stretch */
+    NULL,
 
     /* Reset */
     "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' >"
@@ -302,6 +305,47 @@ Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
     b.enabled = enabled;
     b.pressed = pressed;
     strncpy(b.label, "[svg]", sizeof(b.label));
+    return b;
+}
+
+Button draw_text_button(cairo_t *cr, int x, int y, const char *text,
+                        double height, gboolean enabled, gboolean pressed,
+                        long last_pressed_time_ms) {
+    Button b;
+    cairo_text_extents_t ext;
+    int padding_x = 10;
+    int padding_y = 6;
+    int btn_h = (int)(0.8 * height);
+
+    cairo_save(cr);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 0.42 * height);
+    cairo_text_extents(cr, text, &ext);
+
+    int btn_w = (int)(ext.width + 2 * padding_x);
+    int text_x = x + padding_x - ext.x_bearing;
+    int text_y = y + padding_y + (btn_h - 2 * padding_y - ext.height) / 2 - ext.y_bearing;
+
+    cairo_set_source_rgba_string(cr, pressed || last_pressed_time_ms <= 2 * WAIT_TIME_MS ? PRESSED_COLOR : WHITE);
+    cairo_rectangle(cr, x, y + 0.1 * height, btn_w, btn_h);
+    cairo_fill(cr);
+
+    cairo_set_source_rgba_string(cr, enabled ? ENABLED_COLOR : DISABLED_COLOR);
+    cairo_rectangle(cr, x, y + 0.1 * height, btn_w, btn_h);
+    cairo_set_line_width(cr, 1.5);
+    cairo_stroke(cr);
+
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, text);
+    cairo_restore(cr);
+
+    b.x = x;
+    b.y = y;
+    b.width = btn_w;
+    b.height = btn_h;
+    b.enabled = enabled;
+    b.pressed = pressed;
+    strncpy(b.label, text, sizeof(b.label));
     return b;
 }
 

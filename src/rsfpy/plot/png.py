@@ -335,19 +335,20 @@ def set_text(text_prefix, lines, new_text=None, x0=None, y0=None):
     if hasattr(set_text, "cache") is False:
         set_text.cache = {}
 
+    if text_prefix not in set_text.cache:
         for i, line in enumerate(lines):
             if f'id="{text_prefix}"' in line:
                 pattern = re.compile(
-                    r'^(.*?)'                                   # before
-                    r'(<g\s+id="' + re.escape(text_prefix) +    # prefix 开头
+                    r'^(.*?)'
+                    r'(<g\s+id="' + re.escape(text_prefix) +
                     r'".*?>\s*<text[^>]*?)'
-                    r'(?:x="([\-0-9\.eE]+)"\s*)?'               # x_str 可选
-                    r'(?:y="([\-0-9\.eE]+)"\s*)?'               # y_str 可选
-                    r'transform="([^"]+)"'                      # transform
-                    r'([^>]*)>'                                 # others
-                    r'(.*?)'                                    # old_text
-                    r'(</text>.*?</g>)'                         # suffix (非贪婪，停在第一个 </g>)
-                    r'(.*)$',                                   # after
+                    r'(?:x="([\-0-9\.eE]+)"\s*)?'
+                    r'(?:y="([\-0-9\.eE]+)"\s*)?'
+                    r'transform="([^"]+)"'
+                    r'([^>]*)>'
+                    r'(.*?)'
+                    r'(</text>.*?</g>)'
+                    r'(.*)$',
                     re.MULTILINE | re.DOTALL
                 )
 
@@ -374,45 +375,47 @@ def set_text(text_prefix, lines, new_text=None, x0=None, y0=None):
                     else:
                         orig_x, orig_y, theta = 0.0, 0.0, "0"
 
+                if x_cord is not None:
+                    orig_x = x_cord
+                if y_cord is not None:
+                    orig_y = y_cord
 
+                set_text.cache[text_prefix] = {
+                    "index": i,
+                    "before": before,
+                    "prefix": prefix,
+                    "others": others,
+                    "suffix": suffix,
+                    "theta": theta,
+                    "new_x": orig_x,
+                    "new_y": orig_y,
+                    "final_text": old_text,
+                    "after": after,
+                    "begline": None,
+                    "endline": None,
+                }
                 break
         else:
             raise ValueError(f"未找到 id={text_prefix} 的行")
 
-        if x_cord is not None:
-            orig_x = x_cord
-        if y_cord is not None:
-            orig_y = y_cord
-
-        # 如果传入 None，就保留原值
-        new_x = orig_x
-        new_y = orig_y
-        set_text.cache = {
-            "prefix": prefix,
-            "others": others,
-            "suffix": suffix,
-            "theta": theta,
-            "new_x": new_x,
-            "new_y": new_y,
-            "final_text": old_text if new_text is None else new_text,
-        }
-    final_text = set_text.cache["final_text"] if new_text is None else new_text
-    new_x = set_text.cache["new_x"] if x0 is None else x0
-    new_y = set_text.cache["new_y"] if y0 is None else y0
-    theta = set_text.cache["theta"]
-    others = set_text.cache["others"]
-    prefix = set_text.cache["prefix"]
-    suffix = set_text.cache["suffix"]
+    cached = set_text.cache[text_prefix]
+    final_text = cached["final_text"] if new_text is None else new_text
+    new_x = cached["new_x"] if x0 is None else x0
+    new_y = cached["new_y"] if y0 is None else y0
+    theta = cached["theta"]
+    others = cached["others"]
+    prefix = cached["prefix"]
+    suffix = cached["suffix"]
     
     new_transform = f'translate({new_x:.6f} {new_y:.6f}) rotate({theta})'
     new_line = f'{prefix} transform="{new_transform}" {others}>{final_text}{suffix}'
 
-    if set_text.cache.get("endline",None) is None:
+    if cached["endline"] is None:
         new_lines = list(lines)
-        new_lines[i] = before + after
-        set_text.cache["begline"] = new_lines[0]
-        set_text.cache["endline"] = new_lines[-1].split("</svg>")[0]
+        new_lines[cached["index"]] = cached["before"] + cached["after"]
+        cached["begline"] = new_lines[0]
+        cached["endline"] = new_lines[-1].split("</svg>")[0]
     else:
-        new_lines = [set_text.cache["begline"], set_text.cache["endline"]]
-    new_lines[-1] = set_text.cache["endline"] + new_line + "\n</svg>"
+        new_lines = [cached["begline"], cached["endline"]]
+    new_lines[-1] = cached["endline"] + new_line + "\n</svg>"
     return new_lines

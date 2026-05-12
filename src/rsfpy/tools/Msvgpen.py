@@ -394,9 +394,19 @@ def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fo
     root.attrib["width"] = f'{max_w}px'
     root.attrib["height"] = f'{max_h}px'
     for svg in svgs:
+        orig_w = allinpx(svg.attrib.get("width", "100"))
+        orig_h = allinpx(svg.attrib.get("height", "100"))
+        orig_scale_w = orig_w / no_pixel_unit(svg.attrib.get("width", "100"))
+        orig_scale_h = orig_h / no_pixel_unit(svg.attrib.get("height", "100"))
         clean_fill_recursive(svg)
         if title is not None: replace_title_text_recursive(svg, title)
-        root.append(svg)
+
+        g = etree.Element("g")
+        for child in list(svg):
+            g.append(child)
+        g.attrib["transform"] = f"scale({orig_scale_w},{orig_scale_h})"
+        g.attrib["vector-effect"] = "non-scaling-stroke"
+        root.append(g)
     if bgcolor is not None:
         bg_rect = etree.Element("rect", {
             "x": "0",
