@@ -309,6 +309,12 @@ def main():
         lcolor = par_dict.get('lcolor', par_dict.get('plotcol', par_dict.get('linecolor', 'k')))
         ncolor = par_dict.get('ncolor', 'none')
         pcolor = par_dict.get('pcolor', lcolor)
+        xpos = par_dict.get('offset',
+                            par_dict.get('xpos', None))
+        if xpos is not None:
+            xpos_arr = Rsfarray(xpos)
+        else:
+            xpos_arr = None
         if par_dict.get('fill', 'y').lower().startswith('n'):
             ncolor = 'none'
             pcolor = 'none'
@@ -632,6 +638,7 @@ def main():
                     zplot=zplot, bias=bias, clip=clip, pclip=pclip,
                     ncolor=ncolor, pcolor=pcolor, lcolor=lcolor,
                     linewidth=plotfat,
+                    xpos=xpos_arr,
                     show=False)
         elif plottype == 'graph':
             sf_warning(f"OK")
