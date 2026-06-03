@@ -136,6 +136,8 @@
 
 
 
+from turtle import bgcolor
+
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -230,7 +232,8 @@ def main():
                          getfloat(par_dict, 'width', 8.))
     fig_height = getfloat(par_dict, 'screenheight',
                           getfloat(par_dict, 'height', 6.))
-    facecolor = par_dict.get('bgcolor', par_dict.get('facecolor', 'w'))
+    bgcolor = par_dict.get('bgcolor', 'w')
+    facecolor = par_dict.get('facecolor', 'none')
     dpi = getfloat(par_dict, 'dpi', 100.)
     fontsz = getfloat(par_dict, 'fontsz',
                       getfloat(par_dict, 'fontsize', 12.))
@@ -565,8 +568,9 @@ def main():
 
     if not movie: maxframe = 1
 
-    fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=facecolor)
-    ax = fig.add_subplot(1, 1, 1)
+    fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi, facecolor=bgcolor)
+    ax = fig.add_subplot(1, 1, 1,)
+    ax.set_facecolor(facecolor)
     cbar = None
     for iframe in range(min(nframes, maxframe)):
         if plottype == 'grey':
