@@ -645,7 +645,6 @@ def main():
                     xpos=xpos_arr,
                     show=False)
         elif plottype == 'graph':
-            sf_warning(f"OK")
             if data.ndim < 2:
                 data = data.reshape((data.n1, 1))
             for itrace in range(data.n2):
