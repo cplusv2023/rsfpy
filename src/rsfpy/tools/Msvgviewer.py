@@ -118,6 +118,12 @@ def is_remote_mode():
         for k in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
     )
 
+def warning(msg):
+    try:
+        sys.stderr.write("\033[1;33mWarning:\033[0m %s\n" % msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -320,10 +326,17 @@ def run_viewer(backend, args, stdin_data):
             if ret == 0:
                 return 0
 
+            cmd_text = " ".join(shlex.quote(x) for x in client_sender_command())
+
             tried.append("CLIENT: exited with code %s: %s" % (
                 ret,
-                " ".join(shlex.quote(x) for x in client_sender_command()),
+                cmd_text,
             ))
+
+            warning(
+                "failed to send SVG through rsfclient --send "
+                "(exit code %s). Falling back to local viewer backend." % ret
+            )
 
             # 用户显式指定 client 时，不自动 fallback
             if backend == "client":
