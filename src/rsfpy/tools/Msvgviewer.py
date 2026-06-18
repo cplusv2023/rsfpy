@@ -53,6 +53,43 @@ def is_executable(path):
         return False
 
 
+def env_truthy(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def env_falsey(value):
+    return str(value).strip().lower() in ("0", "false", "no", "off", "n")
+
+
+def is_remote_mode():
+    """
+    Detect remote/X-forwarding mode.
+
+    Priority:
+        1. RSFPY_SVGVIEWER_REMOTE explicitly controls behavior.
+        2. SSH_CONNECTION / SSH_CLIENT / SSH_TTY with DISPLAY usually means SSH X forwarding.
+    """
+    override = os.environ.get("RSFPY_SVGVIEWER_REMOTE")
+
+    if override is not None:
+        if env_truthy(override):
+            return True
+        if env_falsey(override):
+            return False
+
+    has_ssh = any(
+        os.environ.get(k)
+        for k in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
+    )
+
+    display = os.environ.get("DISPLAY", "")
+
+    if has_ssh and display:
+        return True
+
+    return False
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog=__progname__,
@@ -84,14 +121,46 @@ def build_parser():
 
 
 def get_backend_order(backend):
+    """
+    Return backend order.
+
+    Explicit backend selection is respected.
+
+    Auto mode:
+        local  -> GTK first
+        remote -> X11 first
+    """
     if backend == "gtk":
         return [("GTK", svgviewer_path_gtk)]
+
     if backend == "x11":
         return [("X11", svgviewer_path_x11)]
+
+    if is_remote_mode():
+        return [
+            ("X11", svgviewer_path_x11),
+            ("GTK", svgviewer_path_gtk),
+        ]
+
     return [
         ("GTK", svgviewer_path_gtk),
         ("X11", svgviewer_path_x11),
     ]
+
+
+def viewer_env_for_backend(name):
+    """
+    Return environment for subprocess.
+
+    For GTK, default to GSK_RENDERER=cairo unless user already set it.
+    This helps on X forwarding, WSL, XQuartz, and systems with broken EGL/GLX.
+    """
+    env = os.environ.copy()
+
+    if name == "GTK":
+        env.setdefault("GSK_RENDERER", "cairo")
+
+    return env
 
 
 def run_viewer(backend, args, stdin_data):
@@ -106,6 +175,7 @@ def run_viewer(backend, args, stdin_data):
             [str(path)] + args,
             input=stdin_data,
             capture_output=False,
+            env=viewer_env_for_backend(name),
         )
 
         if result.returncode == 0:
