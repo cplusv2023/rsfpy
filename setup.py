@@ -282,6 +282,7 @@ setup(
             "rsfgrey3 = rsfpy.tools.Mpygrey:main",
             "svgviewer = rsfpy.tools.Msvgviewer:main",
             "rsfmath = rsfpy.tools.Mrsfmath:main",
+            "rsfclient = rsfpy.tools.Mrsfview_client:main",
         ]
     },
 
