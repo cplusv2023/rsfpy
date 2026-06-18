@@ -1,1179 +1,2250 @@
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-#include <X11/Xatom.h>
-#include <cairo/cairo.h>
-#include <cairo/cairo-xlib.h>
-#include <librsvg/rsvg.h>
+#include <gtk/gtk.h>
+#include <gdk/gdkkeysyms.h>
 #include <glib.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
+#include <unistd.h>
+
 #include "svgsequence.h"
 
+typedef enum {
+    TOOL_NONE = 0,
+    TOOL_PAN,
+    TOOL_ZOOM,
+    TOOL_PEN
+} ToolMode;
 
-#include <time.h>
-#include <unistd.h> // for isatty()
+typedef enum {
+    PEN_TOOL_BRUSH = 0,
+    PEN_TOOL_BRUSH_DASH,
+    PEN_TOOL_RECT,
+    PEN_TOOL_RECT_DASH,
+    PEN_TOOL_ARROW,
+    PEN_TOOL_ERASER_PARTIAL,
+    PEN_TOOL_ERASER_FULL
+} PenTool;
 
+typedef enum {
+    COLOR_SLOT_RECENT0 = 0,
+    COLOR_SLOT_RECENT1,
+    COLOR_SLOT_RECENT2,
+    COLOR_SLOT_CUSTOM
+} ColorSlot;
 
+typedef enum {
+    ANNO_BRUSH = 0,
+    ANNO_BRUSH_DASH,
+    ANNO_RECT,
+    ANNO_RECT_DASH,
+    ANNO_ARROW
+} AnnotationType;
 
 typedef struct {
-    int x, y;
-    int width, height;
-} ButtonRect;
+    double x;
+    double y;
+} DocPoint;
 
 typedef struct {
-    char label[32];
-    int index;
-    int x, y, width, height;
-    gboolean enabled;
-    gboolean pressed;
-} Button;
-
+    GdkRGBA color;
+    double width_doc;
+    gboolean dashed;
+} AnnotationStyle;
 
 typedef struct {
-    /* --- Window configuration --- */
-    Display *dpy;
-    int screen;
-    Window win;
-    cairo_surface_t *surface;
-    cairo_t *cr;
-    int win_w, win_h;
-    /* --- Elements --- */
-    int toolbar_h;
-    int hintbar_h;
-    Button buttons[MAX_BUTTONS];
-    int num_buttons;
-    /* --- Data structure --- */
+    AnnotationType type;
+    AnnotationStyle style;
+    GArray *points;          /* DocPoint[], used by freehand strokes. */
+    double x0, y0, x1, y1;   /* Used by rectangle and arrow. */
+} Annotation;
+
+typedef struct {
+    double sx;
+    double sy;
+    double tx;
+    double ty;
+    gboolean valid;
+} ViewTransform;
+
+typedef struct {
+    GtkApplication *gtk_app;
+    GtkWidget *window;
+    GtkWidget *root_box;
+    GtkWidget *main_toolbar;
+    GtkWidget *pen_revealer;
+    GtkWidget *pen_toolbar;
+    GtkWidget *pen_tool_dropdown;
+    GtkWidget *pen_width_dropdown;
+    GtkWidget *pen_clear_button;
+    GtkWidget *color_btn_red;
+    GtkWidget *color_btn_green;
+    GtkWidget *color_btn_blue;
+    GtkWidget *color_btn_custom;
+    GtkWidget *color_area_red;
+    GtkWidget *color_area_green;
+    GtkWidget *color_area_blue;
+    GtkWidget *color_area_custom;
+    GtkWidget *area;
+    GtkWidget *status_label;
+
+    GtkWidget *btn_prev;
+    GtkWidget *btn_next;
+    GtkWidget *btn_run;
+    GtkWidget *btn_pause;
+    GtkWidget *btn_slower;
+    GtkWidget *btn_faster;
+    GtkWidget *btn_reset;
+    GtkWidget *btn_undo;
+    GtkWidget *btn_redo;
+
+    GtkWidget *toggle_pan;
+    GtkWidget *toggle_zoom;
+    GtkWidget *toggle_stretch;
+    GtkWidget *toggle_pen;
+
     SvgSequence sequence;
-    /* --- Behaviors --- */
-    gboolean resize_pending;
-    struct timespec last_resize_time;
-    int resize_w, resize_h;
-    double pan_x, pan_y;
-    int drag_start_x, drag_start_y;
+
+    int canvas_w;
+    int canvas_h;
+
+    double pan_x;
+    double pan_y;
+    double drag_start_x;
+    double drag_start_y;
+    double drag_origin_pan_x;
+    double drag_origin_pan_y;
     gboolean dragging;
-    struct timespec last_drag_time;
+    gboolean zoom_box_active;
+    double zoom_box_x0;
+    double zoom_box_y0;
+    double zoom_box_x1;
+    double zoom_box_y1;
+    gboolean pointer_in_canvas;
+    double pointer_x;
+    double pointer_y;
+
     double zoom_scale;
-    gboolean drag_mode;
-    gboolean zoom_mode;
     gboolean stretch_mode;
-    int active_button;
-    struct timespec last_zoom_time;
-    gboolean zooming;
-    struct timespec last_press_time[MAX_BUTTONS];
-    gboolean pressing;
+    ToolMode tool;
+    PenTool pen_tool;
+    double pen_width;
+    GdkRGBA pen_color;
+    GdkRGBA custom_color;
+    GdkRGBA recent_colors[3];
+    ColorSlot color_slot;
+    gboolean updating_ui;
+
+    GPtrArray *annotations;
+    GPtrArray *undo_stack;
+    GPtrArray *redo_stack;
+    Annotation *active_annotation;
+
+    gint64 last_frame_ms;
+    guint tick_id;
 } App;
 
-static const char *APP_ICON_SVG =
-    "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 24 24'>"
-    "<rect x='0' y='0' width='24' height='24' rx='3' ry='3' fill='#ffffff'/>"
-    "<g fill='none' stroke='#20242a' stroke-width='0.18' stroke-linecap='square'>"
-    "<path d='M1 0 V24 M2 0 V24 M3 0 V24 M4 0 V24 M5 0 V24 M6 0 V24 "
-            "M7 0 V24 M8 0 V24 M9 0 V24 M10 0 V24 M11 0 V24 M12 0 V24 "
-            "M13 0 V24 M14 0 V24 M15 0 V24 M16 0 V24 M17 0 V24 M18 0 V24 "
-            "M19 0 V24 M20 0 V24 M21 0 V24 M22 0 V24 M23 0 V24'/>"
-    "<path d='M0 1 H24 M0 2 H24 M0 3 H24 M0 4 H24 M0 5 H24 M0 6 H24 "
-            "M0 7 H24 M0 8 H24 M0 9 H24 M0 10 H24 M0 11 H24 M0 12 H24 "
-            "M0 13 H24 M0 14 H24 M0 15 H24 M0 16 H24 M0 17 H24 M0 18 H24 "
-            "M0 19 H24 M0 20 H24 M0 21 H24 M0 22 H24 M0 23 H24'/>"
-    "</g>"
-    "<rect x='0.4' y='0.4' width='23.2' height='23.2' rx='2.6' ry='2.6' "
-            "fill='none' stroke='#20242a' stroke-width='0.6'/>"
-    "</svg>";
+static const char *APP_ID = "org.rsfpy.svgviewer.gtk";
+#define UNDO_LIMIT 64
 
-static char *but_labels[] = {
-    /* Prev */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' transform='scale(-1, 1) translate(-64, 0)' >"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<rect x='40' y='16' width='8' height='32' fill='%s'/>"
-    "<polygon points='14,48 30,32 14,16' fill='%s'/>"
-    "<polygon points='28,48 44,32 28,16' fill='%s'/>"
-    "</svg>",
+static void update_ui(App *app);
+static void queue_canvas(App *app);
+static gboolean pen_tool_is_eraser(App *app);
+static gboolean pen_tool_is_partial_eraser(App *app);
 
-    /* Next */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<rect x='40' y='16' width='8' height='32' fill='%s'/>"
-    "<polygon points='14,48 30,32 14,16' fill='%s'/>"
-    "<polygon points='28,48 44,32 28,16' fill='%s'/>"
-    "</svg>",
-
-    /* Run */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<polygon points='20,16 52,32 20,48' fill='%s'/>"
-    "</svg>",
-
-    /* Pause */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<rect x='18' y='16' width='10' height='32' fill='%s'/>"
-    "<rect x='36' y='16' width='10' height='32' fill='%s'/>"
-    "</svg>",
-
-    /* Slower */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' transform='scale(-1, 1) translate(-64, 0)' >"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<polygon points='12,48 31,32 12,16' fill='%s'/>"
-    "<polygon points='32,48 52,32 30,16' fill='%s'/>"
-    "</svg>",
-
-    /* Faster */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'  >"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-    "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<polygon points='12,48 31,32 12,16' fill='%s'/>"
-    "<polygon points='32,48 52,32 30,16' fill='%s'/>"
-    "</svg>",
-
-    /* Drag (Cross Arrows) */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-            "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<polygon points='32,6 24,18 40,18' fill='%s'/>"
-    "<polygon points='32,58 24,46 40,46' fill='%s'/>"
-    "<polygon points='6,32 18,24 18,40' fill='%s'/>"
-    "<polygon points='58,32 46,24 46,40' fill='%s'/>"
-    "<rect x='28' y='22' width='8' height='20' fill='%s'/>"
-    "<rect x='22' y='28' width='20' height='8' fill='%s'/>"
-    "</svg>",
-
-    /* Zoom (Magnifier) */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-            "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<circle cx='28' cy='28' r='16' fill='none' stroke='%s' stroke-width='4'/>"
-    "<rect x='40' y='36' width='24' height='6' rx='3' ry='3' fill='%s' "
-            "transform='rotate(45 42 37)'/>"
-    "<rect x='16' y='25' width='24' height='6' rx='3' ry='3' fill='%s' />"
-    "<rect x='25' y='16' width='6' height='24' rx='3' ry='3' fill='%s' />"
-
-    "</svg>",
-
-    /* Reset */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-            "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<g transform='translate(8 8) scale(2)' "
-            "fill='none' stroke='%s' stroke-width='2' "
-            "stroke-linecap='round' stroke-linejoin='round'>"
-    "<path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/>"
-    "<path d='M21 3v5h-5'/>"
-    "</g>"
-    "</svg>",
-
-    /* Stretch */
-    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
-    "<rect x='1' y='1' width='62' height='62' rx='8' ry='8' "
-            "fill='%s' stroke='%s' stroke-width='2'/>"
-    "<g stroke='%s' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none'>"
-        "<path d='M27 27 L37 37'/>"
-        "<path d='M37 27 L27 37'/>"
-        "<path d='M28 28 L16 16'/>"
-        "<path d='M16 16 L16 27'/>"
-        "<path d='M16 16 L27 16'/>"
-        "<path d='M36 28 L48 16'/>"
-        "<path d='M48 16 L37 16'/>"
-        "<path d='M48 16 L48 27'/>"
-        "<path d='M28 36 L16 48'/>"
-        "<path d='M16 48 L27 48'/>"
-        "<path d='M16 48 L16 37'/>"
-        "<path d='M36 36 L48 48'/>"
-        "<path d='M48 48 L37 48'/>"
-        "<path d='M48 48 L48 37'/>"
-    "</g>"
-    "</svg>"
-};
-
-static void set_window_icon_from_svg(Display *dpy, Window win,
-                                     const char *svg_data,
-                                     int icon_size)
+static gint64 now_ms(void)
 {
-    GError *err = NULL;
+    return g_get_monotonic_time() / 1000;
+}
 
-    RsvgHandle *handle = rsvg_handle_new_from_data(
-        (const guint8 *)svg_data,
-        strlen(svg_data),
-        &err
-    );
+static void annotation_free(gpointer ptr)
+{
+    Annotation *a = (Annotation *)ptr;
+    if (!a) return;
+    if (a->points) g_array_free(a->points, TRUE);
+    g_free(a);
+}
 
-    if (!handle) {
-        fprintf(stderr, "Failed to load window icon SVG: %s\n",
-                err ? err->message : "unknown error");
-        if (err) g_error_free(err);
-        return;
+static Annotation *annotation_new(AnnotationType type, const AnnotationStyle *style)
+{
+    Annotation *a = g_new0(Annotation, 1);
+    a->type = type;
+    if (style) a->style = *style;
+    if (type == ANNO_BRUSH || type == ANNO_BRUSH_DASH) {
+        a->points = g_array_new(FALSE, FALSE, sizeof(DocPoint));
+    }
+    return a;
+}
+
+static void annotation_add_point(Annotation *a, double x, double y)
+{
+    if (!a || !a->points) return;
+    DocPoint p = {x, y};
+    g_array_append_val(a->points, p);
+}
+
+static double dist2(double x0, double y0, double x1, double y1)
+{
+    double dx = x0 - x1;
+    double dy = y0 - y1;
+    return dx * dx + dy * dy;
+}
+
+static double local_sqrt(double x)
+{
+    if (x <= 0.0) return 0.0;
+    double y = x > 1.0 ? x : 1.0;
+    for (int i = 0; i < 12; i++) {
+        y = 0.5 * (y + x / y);
+    }
+    return y;
+}
+
+static double point_segment_distance(double px, double py,
+                                     double ax, double ay,
+                                     double bx, double by)
+{
+    double vx = bx - ax;
+    double vy = by - ay;
+    double wx = px - ax;
+    double wy = py - ay;
+    double c1 = vx * wx + vy * wy;
+    double c2 = vx * vx + vy * vy;
+
+    if (c2 <= 1e-20) return local_sqrt(dist2(px, py, ax, ay));
+
+    double t = c1 / c2;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    double qx = ax + t * vx;
+    double qy = ay + t * vy;
+    return local_sqrt(dist2(px, py, qx, qy));
+}
+
+static double min4(double a, double b, double c, double d)
+{
+    double m = a < b ? a : b;
+    if (c < m) m = c;
+    if (d < m) m = d;
+    return m;
+}
+
+static gboolean annotation_is_freehand(const Annotation *a)
+{
+    return a && (a->type == ANNO_BRUSH || a->type == ANNO_BRUSH_DASH);
+}
+
+static gboolean annotation_is_valid(const Annotation *a)
+{
+    if (!a) return FALSE;
+    if (annotation_is_freehand(a)) return a->points && a->points->len >= 2;
+    if (a->type == ANNO_RECT || a->type == ANNO_RECT_DASH) {
+        return fabs(a->x1 - a->x0) > 1e-6 && fabs(a->y1 - a->y0) > 1e-6;
+    }
+    if (a->type == ANNO_ARROW) {
+        return dist2(a->x0, a->y0, a->x1, a->y1) > 1e-12;
+    }
+    return FALSE;
+}
+
+static void annotation_layer_clear(App *app)
+{
+    if (!app || !app->annotations) return;
+    app->active_annotation = NULL;
+    g_ptr_array_set_size(app->annotations, 0);
+}
+
+static Annotation *annotation_clone(const Annotation *src)
+{
+    if (!src) return NULL;
+
+    Annotation *dst = annotation_new(src->type, &src->style);
+    dst->x0 = src->x0;
+    dst->y0 = src->y0;
+    dst->x1 = src->x1;
+    dst->y1 = src->y1;
+
+    if (src->points && dst->points) {
+        g_array_append_vals(dst->points, src->points->data, src->points->len);
     }
 
-    cairo_surface_t *surface = cairo_image_surface_create(
-        CAIRO_FORMAT_ARGB32,
-        icon_size,
-        icon_size
-    );
+    return dst;
+}
 
-    cairo_t *cr = cairo_create(surface);
+static GPtrArray *annotation_layer_clone(GPtrArray *src)
+{
+    GPtrArray *dst = g_ptr_array_new_with_free_func(annotation_free);
+    if (!src) return dst;
 
+    for (guint i = 0; i < src->len; i++) {
+        Annotation *a = g_ptr_array_index(src, i);
+        Annotation *copy = annotation_clone(a);
+        if (copy) g_ptr_array_add(dst, copy);
+    }
+
+    return dst;
+}
+
+static void annotation_layer_snapshot_free(gpointer ptr)
+{
+    if (ptr) g_ptr_array_free((GPtrArray *)ptr, TRUE);
+}
+
+static void annotation_layer_replace(App *app, GPtrArray *snapshot)
+{
+    if (!app || !snapshot) return;
+
+    if (app->annotations) g_ptr_array_free(app->annotations, TRUE);
+    app->annotations = snapshot;
+    app->active_annotation = NULL;
+}
+
+static void history_clear_stack(GPtrArray *stack)
+{
+    if (!stack) return;
+    g_ptr_array_set_size(stack, 0);
+}
+
+static void history_push_snapshot(GPtrArray *stack, GPtrArray *snapshot)
+{
+    if (!stack || !snapshot) return;
+
+    g_ptr_array_add(stack, snapshot);
+    while (stack->len > UNDO_LIMIT) {
+        g_ptr_array_remove_index(stack, 0);
+    }
+}
+
+static void history_save_before_edit(App *app)
+{
+    if (!app || !app->annotations || !app->undo_stack || !app->redo_stack) return;
+
+    history_push_snapshot(app->undo_stack, annotation_layer_clone(app->annotations));
+    history_clear_stack(app->redo_stack);
+}
+
+static void history_undo(App *app)
+{
+    if (!app || !app->undo_stack || app->undo_stack->len == 0) return;
+
+    GPtrArray *current = annotation_layer_clone(app->annotations);
+    GPtrArray *prev = g_ptr_array_steal_index(app->undo_stack, app->undo_stack->len - 1);
+
+    history_push_snapshot(app->redo_stack, current);
+    annotation_layer_replace(app, prev);
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static void history_redo(App *app)
+{
+    if (!app || !app->redo_stack || app->redo_stack->len == 0) return;
+
+    GPtrArray *current = annotation_layer_clone(app->annotations);
+    GPtrArray *next = g_ptr_array_steal_index(app->redo_stack, app->redo_stack->len - 1);
+
+    history_push_snapshot(app->undo_stack, current);
+    annotation_layer_replace(app, next);
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static double selected_width_from_index(guint idx)
+{
+    static const double values[] = {
+        0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5,
+        3.0, 3.5, 4.0, 4.5, 5.0
+    };
+    if (idx >= G_N_ELEMENTS(values)) idx = 7;
+    return values[idx];
+}
+
+static guint width_index_from_value(double value)
+{
+    static const double values[] = {
+        0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5,
+        3.0, 3.5, 4.0, 4.5, 5.0
+    };
+    guint best = 7;
+    double best_err = fabs(value - values[best]);
+    for (guint i = 0; i < G_N_ELEMENTS(values); i++) {
+        double err = fabs(value - values[i]);
+        if (err < best_err) {
+            best = i;
+            best_err = err;
+        }
+    }
+    return best;
+}
+
+static SvgFrame *current_frame(App *app)
+{
+    if (!app || app->sequence.count <= 0 || !app->sequence.frames) return NULL;
+    if (app->sequence.current_index < 0) app->sequence.current_index = 0;
+    if (app->sequence.current_index >= app->sequence.count) {
+        app->sequence.current_index = app->sequence.count - 1;
+    }
+    return &app->sequence.frames[app->sequence.current_index];
+}
+
+static gboolean compute_view_transform(App *app, ViewTransform *tr)
+{
+    if (!app || !tr) return FALSE;
+    memset(tr, 0, sizeof(*tr));
+
+    SvgFrame *f = current_frame(app);
+    if (!f || f->width <= 0.0 || f->height <= 0.0 || app->canvas_w <= 0 || app->canvas_h <= 0) {
+        return FALSE;
+    }
+
+    double zoom = app->zoom_scale;
+    if (zoom < MIN_ZOOM_SCALE) zoom = MIN_ZOOM_SCALE;
+    if (zoom > MAX_ZOOM_SCALE) zoom = MAX_ZOOM_SCALE;
+
+    double dst_w, dst_h;
+    if (app->stretch_mode) {
+        dst_w = app->canvas_w * zoom;
+        dst_h = app->canvas_h * zoom;
+        tr->sx = dst_w / f->width;
+        tr->sy = dst_h / f->height;
+    } else {
+        double sx = (double)app->canvas_w / f->width;
+        double sy = (double)app->canvas_h / f->height;
+        double s = (sx < sy ? sx : sy) * zoom;
+        tr->sx = s;
+        tr->sy = s;
+        dst_w = f->width * s;
+        dst_h = f->height * s;
+    }
+
+    tr->tx = (app->canvas_w - dst_w) * 0.5 + app->pan_x;
+    tr->ty = (app->canvas_h - dst_h) * 0.5 + app->pan_y;
+    tr->valid = TRUE;
+    return TRUE;
+}
+
+static void apply_view_transform(App *app, cairo_t *cr)
+{
+    ViewTransform tr;
+    if (!compute_view_transform(app, &tr)) return;
+    cairo_translate(cr, tr.tx, tr.ty);
+    cairo_scale(cr, tr.sx, tr.sy);
+}
+
+static gboolean screen_to_doc(App *app, double sx, double sy, double *dx, double *dy)
+{
+    ViewTransform tr;
+    if (!compute_view_transform(app, &tr)) return FALSE;
+    if (fabs(tr.sx) < 1e-20 || fabs(tr.sy) < 1e-20) return FALSE;
+    if (dx) *dx = (sx - tr.tx) / tr.sx;
+    if (dy) *dy = (sy - tr.ty) / tr.sy;
+    return TRUE;
+}
+
+static double current_doc_width_for_screen_width(App *app, double screen_width)
+{
+    ViewTransform tr;
+    if (!compute_view_transform(app, &tr)) return screen_width;
+    double s = (fabs(tr.sx) + fabs(tr.sy)) * 0.5;
+    if (s <= 1e-20) return screen_width;
+    return screen_width / s;
+}
+
+static double current_doc_eraser_radius(App *app)
+{
+    double screen_radius = app ? app->pen_width * 2.0 : 6.0;
+    if (screen_radius < 6.0) screen_radius = 6.0;
+    return current_doc_width_for_screen_width(app, screen_radius);
+}
+
+static const char *tool_name(ToolMode tool)
+{
+    switch (tool) {
+        case TOOL_PAN:  return "Pan";
+        case TOOL_ZOOM: return "Zoom";
+        case TOOL_PEN:  return "Pen";
+        case TOOL_NONE:
+        default:        return "None";
+    }
+}
+
+
+static const char *pen_tool_name(PenTool tool)
+{
+    switch (tool) {
+        case PEN_TOOL_BRUSH_DASH: return "Brush-dash";
+        case PEN_TOOL_RECT:       return "Rectangle";
+        case PEN_TOOL_RECT_DASH:  return "Rectangle-dash";
+        case PEN_TOOL_ARROW:          return "Arrow";
+        case PEN_TOOL_ERASER_PARTIAL: return "Eraser-partial";
+        case PEN_TOOL_ERASER_FULL:    return "Eraser-full";
+        case PEN_TOOL_BRUSH:
+        default:                      return "Brush";
+    }
+}
+
+static void set_rgba(GdkRGBA *c, double r, double g, double b, double a)
+{
+    if (!c) return;
+    c->red = r;
+    c->green = g;
+    c->blue = b;
+    c->alpha = a;
+}
+
+static void queue_pen_color_areas(App *app)
+{
+    if (!app) return;
+    if (app->color_area_red)    gtk_widget_queue_draw(app->color_area_red);
+    if (app->color_area_green)  gtk_widget_queue_draw(app->color_area_green);
+    if (app->color_area_blue)   gtk_widget_queue_draw(app->color_area_blue);
+    if (app->color_area_custom) gtk_widget_queue_draw(app->color_area_custom);
+}
+
+static void queue_canvas(App *app)
+{
+    if (app && app->area) gtk_widget_queue_draw(app->area);
+}
+
+static void update_ui(App *app)
+{
+    if (!app) return;
+
+    gboolean multi = (app->sequence.count > 1);
+
+    if (app->btn_prev)   gtk_widget_set_sensitive(app->btn_prev,   multi);
+    if (app->btn_next)   gtk_widget_set_sensitive(app->btn_next,   multi);
+    if (app->btn_run)    gtk_widget_set_sensitive(app->btn_run,    multi && !app->sequence.playing);
+    if (app->btn_pause)  gtk_widget_set_sensitive(app->btn_pause,  multi && app->sequence.playing);
+    if (app->btn_slower) gtk_widget_set_sensitive(app->btn_slower, multi && app->sequence.fps > MIN_FPS);
+    if (app->btn_faster) gtk_widget_set_sensitive(app->btn_faster, multi && app->sequence.fps < MAX_FPS);
+
+    if (app->btn_reset) {
+        gboolean changed = (app->zoom_scale != 1.0 || app->pan_x != 0.0 || app->pan_y != 0.0);
+        gtk_widget_set_sensitive(app->btn_reset, changed);
+    }
+    if (app->btn_undo) gtk_widget_set_sensitive(app->btn_undo, app->undo_stack && app->undo_stack->len > 0);
+    if (app->btn_redo) gtk_widget_set_sensitive(app->btn_redo, app->redo_stack && app->redo_stack->len > 0);
+
+    app->updating_ui = TRUE;
+    if (app->toggle_pan) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->toggle_pan), app->tool == TOOL_PAN);
+    }
+    if (app->toggle_zoom) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->toggle_zoom), app->tool == TOOL_ZOOM);
+    }
+    if (app->toggle_stretch) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->toggle_stretch), app->stretch_mode);
+    }
+    if (app->toggle_pen) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->toggle_pen), app->tool == TOOL_PEN);
+    }
+    if (app->pen_revealer) {
+        gtk_revealer_set_reveal_child(GTK_REVEALER(app->pen_revealer), app->tool == TOOL_PEN);
+    }
+
+    if (app->pen_tool_dropdown) {
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(app->pen_tool_dropdown), (guint)app->pen_tool);
+    }
+    if (app->pen_width_dropdown) {
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(app->pen_width_dropdown), width_index_from_value(app->pen_width));
+    }
+    app->updating_ui = FALSE;
+
+    queue_pen_color_areas(app);
+
+    if (app->status_label) {
+        char status[1024];
+        const char *path = "N/A";
+        const char *frame_label = NULL;
+        int iframe = 0;
+        int nframe = app->sequence.count;
+        char *color_text = gdk_rgba_to_string(&app->pen_color);
+
+        if (app->sequence.count > 0) {
+            iframe = app->sequence.current_index + 1;
+            SvgFrame *f = &app->sequence.frames[app->sequence.current_index];
+            path = f->path ? f->path : "N/A";
+            frame_label = f->framelabel;
+        }
+
+        guint anno_count = app->annotations ? app->annotations->len : 0;
+
+        if (nframe > 1) {
+            g_snprintf(status, sizeof(status),
+                       "%s%s%s | Frame %d/%d | FPS %d | %s | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       frame_label ? frame_label : "",
+                       frame_label ? " | " : "",
+                       path,
+                       iframe, nframe,
+                       app->sequence.fps,
+                       app->sequence.playing ? RUNMSG : PAUSEMSG,
+                       app->zoom_scale * 100.0,
+                       tool_name(app->tool),
+                       pen_tool_name(app->pen_tool),
+                       app->pen_width,
+                       color_text ? color_text : "rgba",
+                       anno_count,
+                       app->stretch_mode ? "Stretch" : "Aspect",
+                       app->stretch_mode ? "" : " locked");
+        } else {
+            g_snprintf(status, sizeof(status),
+                       "%s | Single file | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       path,
+                       app->zoom_scale * 100.0,
+                       tool_name(app->tool),
+                       pen_tool_name(app->pen_tool),
+                       app->pen_width,
+                       color_text ? color_text : "rgba",
+                       anno_count,
+                       app->stretch_mode ? "Stretch" : "Aspect",
+                       app->stretch_mode ? "" : " locked");
+        }
+
+        g_free(color_text);
+        gtk_label_set_text(GTK_LABEL(app->status_label), status);
+    }
+}
+
+static void reset_view(App *app)
+{
+    app->zoom_scale = 1.0;
+    app->pan_x = 0.0;
+    app->pan_y = 0.0;
+    app->dragging = FALSE;
+    app->zoom_box_active = FALSE;
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static void set_tool(App *app, ToolMode tool)
+{
+    if (!app) return;
+
+    if (app->tool == tool) {
+        tool = TOOL_NONE;
+    }
+
+    app->tool = tool;
+    app->dragging = FALSE;
+    app->zoom_box_active = FALSE;
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static void step_frame(App *app, int step)
+{
+    if (app->sequence.count <= 1) return;
+
+    app->sequence.playing = FALSE;
+    app->sequence.current_index =
+        (app->sequence.current_index + step + app->sequence.count) % app->sequence.count;
+
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static void set_zoom(App *app, double zoom)
+{
+    if (zoom < MIN_ZOOM_SCALE) zoom = MIN_ZOOM_SCALE;
+    if (zoom > MAX_ZOOM_SCALE) zoom = MAX_ZOOM_SCALE;
+    app->zoom_scale = zoom;
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static void on_prev_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    step_frame((App *)user_data, -1);
+}
+
+static void on_next_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    step_frame((App *)user_data, 1);
+}
+
+static void on_run_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    App *app = user_data;
+    if (app->sequence.count > 1) {
+        app->sequence.playing = TRUE;
+        app->last_frame_ms = now_ms();
+    }
+    update_ui(app);
+}
+
+static void on_pause_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    App *app = user_data;
+    app->sequence.playing = FALSE;
+    update_ui(app);
+}
+
+static void on_slower_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    App *app = user_data;
+    if (app->sequence.fps > MIN_FPS) app->sequence.fps--;
+    update_ui(app);
+}
+
+static void on_faster_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    App *app = user_data;
+    if (app->sequence.fps < MAX_FPS) app->sequence.fps++;
+    update_ui(app);
+}
+
+static void on_reset_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    reset_view((App *)user_data);
+}
+
+static void on_undo_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    history_undo((App *)user_data);
+}
+
+static void on_redo_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    history_redo((App *)user_data);
+}
+
+static void on_pan_toggled(GtkToggleButton *button, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->updating_ui) return;
+
+    if (gtk_toggle_button_get_active(button)) {
+        set_tool(app, TOOL_PAN);
+    } else if (app->tool == TOOL_PAN) {
+        set_tool(app, TOOL_NONE);
+    }
+}
+
+static void on_zoom_toggled(GtkToggleButton *button, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->updating_ui) return;
+
+    if (gtk_toggle_button_get_active(button)) {
+        set_tool(app, TOOL_ZOOM);
+    } else if (app->tool == TOOL_ZOOM) {
+        set_tool(app, TOOL_NONE);
+    }
+}
+
+static void on_pen_toggled(GtkToggleButton *button, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->updating_ui) return;
+
+    if (gtk_toggle_button_get_active(button)) {
+        set_tool(app, TOOL_PEN);
+    } else if (app->tool == TOOL_PEN) {
+        set_tool(app, TOOL_NONE);
+    }
+}
+
+static void on_stretch_toggled(GtkToggleButton *button, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->updating_ui) return;
+
+    app->stretch_mode = gtk_toggle_button_get_active(button);
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static GtkWidget *make_button(const char *label,
+                              GCallback callback,
+                              App *app)
+{
+    GtkWidget *button = gtk_button_new_with_label(label);
+    gtk_widget_set_focus_on_click(button, FALSE);
+    g_signal_connect(button, "clicked", callback, app);
+    return button;
+}
+
+static GtkWidget *make_toggle(const char *label,
+                              GCallback callback,
+                              App *app)
+{
+    GtkWidget *button = gtk_toggle_button_new_with_label(label);
+    gtk_widget_set_focus_on_click(button, FALSE);
+    g_signal_connect(button, "toggled", callback, app);
+    return button;
+}
+
+static void append_sep(GtkWidget *box)
+{
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
+    gtk_widget_set_margin_start(sep, 4);
+    gtk_widget_set_margin_end(sep, 4);
+    gtk_box_append(GTK_BOX(box), sep);
+}
+
+
+typedef struct {
+    App *app;
+    ColorSlot slot;
+} ColorSwatchData;
+
+typedef struct {
+    App *app;
+    GtkWidget *dialog;
+    GtkWidget *chooser;
+    GtkWidget *spin_r;
+    GtkWidget *spin_g;
+    GtkWidget *spin_b;
+    GtkWidget *spin_a;
+    gboolean updating;
+} ColorDialogState;
+
+static void get_slot_color(App *app, ColorSlot slot, GdkRGBA *color)
+{
+    if (!app || !color) return;
+
+    switch (slot) {
+        case COLOR_SLOT_RECENT1:
+            *color = app->recent_colors[1];
+            break;
+        case COLOR_SLOT_RECENT2:
+            *color = app->recent_colors[2];
+            break;
+        case COLOR_SLOT_CUSTOM:
+            *color = app->custom_color;
+            break;
+        case COLOR_SLOT_RECENT0:
+        default:
+            *color = app->recent_colors[0];
+            break;
+    }
+}
+
+static void draw_rainbow_circle(cairo_t *cr, double cx, double cy, double radius)
+{
+    const double colors[][3] = {
+        {1.0, 0.0, 0.0}, {1.0, 0.6, 0.0}, {1.0, 1.0, 0.0},
+        {0.0, 0.7, 0.0}, {0.0, 0.3, 1.0}, {0.5, 0.0, 1.0}
+    };
+    const int n = 6;
+    for (int i = 0; i < n; i++) {
+        double a0 = (2.0 * G_PI * i) / n;
+        double a1 = (2.0 * G_PI * (i + 1)) / n;
+        cairo_move_to(cr, cx, cy);
+        cairo_arc(cr, cx, cy, radius, a0, a1);
+        cairo_close_path(cr);
+        cairo_set_source_rgb(cr, colors[i][0], colors[i][1], colors[i][2]);
+        cairo_fill(cr);
+    }
+}
+
+static void draw_color_swatch(GtkDrawingArea *area,
+                              cairo_t *cr,
+                              int width,
+                              int height,
+                              gpointer user_data)
+{
+    (void)area;
+    ColorSwatchData *data = user_data;
+    App *app = data->app;
+    ColorSlot slot = data->slot;
+
+    double cx = width * 0.5;
+    double cy = height * 0.5;
+    double radius = MIN(width, height) * 0.34;
+
+    cairo_save(cr);
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
 
-#if LIBRSVG_CHECK_VERSION(2, 52, 0)
-    RsvgRectangle viewport = {
-        0.0,
-        0.0,
-        (double)icon_size,
-        (double)icon_size
-    };
-
-    if (!rsvg_handle_render_document(handle, cr, &viewport, &err)) {
-        fprintf(stderr, "Failed to render window icon SVG: %s\n",
-                err ? err->message : "unknown error");
-        if (err) g_error_free(err);
-        cairo_destroy(cr);
-        cairo_surface_destroy(surface);
-        g_object_unref(handle);
-        return;
-    }
-#else
-    {
-        RsvgDimensionData dim;
-        rsvg_handle_get_dimensions(handle, &dim);
-
-        double sx = (double)icon_size / (double)dim.width;
-        double sy = (double)icon_size / (double)dim.height;
-
-        cairo_scale(cr, sx, sy);
-        rsvg_handle_render_cairo(handle, cr);
-    }
-#endif
-
-    cairo_surface_flush(surface);
-
-    unsigned char *src = cairo_image_surface_get_data(surface);
-    int stride = cairo_image_surface_get_stride(surface);
-
-    /*
-     * _NET_WM_ICON format:
-     *
-     * data[0] = width
-     * data[1] = height
-     * data[2...] = ARGB pixels, 0xAARRGGBB
-     */
-    unsigned long *icon_data = calloc(
-        2 + icon_size * icon_size,
-        sizeof(unsigned long)
-    );
-
-    if (!icon_data) {
-        fprintf(stderr, "Failed to allocate icon_data.\n");
-        cairo_destroy(cr);
-        cairo_surface_destroy(surface);
-        g_object_unref(handle);
-        return;
+    if (slot == COLOR_SLOT_CUSTOM) {
+        draw_rainbow_circle(cr, cx, cy, radius);
+        cairo_arc(cr, cx, cy, radius * 0.45, 0, 2.0 * G_PI);
+        cairo_set_source_rgba(cr,
+                              app->custom_color.red,
+                              app->custom_color.green,
+                              app->custom_color.blue,
+                              app->custom_color.alpha);
+        cairo_fill(cr);
+    } else {
+        GdkRGBA color;
+        get_slot_color(app, slot, &color);
+        cairo_arc(cr, cx, cy, radius, 0, 2.0 * G_PI);
+        cairo_set_source_rgba(cr, color.red, color.green, color.blue, color.alpha);
+        cairo_fill_preserve(cr);
     }
 
-    icon_data[0] = icon_size;
-    icon_data[1] = icon_size;
-
-    for (int y = 0; y < icon_size; y++) {
-        uint32_t *row = (uint32_t *)(src + y * stride);
-
-        for (int x = 0; x < icon_size; x++) {
-            uint32_t p = row[x];
-
-            unsigned int a = (p >> 24) & 0xff;
-            unsigned int r = (p >> 16) & 0xff;
-            unsigned int g = (p >> 8)  & 0xff;
-            unsigned int b =  p        & 0xff;
-
-            /*
-             * Cairo ARGB32 is premultiplied alpha.
-             * _NET_WM_ICON expects ordinary ARGB.
-             * For opaque icons this barely matters, but this is safer.
-             */
-            if (a > 0 && a < 255) {
-                r = (r * 255) / a;
-                g = (g * 255) / a;
-                b = (b * 255) / a;
-
-                if (r > 255) r = 255;
-                if (g > 255) g = 255;
-                if (b > 255) b = 255;
-            }
-
-            icon_data[2 + y * icon_size + x] =
-                ((unsigned long)a << 24) |
-                ((unsigned long)r << 16) |
-                ((unsigned long)g << 8)  |
-                ((unsigned long)b);
-        }
-    }
-
-    Atom net_wm_icon = XInternAtom(dpy, "_NET_WM_ICON", False);
-    Atom cardinal    = XInternAtom(dpy, "CARDINAL", False);
-
-    XChangeProperty(
-        dpy,
-        win,
-        net_wm_icon,
-        cardinal,
-        32,
-        PropModeReplace,
-        (unsigned char *)icon_data,
-        2 + icon_size * icon_size
-    );
-
-    XFlush(dpy);
-
-    free(icon_data);
-    cairo_destroy(cr);
-    cairo_surface_destroy(surface);
-    g_object_unref(handle);
-}
-
-/* Maybe make copy works */
-/* static unsigned char *clipboard_png_data;
-static size_t clipboard_png_size;
-static cairo_status_t
-write_png_to_memory(void *closure, const unsigned char *data, unsigned int length) {
-    size_t old_size = clipboard_png_size;
-    clipboard_png_size += length;
-    clipboard_png_data = realloc(clipboard_png_data, clipboard_png_size);
-    memcpy(clipboard_png_data + old_size, data, length);
-    return CAIRO_STATUS_SUCCESS;
-}
-
-void copy_cairo_region_to_clipboard(App *app, Display *dpy, Window win,
-                                    cairo_surface_t *src) {
-    free(clipboard_png_data);
-    clipboard_png_data = NULL;
-    clipboard_png_size = 0;
-    cairo_surface_write_to_png_stream(src, write_png_to_memory, NULL);
-
-    Atom XA_CLIPBOARD = XInternAtom(dpy, "CLIPBOARD", False);
-    XSetSelectionOwner(dpy, XA_CLIPBOARD, win, CurrentTime);
-    XFlush(dpy);
-    fprintf(stderr, "Copied %zu bytes PNG to clipboard.\n", clipboard_png_size);
-}
-
-void handle_selection_request(Display *dpy, XEvent *e) {
-    XSelectionRequestEvent *req = &e->xselectionrequest;
-
-    XSelectionEvent sev;
-    memset(&sev, 0, sizeof(sev));
-    sev.type      = SelectionNotify;
-    sev.display   = req->display;
-    sev.requestor = req->requestor;
-    sev.selection = req->selection;
-    sev.target    = req->target;
-    sev.property  = req->property;
-    sev.time      = req->time;
-
-    Atom XA_TARGETS = XInternAtom(dpy, "TARGETS", False);
-    Atom XA_UTF8    = XInternAtom(dpy, "UTF8_STRING", False);
-    Atom atom_STRING  = XInternAtom(dpy, "STRING", False);
-    Atom XA_PNG     = XInternAtom(dpy, "image/png", False);
-
-    if (req->target == XA_TARGETS) {
-        Atom targets[] = { XA_UTF8, atom_STRING, XA_PNG };
-        XChangeProperty(dpy, req->requestor, req->property,
-                        XA_ATOM, 32, PropModeReplace,
-                        (unsigned char*)targets, 3);
-    }
-    else if (req->target == XA_UTF8 || req->target == atom_STRING) {
-        const char *text = "Hello from WSLg + X11!";
-        XChangeProperty(dpy, req->requestor, req->property,
-                        req->target, 8, PropModeReplace,
-                        (unsigned char*)text, strlen(text));
-    }
-    else if (req->target == XA_PNG && clipboard_png_data && clipboard_png_size > 0) {
-        XChangeProperty(dpy, req->requestor, req->property,
-                        XA_PNG, 8, PropModeReplace,
-                        clipboard_png_data, clipboard_png_size);
-    }
-    else {
-        sev.property = None;
-    }
-
-    XSendEvent(dpy, req->requestor, True, 0, (XEvent*)&sev);
-    XFlush(dpy);
-} */
-
-
-Button draw_button(cairo_t *cr, int x, int y, const char *svg_label,
-                   double height, gboolean enabled, gboolean pressed,
-                   long last_pressed_time_ms) {
-    int btn_w = 0;
-    int btn_h = (int)(0.8 * height);
-    char svg_buf[1024];
-
-    if (svg_label) {
-        GError *err = NULL;
-        snprintf(svg_buf, sizeof(svg_buf), svg_label,
-                /* background color */ 
-                pressed || last_pressed_time_ms <= 2* WAIT_TIME_MS? PRESSED_COLOR:WHITE,
-                /* stroke color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR,
-                /* fill color */ enabled? ENABLED_COLOR:DISABLED_COLOR);
-        /* More is good */
-        RsvgHandle *handle = rsvg_handle_new_from_data(
-            (const guint8 *)svg_buf,
-            strlen(svg_buf),
-            &err
-        );
-        if (handle) {
-            // RsvgDimensionData dim;
-            double svg_w, svg_h;
-
-        #if LIBRSVG_CHECK_VERSION(2, 46, 0)
-            if (!rsvg_handle_get_intrinsic_size_in_pixels(handle, &svg_w, &svg_h)) {
-                svg_w = 64;
-                svg_h = 64;
-            }
-        #else
-            RsvgDimensionData dim;
-            rsvg_handle_get_dimensions(handle, &dim);
-            svg_w = dim.width;
-            svg_h = dim.height;
-        #endif
-
-
-            double scale = 0.8 * height / (double)svg_h;
-            btn_h = (int)(svg_h * scale);
-            btn_w = (int)(svg_w * scale);
-            double ox = x + 0;
-            double oy = 0.1 * height;
-
-            cairo_save(cr);
-            cairo_translate(cr, ox, oy);
-            cairo_scale(cr, scale, scale);
-
-#if LIBRSVG_CHECK_VERSION(2,52,0)
-            RsvgRectangle viewport = {0, 0, svg_w, svg_h};
-            rsvg_handle_render_document(handle, cr, &viewport, NULL);
-#else
-            rsvg_handle_render_cairo(handle, cr);
-#endif
-            cairo_restore(cr);
-
-            g_object_unref(handle);
-        } else {
-            fprintf(stderr, "SVG load error: %s\n", err->message);
-            g_error_free(err);
-        }
-    }
-
-    Button b;
-    b.x = x;
-    b.y = y;
-    b.width = btn_w;
-    b.height = btn_h;
-    b.enabled = enabled;
-    b.pressed = pressed;
-    strncpy(b.label, "[svg]", sizeof(b.label));
-    return b;
-}
-
-Button draw_text_button(cairo_t *cr, int x, int y, const char *text,
-                        double height, gboolean enabled, gboolean pressed,
-                        long last_pressed_time_ms) {
-    Button b;
-    cairo_text_extents_t ext;
-    int padding_x = 10;
-    int padding_y = 6;
-    int btn_h = (int)(0.8 * height);
-
-    cairo_save(cr);
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 0.42 * height);
-    cairo_text_extents(cr, text, &ext);
-
-    int btn_w = (int)(ext.width + 2 * padding_x);
-    int text_x = x + padding_x - ext.x_bearing;
-    int text_y = y + padding_y + (btn_h - 2 * padding_y - ext.height) / 2 - ext.y_bearing;
-
-    cairo_set_source_rgba_string(cr, pressed || last_pressed_time_ms <= 2 * WAIT_TIME_MS ? PRESSED_COLOR : WHITE);
-    cairo_rectangle(cr, x, y + 0.1 * height, btn_w, btn_h);
-    cairo_fill(cr);
-
-    cairo_set_source_rgba_string(cr, enabled ? ENABLED_COLOR : DISABLED_COLOR);
-    cairo_rectangle(cr, x, y + 0.1 * height, btn_w, btn_h);
-    cairo_set_line_width(cr, 1.5);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.45);
+    cairo_set_line_width(cr, 1.2);
     cairo_stroke(cr);
 
-    cairo_move_to(cr, text_x, text_y);
-    cairo_show_text(cr, text);
+    if (app->color_slot == slot) {
+        cairo_arc(cr, cx, cy, radius + 3.0, 0, 2.0 * G_PI);
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.90);
+        cairo_set_line_width(cr, 2.0);
+        cairo_stroke(cr);
+    }
+
     cairo_restore(cr);
+}
 
-    b.x = x;
-    b.y = y;
-    b.width = btn_w;
-    b.height = btn_h;
-    b.enabled = enabled;
-    b.pressed = pressed;
-    strncpy(b.label, text, sizeof(b.label));
-    return b;
+static GtkWidget *make_color_button(App *app, ColorSlot slot, const char *tooltip)
+{
+    GtkWidget *button = gtk_button_new();
+    gtk_widget_set_focus_on_click(button, FALSE);
+    gtk_widget_set_tooltip_text(button, tooltip);
+    gtk_widget_add_css_class(button, "flat");
+
+    GtkWidget *area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(area, 24, 24);
+
+    ColorSwatchData *data = g_new0(ColorSwatchData, 1);
+    data->app = app;
+    data->slot = slot;
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_color_swatch, data, g_free);
+
+    gtk_button_set_child(GTK_BUTTON(button), area);
+
+    switch (slot) {
+        case COLOR_SLOT_RECENT1: app->color_area_green = area;  app->color_btn_green = button; break;
+        case COLOR_SLOT_RECENT2: app->color_area_blue = area;   app->color_btn_blue = button; break;
+        case COLOR_SLOT_CUSTOM:  app->color_area_custom = area; app->color_btn_custom = button; break;
+        case COLOR_SLOT_RECENT0:
+        default:                 app->color_area_red = area;    app->color_btn_red = button; break;
+    }
+
+    g_object_set_data(G_OBJECT(button), "rsfpy-color-slot", GINT_TO_POINTER((int)slot));
+    return button;
+}
+
+static void move_recent_color_to_front(App *app, int index)
+{
+    if (!app || index < 0 || index > 2) return;
+
+    GdkRGBA selected = app->recent_colors[index];
+    for (int i = index; i > 0; i--) {
+        app->recent_colors[i] = app->recent_colors[i - 1];
+    }
+    app->recent_colors[0] = selected;
+    app->pen_color = app->recent_colors[0];
+    app->color_slot = COLOR_SLOT_RECENT0;
+
+    update_ui(app);
+}
+
+static void push_recent_color(App *app, const GdkRGBA *color)
+{
+    if (!app || !color) return;
+
+    app->recent_colors[2] = app->recent_colors[1];
+    app->recent_colors[1] = app->recent_colors[0];
+    app->recent_colors[0] = *color;
+    app->pen_color = app->recent_colors[0];
+    app->custom_color = *color;
+    app->color_slot = COLOR_SLOT_RECENT0;
+
+    update_ui(app);
+}
+
+static void set_pen_color(App *app, ColorSlot slot, const GdkRGBA *color)
+{
+    if (!app) return;
+
+    switch (slot) {
+        case COLOR_SLOT_RECENT1:
+            move_recent_color_to_front(app, 1);
+            break;
+        case COLOR_SLOT_RECENT2:
+            move_recent_color_to_front(app, 2);
+            break;
+        case COLOR_SLOT_CUSTOM:
+            if (color) push_recent_color(app, color);
+            break;
+        case COLOR_SLOT_RECENT0:
+        default:
+            move_recent_color_to_front(app, 0);
+            break;
+    }
+}
+
+static void on_pen_tool_selected(GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+    (void)pspec;
+    App *app = user_data;
+    if (!app || app->updating_ui) return;
+
+    guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
+    if (selected > PEN_TOOL_ERASER_FULL) selected = PEN_TOOL_BRUSH;
+    app->pen_tool = (PenTool)selected;
+    update_ui(app);
+}
+
+static void on_pen_width_selected(GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+    (void)pspec;
+    App *app = user_data;
+    if (!app || app->updating_ui) return;
+
+    guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
+    app->pen_width = selected_width_from_index(selected);
+    update_ui(app);
+}
+
+static void color_dialog_sync_spins(ColorDialogState *st, const GdkRGBA *c)
+{
+    if (!st || !c) return;
+    st->updating = TRUE;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(st->spin_r), c->red);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(st->spin_g), c->green);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(st->spin_b), c->blue);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(st->spin_a), c->alpha);
+    st->updating = FALSE;
+}
+
+static void color_dialog_sync_chooser(ColorDialogState *st)
+{
+    if (!st || st->updating) return;
+
+    GdkRGBA c;
+    c.red = gtk_spin_button_get_value(GTK_SPIN_BUTTON(st->spin_r));
+    c.green = gtk_spin_button_get_value(GTK_SPIN_BUTTON(st->spin_g));
+    c.blue = gtk_spin_button_get_value(GTK_SPIN_BUTTON(st->spin_b));
+    c.alpha = gtk_spin_button_get_value(GTK_SPIN_BUTTON(st->spin_a));
+
+    st->updating = TRUE;
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(st->chooser), &c);
+    st->updating = FALSE;
+}
+
+static void on_color_chooser_changed(GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+    (void)pspec;
+    ColorDialogState *st = user_data;
+    if (!st || st->updating) return;
+
+    GdkRGBA c;
+    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(object), &c);
+    color_dialog_sync_spins(st, &c);
+}
+
+static void on_color_spin_changed(GtkSpinButton *spin, gpointer user_data)
+{
+    (void)spin;
+    color_dialog_sync_chooser((ColorDialogState *)user_data);
+}
+
+static void on_color_dialog_response(GtkDialog *dialog, int response_id, gpointer user_data)
+{
+    ColorDialogState *st = user_data;
+    if (st && response_id == GTK_RESPONSE_OK) {
+        GdkRGBA c;
+        gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(st->chooser), &c);
+        set_pen_color(st->app, COLOR_SLOT_CUSTOM, &c);
+    }
+
+    if (st) {
+        g_signal_handlers_disconnect_by_data(st->chooser, st);
+        g_signal_handlers_disconnect_by_data(st->spin_r, st);
+        g_signal_handlers_disconnect_by_data(st->spin_g, st);
+        g_signal_handlers_disconnect_by_data(st->spin_b, st);
+        g_signal_handlers_disconnect_by_data(st->spin_a, st);
+        g_free(st);
+    }
+
+    gtk_window_destroy(GTK_WINDOW(dialog));
+}
+
+static GtkWidget *make_rgba_spin(double value)
+{
+    GtkWidget *spin = gtk_spin_button_new_with_range(0.0, 1.0, 0.01);
+    gtk_spin_button_set_digits(GTK_SPIN_BUTTON(spin), 2);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), value);
+    gtk_widget_set_size_request(spin, 72, -1);
+    return spin;
+}
+
+static void open_custom_color_dialog(App *app)
+{
+    GtkWidget *dialog = gtk_dialog_new_with_buttons("Choose RGBA color",
+                                                    GTK_WINDOW(app->window),
+                                                    GTK_DIALOG_MODAL,
+                                                    "_Cancel", GTK_RESPONSE_CANCEL,
+                                                    "_OK", GTK_RESPONSE_OK,
+                                                    NULL);
+
+    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_box_set_spacing(GTK_BOX(content), 8);
+    gtk_widget_set_margin_top(content, 8);
+    gtk_widget_set_margin_bottom(content, 8);
+    gtk_widget_set_margin_start(content, 8);
+    gtk_widget_set_margin_end(content, 8);
+
+    ColorDialogState *st = g_new0(ColorDialogState, 1);
+    st->app = app;
+    st->dialog = dialog;
+
+    st->chooser = gtk_color_chooser_widget_new();
+    gtk_color_chooser_set_use_alpha(GTK_COLOR_CHOOSER(st->chooser), TRUE);
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(st->chooser), &app->custom_color);
+    gtk_box_append(GTK_BOX(content), st->chooser);
+
+    GtkWidget *rgba_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_top(rgba_box, 4);
+    gtk_box_append(GTK_BOX(content), rgba_box);
+
+    GtkWidget *label = gtk_label_new("RGBA:");
+    gtk_box_append(GTK_BOX(rgba_box), label);
+
+    st->spin_r = make_rgba_spin(app->custom_color.red);
+    st->spin_g = make_rgba_spin(app->custom_color.green);
+    st->spin_b = make_rgba_spin(app->custom_color.blue);
+    st->spin_a = make_rgba_spin(app->custom_color.alpha);
+
+    gtk_box_append(GTK_BOX(rgba_box), gtk_label_new("R"));
+    gtk_box_append(GTK_BOX(rgba_box), st->spin_r);
+    gtk_box_append(GTK_BOX(rgba_box), gtk_label_new("G"));
+    gtk_box_append(GTK_BOX(rgba_box), st->spin_g);
+    gtk_box_append(GTK_BOX(rgba_box), gtk_label_new("B"));
+    gtk_box_append(GTK_BOX(rgba_box), st->spin_b);
+    gtk_box_append(GTK_BOX(rgba_box), gtk_label_new("A"));
+    gtk_box_append(GTK_BOX(rgba_box), st->spin_a);
+
+    g_signal_connect(st->chooser, "notify::rgba", G_CALLBACK(on_color_chooser_changed), st);
+    g_signal_connect(st->spin_r, "value-changed", G_CALLBACK(on_color_spin_changed), st);
+    g_signal_connect(st->spin_g, "value-changed", G_CALLBACK(on_color_spin_changed), st);
+    g_signal_connect(st->spin_b, "value-changed", G_CALLBACK(on_color_spin_changed), st);
+    g_signal_connect(st->spin_a, "value-changed", G_CALLBACK(on_color_spin_changed), st);
+    g_signal_connect(dialog, "response", G_CALLBACK(on_color_dialog_response), st);
+
+    gtk_window_present(GTK_WINDOW(dialog));
+}
+
+static void on_color_button_clicked(GtkButton *button, gpointer user_data)
+{
+    App *app = user_data;
+    ColorSlot slot = (ColorSlot)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "rsfpy-color-slot"));
+
+    if (slot == COLOR_SLOT_CUSTOM) {
+        open_custom_color_dialog(app);
+        return;
+    }
+
+    GdkRGBA color;
+    get_slot_color(app, slot, &color);
+    set_pen_color(app, slot, &color);
+}
+
+static void on_pen_clear_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    App *app = user_data;
+    if (app->annotations && app->annotations->len > 0) history_save_before_edit(app);
+    annotation_layer_clear(app);
+    update_ui(app);
+    queue_canvas(app);
+}
+
+static GtkWidget *create_main_toolbar(App *app)
+{
+    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_margin_top(bar, 4);
+    gtk_widget_set_margin_bottom(bar, 4);
+    gtk_widget_set_margin_start(bar, 6);
+    gtk_widget_set_margin_end(bar, 6);
+
+    app->btn_prev = make_button("Prev", G_CALLBACK(on_prev_clicked), app);
+    app->btn_next = make_button("Next", G_CALLBACK(on_next_clicked), app);
+    app->btn_run = make_button("Run", G_CALLBACK(on_run_clicked), app);
+    app->btn_pause = make_button("Pause", G_CALLBACK(on_pause_clicked), app);
+    app->btn_slower = make_button("Slower", G_CALLBACK(on_slower_clicked), app);
+    app->btn_faster = make_button("Faster", G_CALLBACK(on_faster_clicked), app);
+    app->toggle_pan = make_toggle("Pan", G_CALLBACK(on_pan_toggled), app);
+    app->toggle_zoom = make_toggle("Zoom", G_CALLBACK(on_zoom_toggled), app);
+    app->toggle_pen = make_toggle("Pen", G_CALLBACK(on_pen_toggled), app);
+    app->btn_reset = make_button("Reset", G_CALLBACK(on_reset_clicked), app);
+    app->toggle_stretch = make_toggle("Stretch", G_CALLBACK(on_stretch_toggled), app);
+
+    gtk_box_append(GTK_BOX(bar), app->btn_prev);
+    gtk_box_append(GTK_BOX(bar), app->btn_next);
+    append_sep(bar);
+    gtk_box_append(GTK_BOX(bar), app->btn_run);
+    gtk_box_append(GTK_BOX(bar), app->btn_pause);
+    gtk_box_append(GTK_BOX(bar), app->btn_slower);
+    gtk_box_append(GTK_BOX(bar), app->btn_faster);
+    append_sep(bar);
+    gtk_box_append(GTK_BOX(bar), app->toggle_pan);
+    gtk_box_append(GTK_BOX(bar), app->toggle_zoom);
+    gtk_box_append(GTK_BOX(bar), app->toggle_pen);
+    append_sep(bar);
+    gtk_box_append(GTK_BOX(bar), app->btn_reset);
+    gtk_box_append(GTK_BOX(bar), app->toggle_stretch);
+
+    return bar;
+}
+
+static GtkWidget *create_pen_toolbar(App *app)
+{
+    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_bottom(bar, 4);
+    gtk_widget_set_margin_start(bar, 6);
+    gtk_widget_set_margin_end(bar, 6);
+
+    GtkWidget *title = gtk_label_new("Pen:");
+    gtk_widget_add_css_class(title, "dim-label");
+    gtk_box_append(GTK_BOX(bar), title);
+
+    GtkWidget *tool_label = gtk_label_new("Tool");
+    gtk_box_append(GTK_BOX(bar), tool_label);
+
+    static const char * const tool_names[] = {
+        "Brush",
+        "Brush-dash",
+        "Rectangle",
+        "Rectangle-dash",
+        "Arrow",
+        "Eraser-partial",
+        "Eraser-full",
+        NULL
+    };
+    app->pen_tool_dropdown = gtk_drop_down_new_from_strings(tool_names);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(app->pen_tool_dropdown), app->pen_tool);
+    gtk_widget_set_tooltip_text(app->pen_tool_dropdown, "Select annotation tool");
+    g_signal_connect(app->pen_tool_dropdown, "notify::selected", G_CALLBACK(on_pen_tool_selected), app);
+    gtk_box_append(GTK_BOX(bar), app->pen_tool_dropdown);
+
+    GtkWidget *width_label = gtk_label_new("Width");
+    gtk_widget_set_margin_start(width_label, 6);
+    gtk_box_append(GTK_BOX(bar), width_label);
+
+    static const char * const width_names[] = {
+        "0.1", "0.25", "0.5", "1.0", "1.5", "2.0", "2.5",
+        "3.0", "3.5", "4.0", "4.5", "5.0", NULL
+    };
+    app->pen_width_dropdown = gtk_drop_down_new_from_strings(width_names);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(app->pen_width_dropdown), width_index_from_value(app->pen_width));
+    gtk_widget_set_tooltip_text(app->pen_width_dropdown, "Select annotation stroke width");
+    g_signal_connect(app->pen_width_dropdown, "notify::selected", G_CALLBACK(on_pen_width_selected), app);
+    gtk_box_append(GTK_BOX(bar), app->pen_width_dropdown);
+
+    GtkWidget *color_label = gtk_label_new("Color");
+    gtk_widget_set_margin_start(color_label, 6);
+    gtk_box_append(GTK_BOX(bar), color_label);
+
+    GtkWidget *red = make_color_button(app, COLOR_SLOT_RECENT0, "Current color / most recent color");
+    GtkWidget *green = make_color_button(app, COLOR_SLOT_RECENT1, "Recent color 2; click to promote to current");
+    GtkWidget *blue = make_color_button(app, COLOR_SLOT_RECENT2, "Recent color 3; click to promote to current");
+    GtkWidget *custom = make_color_button(app, COLOR_SLOT_CUSTOM, "Choose custom RGBA color and push it to the front");
+
+    g_signal_connect(red, "clicked", G_CALLBACK(on_color_button_clicked), app);
+    g_signal_connect(green, "clicked", G_CALLBACK(on_color_button_clicked), app);
+    g_signal_connect(blue, "clicked", G_CALLBACK(on_color_button_clicked), app);
+    g_signal_connect(custom, "clicked", G_CALLBACK(on_color_button_clicked), app);
+
+    gtk_box_append(GTK_BOX(bar), red);
+    gtk_box_append(GTK_BOX(bar), green);
+    gtk_box_append(GTK_BOX(bar), blue);
+    gtk_box_append(GTK_BOX(bar), custom);
+
+    app->pen_clear_button = gtk_button_new_with_label("Clear");
+    gtk_widget_set_focus_on_click(app->pen_clear_button, FALSE);
+    gtk_widget_set_margin_start(app->pen_clear_button, 6);
+    gtk_widget_set_tooltip_text(app->pen_clear_button, "Clear all annotations");
+    g_signal_connect(app->pen_clear_button, "clicked", G_CALLBACK(on_pen_clear_clicked), app);
+    gtk_box_append(GTK_BOX(bar), app->pen_clear_button);
+
+    append_sep(bar);
+    app->btn_undo = make_button("Undo", G_CALLBACK(on_undo_clicked), app);
+    app->btn_redo = make_button("Redo", G_CALLBACK(on_redo_clicked), app);
+    gtk_widget_set_tooltip_text(app->btn_undo, "Undo annotation edit (Ctrl+Z)");
+    gtk_widget_set_tooltip_text(app->btn_redo, "Redo annotation edit (Ctrl+Y / Ctrl+Shift+Z)");
+    gtk_box_append(GTK_BOX(bar), app->btn_undo);
+    gtk_box_append(GTK_BOX(bar), app->btn_redo);
+
+    GtkWidget *hint = gtk_label_new("Annotations are stored in SVG document coordinates");
+    gtk_widget_set_hexpand(hint, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(hint), 0.0);
+    gtk_widget_add_css_class(hint, "dim-label");
+    gtk_box_append(GTK_BOX(bar), hint);
+
+    return bar;
 }
 
 
+static void set_annotation_dash(cairo_t *cr, const Annotation *a)
+{
+    if (!a || !a->style.dashed) {
+        cairo_set_dash(cr, NULL, 0, 0.0);
+        return;
+    }
 
-static void fatal(const char *msg) {
-    fprintf(stderr, "Error: %s\n", msg);
-    exit(1);
+    double w = a->style.width_doc;
+    if (w <= 0.0) w = 1.0;
+    double dashes[] = {6.0 * w, 4.0 * w};
+    cairo_set_dash(cr, dashes, 2, 0.0);
 }
 
+static void draw_arrow_head(cairo_t *cr, const Annotation *a)
+{
+    double dx = a->x1 - a->x0;
+    double dy = a->y1 - a->y0;
+    double len = local_sqrt(dx * dx + dy * dy);
+    if (len <= 1e-12) return;
 
-// static gboolean slurp_stdin(GBytes **out_bytes) {
-//     GByteArray *buf = g_byte_array_new();
-//     const size_t CHUNK = 64 * 1024;
-//     guint8 *tmp = g_malloc(CHUNK);
-//     size_t n;
-//     while ((n = fread(tmp, 1, CHUNK, stdin)) > 0) {
-//         g_byte_array_append(buf, tmp, (guint)n);
-//     }
-//     g_free(tmp);
-//     if (ferror(stdin)) {
-//         g_byte_array_free(buf, TRUE);
-//         return FALSE;
-//     }
-//     GBytes *bytes = g_bytes_new_take(buf->data, buf->len);
-//     // buf container freed but data owned by GBytes now
-//     g_free(buf); // only frees struct; safe because we used new_take
-//     *out_bytes = bytes;
-//     return TRUE;
-// }
+    double ux = dx / len;
+    double uy = dy / len;
+    double px = -uy;
+    double py = ux;
+    double size = a->style.width_doc * 5.0;
+    if (size < 6.0 * a->style.width_doc) size = 6.0 * a->style.width_doc;
 
+    double bx = a->x1 - ux * size;
+    double by = a->y1 - uy * size;
+    double lx = bx + px * size * 0.45;
+    double ly = by + py * size * 0.45;
+    double rx = bx - px * size * 0.45;
+    double ry = by - py * size * 0.45;
 
-static void create_cairo(App *app) {
-    if (app->cr) { cairo_destroy(app->cr); app->cr = NULL; }
-    if (app->surface) { cairo_surface_destroy(app->surface); app->surface = NULL; }
-    app->surface = cairo_xlib_surface_create(
-        app->dpy, app->win, DefaultVisual(app->dpy, app->screen), app->win_w, app->win_h);
-    app->cr = cairo_create(app->surface);
+    cairo_move_to(cr, a->x1, a->y1);
+    cairo_line_to(cr, lx, ly);
+    cairo_move_to(cr, a->x1, a->y1);
+    cairo_line_to(cr, rx, ry);
+    cairo_stroke(cr);
 }
 
-static void adjust_bar(App *app){
-    app->toolbar_h = (int)(BAR_HEIGHT_RATIO * app->win_h);
-    app->hintbar_h = (int)(BAR_HEIGHT_RATIO * app->win_h);
+static void draw_one_annotation(cairo_t *cr, const Annotation *a)
+{
+    if (!a || !annotation_is_valid(a)) return;
 
-    if (app->toolbar_h < MIN_BAR_HEIGHT) app->toolbar_h = MIN_BAR_HEIGHT;
-    if (app->hintbar_h < MIN_BAR_HEIGHT) app->hintbar_h = MIN_BAR_HEIGHT;
-}
+    cairo_save(cr);
+    cairo_set_source_rgba(cr,
+                          a->style.color.red,
+                          a->style.color.green,
+                          a->style.color.blue,
+                          a->style.color.alpha);
+    cairo_set_line_width(cr, a->style.width_doc > 0.0 ? a->style.width_doc : 1.0);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    set_annotation_dash(cr, a);
 
-void draw_hintbar(App *app, int hintbar_h) {
-    cairo_save(app->cr);
-
-    cairo_set_source_rgba_string(app->cr, BAR_COLOR);
-    cairo_rectangle(app->cr, 0, app->win_h - hintbar_h, app->win_w, hintbar_h);
-    cairo_fill(app->cr);
-
-    char hint[128];
-    if (app->sequence.count <= 1) {
-        snprintf(hint, sizeof(hint),
-                 "File: %s. Single-file mode. Press q or Esc to quit.",
-                    app->sequence.count == 1 ? app->sequence.frames[0].path : "N/A");
-    } else {
-        snprintf(hint, sizeof(hint),
-                 "%s. File: %s. Press q or Esc to quit.",
-                 app->sequence.frames[app->sequence.current_index].framelabel,
-                 app->sequence.frames[app->sequence.current_index].path);
-    }
-
-    int padding = DEFAULT_FONT_HEIGHT;
-    cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
-    cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT * app->hintbar_h / MIN_BAR_HEIGHT);
-
-    cairo_text_extents_t ext;
-    cairo_text_extents(app->cr, hint, &ext);
-    double text_x = padding;
-    double text_y = app->win_h - hintbar_h + (hintbar_h - ext.height) / 2 - ext.y_bearing;
-
-    cairo_move_to(app->cr, text_x, text_y);
-    cairo_show_text(app->cr, hint);
-
-    cairo_restore(app->cr);
-}
-
-
-
-void draw_toolbar(App *app) {
-    cairo_save(app->cr);
-    // toolbar background
-    cairo_set_source_rgba_string(app->cr, BAR_COLOR);
-    cairo_rectangle(app->cr, 0, 0, app->win_w, app->toolbar_h);
-    cairo_fill(app->cr);
-
-    // placeholder button labels (disabled look)
-    int padding = 10;
-    int x = padding, y = 0;
-    double button_height = 0.9 * app->toolbar_h;
-    long last_press_interval_ms = 0;
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-
-
-    app->num_buttons = 0;
-    for (int i = 0; i < MAX_BUTTONS; i++) {
-        gboolean enabled = TRUE;
-        gboolean pressed = (i == MOVE_BUTTON);
-
-        last_press_interval_ms = (now.tv_sec - app->last_press_time[i].tv_sec) * 1000 +
-                                 (now.tv_nsec - app->last_press_time[i].tv_nsec) / 1000000;
-        switch(i) {
-            case RUN_BUTTON:
-                enabled = !app->sequence.playing;
-                if (app->sequence.count <= 1 ) enabled = FALSE;
-                break;
-            case NEXT_BUTTON:
-            case PREV_BUTTON:
-                enabled = TRUE;
-                if (app->sequence.count <= 1 ) enabled = FALSE;
-                break;
-            case PAUSE_BUTTON:
-                enabled = app->sequence.playing;
-                if (app->sequence.count <= 1 ) enabled = FALSE;
-                break;
-            case FASTER_BUTTON:
-                if (app->sequence.fps >= MAX_FPS) {
-                    enabled = FALSE;
-                }else{
-                    enabled = app->sequence.playing;
-                }
-                if (app->sequence.count <= 1 ) enabled = FALSE;
-                break;
-            case SLOWER_BUTTON:
-                if (app->sequence.fps <= MIN_FPS) {
-                    enabled = FALSE;
-                }else{
-                    enabled = app->sequence.playing;
-                }
-                if (app->sequence.count <= 1 ) enabled = FALSE;
-                break;
-            case HOME_BUTTON:
-                if (app->zoom_scale != 1.0 || app->pan_x !=0 || app->pan_y !=0) {
-                    enabled = TRUE;
-                }else{
-                    enabled = FALSE;
-                }
-                break;
-            case MOVE_BUTTON:
-                enabled = TRUE;
-                pressed = app->drag_mode;
-                break;
-            case ZOOM_BUTTON:
-                enabled = TRUE;
-                pressed = app->zoom_mode;
-                break;
-            case STRETCH_BUTTON:
-                enabled = TRUE;
-                pressed = app->stretch_mode;
-                break;
-            default:
-                break;
-        }
-
-        Button b = draw_button(app->cr, x, y, but_labels[i], button_height, enabled, pressed, last_press_interval_ms);
-        b.index = i;
-        app->buttons[app->num_buttons++] = b;
-        x += b.width + padding;
-    }
-    char fps_text[64];
-    if (app->sequence.count <= 1)
-    snprintf(fps_text, sizeof(fps_text), "%s%2.0f%%.",
-                                        app->zooming? "Zooming... " : "",
-                                        app->zoom_scale*100.);
-    else
-    snprintf(fps_text, sizeof(fps_text), "%d frame(s)/sec. %s%2.0f%%. %s.", app->sequence.fps,
-                                        app->zooming? "Zooming... " : "",
-                                        app->zoom_scale * 100.,
-                                        app->sequence.playing ? RUNMSG : PAUSEMSG);
-
-    cairo_set_source_rgba_string(app->cr, ENABLED_COLOR);
-    cairo_select_font_face(app->cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(app->cr, DEFAULT_FONT_HEIGHT * app->toolbar_h / MIN_BAR_HEIGHT);
-
-    cairo_text_extents_t ext;
-    char test_text[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    cairo_text_extents(app->cr, test_text, &ext);
-    double text_y = app->toolbar_h * 0.75 ;
-    cairo_text_extents(app->cr, fps_text, &ext);
-
-    double text_x = app->win_w - ext.width - padding;
-
-    if (text_x < x + padding) {
-        text_x = x + padding;
-    }
-
-    cairo_move_to(app->cr, text_x, text_y);
-    cairo_show_text(app->cr, fps_text);
-
-    cairo_restore(app->cr);
-    cairo_surface_flush(cairo_get_target(app->cr));
-    XFlush(app->dpy);
-}
-
-
-static void draw_all(App *app) {
-    if (!app->cr) return;
-    svg_sequence_render_frame(&app->sequence, app->cr,
-                              app->win_w >= MIN_WIDTH ? app->win_w : MIN_WIDTH,
-                              app->win_h >= MIN_HEIGHT ? app->win_h: MIN_HEIGHT,
-                              app->pan_x, app->pan_y,
-                              app->zoom_scale,
-                              app->stretch_mode,
-                              app->toolbar_h, app->hintbar_h);
-    draw_toolbar(app);
-    draw_hintbar(app, app->hintbar_h);
-
-}
-
-static void run_loop(App *app) {
-    struct timespec now;
-    long elapsed_ms = 0, press_interval_ms = 0;
-    XSelectInput(app->dpy, app->win,
-             ExposureMask | StructureNotifyMask | KeyPressMask |
-             ButtonPressMask | ButtonReleaseMask | PointerMotionMask
-    );
-
-    XMapWindow(app->dpy, app->win);
-    XEvent ev;
-    XFlush(app->dpy);
-    while (1) {
-        XNextEvent(app->dpy, &ev);
-        if (ev.type == Expose) break;
-    }
-    draw_all(app);
-
-    struct timespec last_frame_time = {0};
-    clock_gettime(CLOCK_MONOTONIC, &last_frame_time);
-
-    while (1) {
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    elapsed_ms = (now.tv_sec - last_frame_time.tv_sec) * 1000 +
-                 (now.tv_nsec - last_frame_time.tv_nsec) / 1000000;
-
-    /* Time to finish zooming */
-    if (app->zooming){
-        if (elapsed_ms < (3 * WAIT_TIME_MS)) {
-        }else{
-            app->last_zoom_time = now;
-            app->zooming = FALSE;
-            draw_all(app);
-        }
-    }
-
-    while (XPending(app->dpy)) {
-        // XPeekEvent(app->dpy, &ev);
-        // if (ev.type == Expose) {
-        //     XNextEvent(app->dpy, &ev);
-        //     continue;
-        // }
-
-        XNextEvent(app->dpy, &ev);
-        switch (ev.type) {
-            case Expose: {
-                draw_all(app);
-            } break;
-/*             case SelectionRequest:
-                {
-                    handle_selection_request(app->dpy, &ev);
-                    fprintf(stderr, "handled!");
-                    break;
-                } */
-            case ConfigureNotify: {
-                app->resize_pending = TRUE;
-                app->resize_w = ev.xconfigure.width;
-                app->resize_h = ev.xconfigure.height;
-                clock_gettime(CLOCK_MONOTONIC, &app->last_resize_time);
-            } break;
-            case ButtonRelease: {
-                if (app->drag_mode && ev.xbutton.button == Button1) {
-                    app->dragging = FALSE;
-                    draw_all(app);
-                    app->last_drag_time = now;
-                }
-            } break;
-
-            case MotionNotify: {
-                if (app->drag_mode && app->dragging) {
-                    int dx = ev.xmotion.x - app->drag_start_x;
-                    int dy = ev.xmotion.y - app->drag_start_y;
-                    if (elapsed_ms >= 10 * WAIT_TIME_MS && (abs(dx) > 5 || abs(dy) > 5)) {
-                        app->pan_x += dx;
-                        app->pan_y += dy;
-                        app->drag_start_x = ev.xmotion.x;
-                        app->drag_start_y = ev.xmotion.y;
-                        draw_all(app);
-                        app->last_drag_time = now;
-                    }else if (!(abs(dx) > 5 || abs(dy) > 5)){
-                        // Reset timer
-                        app->last_drag_time = now;
-                    }
-                }
-            } break;
-
-            case ButtonPress: {
-                int x = ev.xbutton.x;
-                int y = ev.xbutton.y;
-                if (app->drag_mode && ev.xbutton.button == Button1) {
-                    app->dragging = TRUE;
-                    app->drag_start_x = ev.xbutton.x;
-                    app->drag_start_y = ev.xbutton.y;
-//                    clock_gettime(CLOCK_MONOTONIC, &app->last_drag_time);
-                }
-
-                if (app->zoom_mode && ev.xbutton.button == Button4) {
-                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
-                        app->zoom_scale += 0.05;
-                        if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
-                        app->zooming = TRUE;
-                        app->last_zoom_time = now;
-                        draw_toolbar(app);
-                        break;
-                    }
-                    app->zoom_scale += 0.05;
-                    if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
-                    app->last_zoom_time = now;
-                    app->zooming = FALSE;
-                    draw_all(app);
-                }
-                else if (app->zoom_mode && ev.xbutton.button == Button5) {
-                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
-                        app->zoom_scale -= 0.05;
-                        if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
-                        app->zooming = TRUE;
-                        app->last_zoom_time = now;
-                        draw_toolbar(app);
-                        break;
-                    }
-                    app->zoom_scale -= 0.05;
-                    if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
-                    app->last_zoom_time = now;
-                    app->zooming = FALSE;
-                    draw_all(app);
-                }
-
-                for (int i = 0; i < app->num_buttons; i++) {
-
-                    Button *btn = &app->buttons[i];
-                    if (!btn->enabled) continue;
-                    if (x >= btn->x && x <= btn->x + btn->width &&
-                        y >= btn->y && y <= btn->y + btn->height) {
-                        app->last_press_time[btn->index] = now;
-                        app->active_button = btn->index;
-                        app->pressing = TRUE;
-                        if (btn->index == PAUSE_BUTTON) {
-                            app->sequence.playing = FALSE;
-                            draw_all(app);
-                        }
-                        else if (btn->index == RUN_BUTTON) {
-                            app->sequence.playing = TRUE;
-                            draw_all(app);
-                        }
-                        else if (btn->index == NEXT_BUTTON) {
-                            app->sequence.playing = FALSE;
-                            app->sequence.current_index =
-                                (app->sequence.current_index + 1) % app->sequence.count;
-                            draw_all(app);
-                        }
-                        else if (btn->index == PREV_BUTTON) {
-                            app->sequence.playing = FALSE;
-                            app->sequence.current_index =
-                                (app->sequence.current_index - 1 + app->sequence.count) % app->sequence.count;
-                            draw_all(app);
-                        }
-                        else if (btn->index == FASTER_BUTTON) {
-                            if (app->sequence.fps < MAX_FPS)
-                            {
-                                app->sequence.fps++;
-                            }
-                            draw_toolbar(app);
-                        }
-                        else if (btn->index == SLOWER_BUTTON) {
-                            if (app->sequence.fps > MIN_FPS)
-                            {
-                                app->sequence.fps--;
-                            }
-                            draw_toolbar(app);
-                        }
-                        else if (btn->index == HOME_BUTTON) {
-                            app->zoom_scale = 1.0;
-                            app->pan_x = 0;
-                            app->pan_y = 0;
-                            draw_all(app);
-                        }
-                        else if (btn->index == MOVE_BUTTON) {
-                            app->drag_mode = !app->drag_mode;
-                            draw_all(app);
-                        }
-                        else if (btn->index == ZOOM_BUTTON) {
-                            app->zoom_mode = !app->zoom_mode;
-                            draw_all(app);
-                        }
-                        else if (btn->index == STRETCH_BUTTON) {
-                            app->stretch_mode = !app->stretch_mode;
-                            draw_all(app);
-                        }
-                    }
-                }
-            } break;
-
-            case KeyPress: {
-                KeySym ks = XLookupKeysym(&ev.xkey, 0);
-                if (ks == XK_q || ks == XK_Escape) return;
-                if (ks == XK_Left || ks == XK_m) {
-                    app->sequence.playing = FALSE;
-                    app->sequence.current_index =
-                        (app->sequence.current_index - 1 + app->sequence.count) % app->sequence.count;
-                    draw_all(app);
-                }
-                if (ks == XK_Right || ks == XK_n) {
-                    app->sequence.playing = FALSE;
-                    app->sequence.current_index =
-                        (app->sequence.current_index + 1) % app->sequence.count;
-                    draw_all(app);
-                }
-                if (ks == XK_space) {
-                    app->sequence.playing = !app->sequence.playing;
-                    draw_toolbar(app);
-                }
-                if (ks == XK_p) {
-                    app->sequence.playing = FALSE;
-                    draw_toolbar(app);
-                }
-                if (ks == XK_r) {
-                    app->sequence.playing = TRUE;
-                    draw_toolbar(app);
-                }
-
-                if (ks == XK_plus || ks == XK_equal) {
-                    if (app->sequence.fps < MAX_FPS)
-                        {
-                            app->sequence.fps++;
-                            draw_toolbar(app);
-                        }
-                }
-                if (ks == XK_minus || ks == XK_underscore) {
-                    if (app->sequence.fps > MIN_FPS)
-                        {
-                            app->sequence.fps--;
-                            draw_toolbar(app);
-                        }
-                }
-                if (app->zoom_mode && ks == XK_Up) {
-                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
-                        app->zoom_scale += 0.05;
-                        if (app->zoom_scale > MAX_ZOOM_SCALE) app->zoom_scale = MAX_ZOOM_SCALE;
-                        app->zooming = TRUE;
-                        app->last_zoom_time = now;
-                        draw_toolbar(app);
-                        break;
-                    }
-                    app->zoom_scale += 0.05;
-                    if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
-                    app->last_zoom_time = now;
-                    app->zooming = FALSE;
-                    draw_all(app);
-                }
-                if (app->zoom_mode && ks == XK_Down) {
-                    if (elapsed_ms < (3 * WAIT_TIME_MS)) {
-                        app->zoom_scale -= 0.05;
-                        if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
-                        app->zooming = TRUE;
-                        app->last_zoom_time = now;
-                        draw_toolbar(app);
-                        break;
-                    }
-                    app->zoom_scale -= 0.05;
-                    if (app->zoom_scale < MIN_ZOOM_SCALE) app->zoom_scale = MIN_ZOOM_SCALE;
-                    app->last_zoom_time = now;
-                    app->zooming = FALSE;
-                    draw_all(app);
-                }
-                if (ks == XK_h || ks == XK_Home) {
-                    app->zoom_scale = 1.0;
-                    app->pan_x = 0;
-                    app->pan_y = 0;
-                    draw_all(app);
-                }
-            } break;
-            default: break;
-        }
-    }
-
-    if (app->sequence.playing && app->sequence.fps > 0) {
-        int interval_ms = 1000 / app->sequence.fps;
-        if (elapsed_ms >= interval_ms) {
-            svg_sequence_advance(&app->sequence);
-            // draw_all(app);
-            svg_sequence_render_frame(&app->sequence, app->cr,
-                              app->win_w >= MIN_WIDTH ? app->win_w : MIN_WIDTH,
-                              app->win_h >= MIN_HEIGHT ? app->win_h: MIN_HEIGHT,
-                              app->pan_x, app->pan_y,
-                              app->zoom_scale,
-                              app->stretch_mode,
-                              app->toolbar_h, app->hintbar_h);
-            last_frame_time = now;
-            draw_hintbar(app, app->hintbar_h);
-            draw_toolbar(app);
-            draw_hintbar(app, app->hintbar_h);
-
-            cairo_surface_flush(cairo_get_target(app->cr));
-            XFlush(app->dpy);
-        }
-    }
-
-    if (app->resize_pending) {
-        long elapsed_ms = (now.tv_sec - app->last_resize_time.tv_sec) * 1000 +
-                        (now.tv_nsec - app->last_resize_time.tv_nsec) / 1000000;
-        if (elapsed_ms >= 5 * WAIT_TIME_MS) {
-
-            if (app->win_w != app->resize_w || app->win_h != app->resize_h) {
-                XResizeWindow(app->dpy, app->win, app->resize_w, app->resize_h);
-                app->win_w = app->resize_w;
-                app->win_h = app->resize_h;
-                create_cairo(app);
-                adjust_bar(app);
-                // app->hintbar_h = MIN_BAR_HEIGHT * app->win_h / DEFAULT_HEIGHT;
-                draw_all(app);
-                // copy_cairo_region_to_clipboard(app, app->dpy, app->win, app->sequence.frames[app->sequence.current_index].surface);
-                /* Copy test */
-            }else if (app->win_w < MIN_WIDTH || app->win_h < MIN_HEIGHT) {
-                int new_w = app->win_w < MIN_WIDTH ? MIN_WIDTH : app->win_w;
-                int new_h = app->win_h < MIN_HEIGHT ? MIN_HEIGHT : app->win_h;
-                XResizeWindow(app->dpy, app->win, new_w, new_h);
-                app->win_w = new_w;
-                app->win_h = new_h;
-                create_cairo(app);
-                adjust_bar(app);
-                // app->hintbar_h = MIN_BAR_HEIGHT * app->win_h / DEFAULT_HEIGHT;
-                draw_all(app);
+    if (a->type == ANNO_BRUSH || a->type == ANNO_BRUSH_DASH) {
+        if (a->points && a->points->len >= 2) {
+            DocPoint *pts = (DocPoint *)a->points->data;
+            cairo_move_to(cr, pts[0].x, pts[0].y);
+            for (guint i = 1; i < a->points->len; i++) {
+                cairo_line_to(cr, pts[i].x, pts[i].y);
             }
-            app->resize_pending = FALSE;
+            cairo_stroke(cr);
+        }
+    } else if (a->type == ANNO_RECT || a->type == ANNO_RECT_DASH) {
+        double x = a->x0 < a->x1 ? a->x0 : a->x1;
+        double y = a->y0 < a->y1 ? a->y0 : a->y1;
+        double w = fabs(a->x1 - a->x0);
+        double h = fabs(a->y1 - a->y0);
+        cairo_rectangle(cr, x, y, w, h);
+        cairo_stroke(cr);
+    } else if (a->type == ANNO_ARROW) {
+        cairo_move_to(cr, a->x0, a->y0);
+        cairo_line_to(cr, a->x1, a->y1);
+        cairo_stroke(cr);
+        set_annotation_dash(cr, NULL);
+        draw_arrow_head(cr, a);
+    }
+
+    cairo_restore(cr);
+}
+
+static void draw_annotations(App *app, cairo_t *cr)
+{
+    if (!app || !app->annotations || app->annotations->len == 0) return;
+
+    cairo_save(cr);
+    cairo_rectangle(cr, 0, 0, app->canvas_w, app->canvas_h);
+    cairo_clip(cr);
+    apply_view_transform(app, cr);
+
+    for (guint i = 0; i < app->annotations->len; i++) {
+        Annotation *a = g_ptr_array_index(app->annotations, i);
+        draw_one_annotation(cr, a);
+    }
+
+    cairo_restore(cr);
+}
+
+static double annotation_hit_distance(const Annotation *a, double x, double y)
+{
+    if (!a || !annotation_is_valid(a)) return G_MAXDOUBLE;
+
+    if (a->type == ANNO_BRUSH || a->type == ANNO_BRUSH_DASH) {
+        double best = G_MAXDOUBLE;
+        DocPoint *pts = (DocPoint *)a->points->data;
+        for (guint i = 1; i < a->points->len; i++) {
+            double d = point_segment_distance(x, y, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    if (a->type == ANNO_ARROW) {
+        return point_segment_distance(x, y, a->x0, a->y0, a->x1, a->y1);
+    }
+
+    if (a->type == ANNO_RECT || a->type == ANNO_RECT_DASH) {
+        double x0 = a->x0 < a->x1 ? a->x0 : a->x1;
+        double x1 = a->x0 < a->x1 ? a->x1 : a->x0;
+        double y0 = a->y0 < a->y1 ? a->y0 : a->y1;
+        double y1 = a->y0 < a->y1 ? a->y1 : a->y0;
+        double d1 = point_segment_distance(x, y, x0, y0, x1, y0);
+        double d2 = point_segment_distance(x, y, x1, y0, x1, y1);
+        double d3 = point_segment_distance(x, y, x1, y1, x0, y1);
+        double d4 = point_segment_distance(x, y, x0, y1, x0, y0);
+        return min4(d1, d2, d3, d4);
+    }
+
+    return G_MAXDOUBLE;
+}
+
+static gboolean erase_full_at_doc(App *app, double x, double y)
+{
+    if (!app || !app->annotations) return FALSE;
+    double radius = current_doc_eraser_radius(app);
+
+    for (gint i = (gint)app->annotations->len - 1; i >= 0; i--) {
+        Annotation *a = g_ptr_array_index(app->annotations, (guint)i);
+        double hit = annotation_hit_distance(a, x, y);
+        double threshold = radius + a->style.width_doc * 0.5;
+        if (hit <= threshold) {
+            g_ptr_array_remove_index(app->annotations, (guint)i);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void append_freehand_run(App *app, const Annotation *src, DocPoint *pts, guint start, guint end)
+{
+    if (!app || !src || !pts || end <= start || end - start < 2) return;
+    Annotation *na = annotation_new(src->type, &src->style);
+    for (guint i = start; i < end; i++) annotation_add_point(na, pts[i].x, pts[i].y);
+    g_ptr_array_add(app->annotations, na);
+}
+
+static gboolean erase_partial_at_doc(App *app, double x, double y)
+{
+    if (!app || !app->annotations) return FALSE;
+    double radius = current_doc_eraser_radius(app);
+
+    for (gint i = (gint)app->annotations->len - 1; i >= 0; i--) {
+        Annotation *a = g_ptr_array_index(app->annotations, (guint)i);
+        double threshold = radius + a->style.width_doc * 0.5;
+        if (annotation_hit_distance(a, x, y) > threshold) continue;
+
+        if (!annotation_is_freehand(a)) {
+            g_ptr_array_remove_index(app->annotations, (guint)i);
+            return TRUE;
+        }
+
+        DocPoint *pts = (DocPoint *)a->points->data;
+        guint n = a->points->len;
+        guint run_start = 0;
+        gboolean in_run = FALSE;
+        gboolean changed = FALSE;
+
+        /* Remove the original first; new surviving freehand segments are appended. */
+        Annotation *old = g_ptr_array_steal_index(app->annotations, (guint)i);
+
+        for (guint j = 0; j < n; j++) {
+            gboolean keep = local_sqrt(dist2(pts[j].x, pts[j].y, x, y)) > threshold;
+            if (keep && !in_run) {
+                in_run = TRUE;
+                run_start = j;
+            } else if (!keep && in_run) {
+                append_freehand_run(app, old, pts, run_start, j);
+                in_run = FALSE;
+                changed = TRUE;
+            } else if (!keep) {
+                changed = TRUE;
+            }
+        }
+        if (in_run) append_freehand_run(app, old, pts, run_start, n);
+
+        annotation_free(old);
+        return changed;
+    }
+    return FALSE;
+}
+
+static AnnotationStyle current_annotation_style(App *app)
+{
+    AnnotationStyle st;
+    memset(&st, 0, sizeof(st));
+    st.color = app->pen_color;
+    st.width_doc = current_doc_width_for_screen_width(app, app->pen_width);
+    if (st.width_doc <= 0.0) st.width_doc = app->pen_width;
+    st.dashed = (app->pen_tool == PEN_TOOL_BRUSH_DASH ||
+                 app->pen_tool == PEN_TOOL_RECT_DASH);
+    return st;
+}
+
+static void start_annotation_at_doc(App *app, double x, double y)
+{
+    if (!app || !app->annotations) return;
+
+    AnnotationStyle st = current_annotation_style(app);
+    Annotation *a = NULL;
+
+    switch (app->pen_tool) {
+        case PEN_TOOL_BRUSH:
+            a = annotation_new(ANNO_BRUSH, &st);
+            annotation_add_point(a, x, y);
+            annotation_add_point(a, x, y);
+            break;
+        case PEN_TOOL_BRUSH_DASH:
+            a = annotation_new(ANNO_BRUSH_DASH, &st);
+            annotation_add_point(a, x, y);
+            annotation_add_point(a, x, y);
+            break;
+        case PEN_TOOL_RECT:
+            a = annotation_new(ANNO_RECT, &st);
+            a->x0 = a->x1 = x;
+            a->y0 = a->y1 = y;
+            break;
+        case PEN_TOOL_RECT_DASH:
+            a = annotation_new(ANNO_RECT_DASH, &st);
+            a->x0 = a->x1 = x;
+            a->y0 = a->y1 = y;
+            break;
+        case PEN_TOOL_ARROW:
+            a = annotation_new(ANNO_ARROW, &st);
+            a->x0 = a->x1 = x;
+            a->y0 = a->y1 = y;
+            break;
+        case PEN_TOOL_ERASER_PARTIAL:
+            erase_partial_at_doc(app, x, y);
+            return;
+        case PEN_TOOL_ERASER_FULL:
+            erase_full_at_doc(app, x, y);
+            return;
+    }
+
+    if (a) {
+        app->active_annotation = a;
+        g_ptr_array_add(app->annotations, a);
+    }
+}
+
+static void update_active_annotation_at_doc(App *app, double x, double y)
+{
+    if (!app) return;
+
+    if (app->pen_tool == PEN_TOOL_ERASER_PARTIAL) {
+        erase_partial_at_doc(app, x, y);
+        return;
+    }
+    if (app->pen_tool == PEN_TOOL_ERASER_FULL) {
+        erase_full_at_doc(app, x, y);
+        return;
+    }
+
+    Annotation *a = app->active_annotation;
+    if (!a) return;
+
+    if (a->type == ANNO_BRUSH || a->type == ANNO_BRUSH_DASH) {
+        DocPoint *pts = (DocPoint *)a->points->data;
+        DocPoint *last = &pts[a->points->len - 1];
+        double min_step = current_doc_width_for_screen_width(app, 1.0);
+        if (min_step <= 0.0) min_step = 0.0;
+        if (local_sqrt(dist2(last->x, last->y, x, y)) >= min_step) {
+            annotation_add_point(a, x, y);
+        } else {
+            last->x = x;
+            last->y = y;
+        }
+    } else {
+        a->x1 = x;
+        a->y1 = y;
+    }
+}
+
+static void finish_active_annotation(App *app)
+{
+    if (!app || !app->active_annotation) return;
+
+    Annotation *a = app->active_annotation;
+    app->active_annotation = NULL;
+
+    if (!annotation_is_valid(a)) {
+        g_ptr_array_remove(app->annotations, a);
+    }
+}
+
+static void draw_zoom_box_overlay(App *app, cairo_t *cr)
+{
+    if (!app || !app->zoom_box_active) return;
+
+    double x0 = app->zoom_box_x0;
+    double y0 = app->zoom_box_y0;
+    double x1 = app->zoom_box_x1;
+    double y1 = app->zoom_box_y1;
+    double x = x0 < x1 ? x0 : x1;
+    double y = y0 < y1 ? y0 : y1;
+    double w = fabs(x1 - x0);
+    double h = fabs(y1 - y0);
+    if (w < 1.0 || h < 1.0) return;
+
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_set_source_rgba(cr, 0.1, 0.35, 1.0, 0.16);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.1, 0.35, 1.0, 0.90);
+    cairo_set_line_width(cr, 1.5);
+    double dashes[] = {6.0, 4.0};
+    cairo_set_dash(cr, dashes, 2, 0.0);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+static double current_screen_eraser_radius(App *app)
+{
+    double r = app ? app->pen_width * 2.0 : 6.0;
+    if (r < 6.0) r = 6.0;
+    return r;
+}
+
+static void draw_eraser_cursor_overlay(App *app, cairo_t *cr)
+{
+    if (!app || !cr) return;
+    if (!app->pointer_in_canvas) return;
+    if (app->tool != TOOL_PEN || !pen_tool_is_partial_eraser(app)) return;
+
+    double r = current_screen_eraser_radius(app);
+
+    cairo_save(cr);
+    cairo_arc(cr, app->pointer_x, app->pointer_y, r, 0.0, 2.0 * G_PI);
+    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.10);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.85);
+    cairo_set_line_width(cr, 1.2);
+    cairo_set_dash(cr, NULL, 0, 0.0);
+    cairo_stroke(cr);
+
+    cairo_move_to(cr, app->pointer_x - r * 0.45, app->pointer_y);
+    cairo_line_to(cr, app->pointer_x + r * 0.45, app->pointer_y);
+    cairo_move_to(cr, app->pointer_x, app->pointer_y - r * 0.45);
+    cairo_line_to(cr, app->pointer_x, app->pointer_y + r * 0.45);
+    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.55);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+static void apply_zoom_box(App *app, double sx0, double sy0, double sx1, double sy1)
+{
+    if (!app) return;
+
+    double rx0 = sx0 < sx1 ? sx0 : sx1;
+    double rx1 = sx0 < sx1 ? sx1 : sx0;
+    double ry0 = sy0 < sy1 ? sy0 : sy1;
+    double ry1 = sy0 < sy1 ? sy1 : sy0;
+    double rw = rx1 - rx0;
+    double rh = ry1 - ry0;
+
+    if (rw < 6.0 || rh < 6.0) return;
+
+    SvgFrame *f = current_frame(app);
+    if (!f || f->width <= 0.0 || f->height <= 0.0) return;
+
+    double dx0, dy0, dx1, dy1;
+    if (!screen_to_doc(app, rx0, ry0, &dx0, &dy0)) return;
+    if (!screen_to_doc(app, rx1, ry1, &dx1, &dy1)) return;
+
+    double doc_x0 = dx0 < dx1 ? dx0 : dx1;
+    double doc_x1 = dx0 < dx1 ? dx1 : dx0;
+    double doc_y0 = dy0 < dy1 ? dy0 : dy1;
+    double doc_y1 = dy0 < dy1 ? dy1 : dy0;
+    double doc_w = doc_x1 - doc_x0;
+    double doc_h = doc_y1 - doc_y0;
+    if (doc_w <= 1e-12 || doc_h <= 1e-12) return;
+
+    double doc_cx = 0.5 * (doc_x0 + doc_x1);
+    double doc_cy = 0.5 * (doc_y0 + doc_y1);
+    double new_zoom = 1.0;
+    double new_sx = 1.0;
+    double new_sy = 1.0;
+    double dst_w = 0.0;
+    double dst_h = 0.0;
+
+    if (app->stretch_mode) {
+        double zx = f->width / doc_w;
+        double zy = f->height / doc_h;
+        new_zoom = zx < zy ? zx : zy;
+        if (new_zoom < MIN_ZOOM_SCALE) new_zoom = MIN_ZOOM_SCALE;
+        if (new_zoom > MAX_ZOOM_SCALE) new_zoom = MAX_ZOOM_SCALE;
+        new_sx = ((double)app->canvas_w / f->width) * new_zoom;
+        new_sy = ((double)app->canvas_h / f->height) * new_zoom;
+        dst_w = app->canvas_w * new_zoom;
+        dst_h = app->canvas_h * new_zoom;
+    } else {
+        double base_sx = (double)app->canvas_w / f->width;
+        double base_sy = (double)app->canvas_h / f->height;
+        double base = base_sx < base_sy ? base_sx : base_sy;
+        double target_sx = (double)app->canvas_w / doc_w;
+        double target_sy = (double)app->canvas_h / doc_h;
+        double target = target_sx < target_sy ? target_sx : target_sy;
+        new_zoom = target / base;
+        if (new_zoom < MIN_ZOOM_SCALE) new_zoom = MIN_ZOOM_SCALE;
+        if (new_zoom > MAX_ZOOM_SCALE) new_zoom = MAX_ZOOM_SCALE;
+        new_sx = base * new_zoom;
+        new_sy = new_sx;
+        dst_w = f->width * new_sx;
+        dst_h = f->height * new_sy;
+    }
+
+    app->zoom_scale = new_zoom;
+    app->pan_x = app->canvas_w * 0.5 - doc_cx * new_sx - (app->canvas_w - dst_w) * 0.5;
+    app->pan_y = app->canvas_h * 0.5 - doc_cy * new_sy - (app->canvas_h - dst_h) * 0.5;
+}
+
+static void draw_canvas_background(App *app, cairo_t *cr)
+{
+    cairo_save(cr);
+    cairo_set_source_rgba_string(cr, BACKGROUND_COLOR);
+    cairo_rectangle(cr, 0, 0, app->canvas_w, app->canvas_h);
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+static void draw_canvas(App *app, cairo_t *cr)
+{
+    draw_canvas_background(app, cr);
+
+    /* Clean GTK architecture: DrawingArea owns only the canvas.  Native GTK
+     * widgets own toolbar/statusbar.  Pass zero toolbar/hintbar heights so the
+     * sequence renderer can use the full canvas. */
+    svg_sequence_render_frame(&app->sequence, cr,
+                              app->canvas_w, app->canvas_h,
+                              app->pan_x, app->pan_y,
+                              app->zoom_scale,
+                              app->stretch_mode,
+                              0, 0);
+
+    draw_annotations(app, cr);
+    draw_zoom_box_overlay(app, cr);
+    draw_eraser_cursor_overlay(app, cr);
+}
+
+static void on_draw(GtkDrawingArea *area,
+                    cairo_t *cr,
+                    int width,
+                    int height,
+                    gpointer user_data)
+{
+    (void)area;
+    App *app = user_data;
+
+    app->canvas_w = width > 1 ? width : 1;
+    app->canvas_h = height > 1 ? height : 1;
+
+    draw_canvas(app, cr);
+}
+
+static gboolean pen_tool_is_eraser(App *app)
+{
+    return app && (app->pen_tool == PEN_TOOL_ERASER_PARTIAL ||
+                   app->pen_tool == PEN_TOOL_ERASER_FULL);
+}
+
+static gboolean pen_tool_is_partial_eraser(App *app)
+{
+    return app && app->pen_tool == PEN_TOOL_ERASER_PARTIAL;
+}
+
+static void on_drag_begin(GtkGestureDrag *gesture,
+                          double start_x,
+                          double start_y,
+                          gpointer user_data)
+{
+    (void)gesture;
+    App *app = user_data;
+
+    app->dragging = TRUE;
+    app->drag_start_x = start_x;
+    app->drag_start_y = start_y;
+    app->pointer_in_canvas = TRUE;
+    app->pointer_x = start_x;
+    app->pointer_y = start_y;
+
+    if (app->tool == TOOL_PAN) {
+        app->drag_origin_pan_x = app->pan_x;
+        app->drag_origin_pan_y = app->pan_y;
+        return;
+    }
+
+    if (app->tool == TOOL_ZOOM) {
+        app->zoom_box_active = TRUE;
+        app->zoom_box_x0 = app->zoom_box_x1 = start_x;
+        app->zoom_box_y0 = app->zoom_box_y1 = start_y;
+        queue_canvas(app);
+        return;
+    }
+
+    if (app->tool == TOOL_PEN) {
+        double dx, dy;
+        if (!screen_to_doc(app, start_x, start_y, &dx, &dy)) return;
+        history_save_before_edit(app);
+        start_annotation_at_doc(app, dx, dy);
+        update_ui(app);
+        queue_canvas(app);
+    }
+}
+
+static void on_drag_update(GtkGestureDrag *gesture,
+                           double offset_x,
+                           double offset_y,
+                           gpointer user_data)
+{
+    (void)gesture;
+    App *app = user_data;
+    if (!app->dragging) return;
+
+    double x = app->drag_start_x + offset_x;
+    double y = app->drag_start_y + offset_y;
+    app->pointer_in_canvas = TRUE;
+    app->pointer_x = x;
+    app->pointer_y = y;
+
+    if (app->tool == TOOL_PAN) {
+        app->pan_x = app->drag_origin_pan_x + offset_x;
+        app->pan_y = app->drag_origin_pan_y + offset_y;
+        update_ui(app);
+        queue_canvas(app);
+        return;
+    }
+
+    if (app->tool == TOOL_ZOOM) {
+        app->zoom_box_x1 = x;
+        app->zoom_box_y1 = y;
+        queue_canvas(app);
+        return;
+    }
+
+    if (app->tool == TOOL_PEN) {
+        double dx, dy;
+        if (screen_to_doc(app, x, y, &dx, &dy)) {
+            update_active_annotation_at_doc(app, dx, dy);
+            update_ui(app);
+            queue_canvas(app);
+        }
+    }
+}
+
+static void on_drag_end(GtkGestureDrag *gesture,
+                        double offset_x,
+                        double offset_y,
+                        gpointer user_data)
+{
+    (void)gesture;
+    App *app = user_data;
+
+    double x = app->drag_start_x + offset_x;
+    double y = app->drag_start_y + offset_y;
+    app->pointer_in_canvas = TRUE;
+    app->pointer_x = x;
+    app->pointer_y = y;
+
+    if (app->tool == TOOL_ZOOM) {
+        double x0 = app->zoom_box_x0;
+        double y0 = app->zoom_box_y0;
+        double x1 = x;
+        double y1 = y;
+        app->zoom_box_active = FALSE;
+        apply_zoom_box(app, x0, y0, x1, y1);
+        update_ui(app);
+        queue_canvas(app);
+    } else if (app->tool == TOOL_PEN) {
+        double dx, dy;
+        if (screen_to_doc(app, x, y, &dx, &dy)) {
+            update_active_annotation_at_doc(app, dx, dy);
+        }
+        finish_active_annotation(app);
+        update_ui(app);
+        queue_canvas(app);
+    }
+
+    app->dragging = FALSE;
+}
+
+static void on_motion_enter(GtkEventControllerMotion *controller,
+                            double x,
+                            double y,
+                            gpointer user_data)
+{
+    (void)controller;
+    App *app = user_data;
+    app->pointer_in_canvas = TRUE;
+    app->pointer_x = x;
+    app->pointer_y = y;
+    queue_canvas(app);
+}
+
+static void on_motion_move(GtkEventControllerMotion *controller,
+                           double x,
+                           double y,
+                           gpointer user_data)
+{
+    (void)controller;
+    App *app = user_data;
+    app->pointer_in_canvas = TRUE;
+    app->pointer_x = x;
+    app->pointer_y = y;
+    if (app->tool == TOOL_PEN && pen_tool_is_partial_eraser(app)) {
+        queue_canvas(app);
+    }
+}
+
+static void on_motion_leave(GtkEventControllerMotion *controller,
+                            gpointer user_data)
+{
+    (void)controller;
+    App *app = user_data;
+    app->pointer_in_canvas = FALSE;
+    queue_canvas(app);
+}
+
+static gboolean on_scroll(GtkEventControllerScroll *controller,
+                          double dx,
+                          double dy,
+                          gpointer user_data)
+{
+    (void)controller;
+    (void)dx;
+    (void)dy;
+    (void)user_data;
+    return FALSE;
+}
+
+static gboolean on_key_pressed(GtkEventControllerKey *controller,
+                               guint keyval,
+                               guint keycode,
+                               GdkModifierType state,
+                               gpointer user_data)
+{
+    (void)controller;
+    (void)keycode;
+    (void)state;
+    App *app = user_data;
+
+    if (state & GDK_CONTROL_MASK) {
+        if (keyval == GDK_KEY_z || keyval == GDK_KEY_Z) {
+            if (state & GDK_SHIFT_MASK) history_redo(app);
+            else history_undo(app);
+            return TRUE;
+        }
+        if (keyval == GDK_KEY_y || keyval == GDK_KEY_Y) {
+            history_redo(app);
+            return TRUE;
         }
     }
 
-    if (app->pressing && app->active_button >= 0) {
-        press_interval_ms = (now.tv_sec - app->last_press_time[app->active_button].tv_sec) * 1000 +
-                                 (now.tv_nsec - app->last_press_time[app->active_button].tv_nsec) / 1000000;
-        if (press_interval_ms >= 2 * WAIT_TIME_MS) {
-            app->pressing = FALSE;
-            app->active_button = -1;
-            draw_all(app);
+    switch (keyval) {
+        case GDK_KEY_q:
+        case GDK_KEY_Q:
+        case GDK_KEY_Escape:
+            gtk_window_close(GTK_WINDOW(app->window));
+            return TRUE;
+
+        case GDK_KEY_Left:
+        case GDK_KEY_m:
+        case GDK_KEY_M:
+            step_frame(app, -1);
+            return TRUE;
+
+        case GDK_KEY_Right:
+        case GDK_KEY_n:
+        case GDK_KEY_N:
+            step_frame(app, 1);
+            return TRUE;
+
+        case GDK_KEY_space:
+            if (app->sequence.count > 1) {
+                app->sequence.playing = !app->sequence.playing;
+                app->last_frame_ms = now_ms();
+                update_ui(app);
+            }
+            return TRUE;
+
+        case GDK_KEY_p:
+        case GDK_KEY_P:
+            app->sequence.playing = FALSE;
+            update_ui(app);
+            return TRUE;
+
+        case GDK_KEY_r:
+        case GDK_KEY_R:
+            if (app->sequence.count > 1) {
+                app->sequence.playing = TRUE;
+                app->last_frame_ms = now_ms();
+                update_ui(app);
+            }
+            return TRUE;
+
+        case GDK_KEY_0:
+        case GDK_KEY_Home:
+        case GDK_KEY_h:
+        case GDK_KEY_H:
+            reset_view(app);
+            return TRUE;
+
+        case GDK_KEY_1:
+            set_tool(app, TOOL_PAN);
+            return TRUE;
+
+        case GDK_KEY_2:
+            set_tool(app, TOOL_ZOOM);
+            return TRUE;
+
+        case GDK_KEY_3:
+            set_tool(app, TOOL_PEN);
+            return TRUE;
+
+        default:
+            break;
+    }
+
+    return FALSE;
+}
+
+static gboolean on_tick(gpointer user_data)
+{
+    App *app = user_data;
+    gint64 t = now_ms();
+
+    if (app->sequence.playing && app->sequence.count > 1 && app->sequence.fps > 0) {
+        int interval_ms = 1000 / app->sequence.fps;
+        if (interval_ms < 1) interval_ms = 1;
+
+        if (t - app->last_frame_ms >= interval_ms) {
+            svg_sequence_advance(&app->sequence);
+            app->last_frame_ms = t;
+            update_ui(app);
+            queue_canvas(app);
         }
     }
-    /* half of WAIT_TIME_MS */
-    nanosleep(&(struct timespec){0, WAIT_TIME_MS * 500000L}, NULL);
 
+    return G_SOURCE_CONTINUE;
 }
 
+static void activate(GtkApplication *gtk_app, gpointer user_data)
+{
+    App *app = user_data;
+    app->gtk_app = gtk_app;
+
+    app->window = gtk_application_window_new(gtk_app);
+    gtk_window_set_title(GTK_WINDOW(app->window), WINDOW_TITLE " (GTK)");
+    gtk_window_set_default_size(GTK_WINDOW(app->window), DEFAULT_WIDTH, DEFAULT_HEIGHT);
+
+    app->root_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_window_set_child(GTK_WINDOW(app->window), app->root_box);
+
+    app->main_toolbar = create_main_toolbar(app);
+    gtk_box_append(GTK_BOX(app->root_box), app->main_toolbar);
+
+    app->pen_toolbar = create_pen_toolbar(app);
+    app->pen_revealer = gtk_revealer_new();
+    gtk_revealer_set_transition_type(GTK_REVEALER(app->pen_revealer), GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    gtk_revealer_set_child(GTK_REVEALER(app->pen_revealer), app->pen_toolbar);
+    gtk_box_append(GTK_BOX(app->root_box), app->pen_revealer);
+
+    app->area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(app->area, MIN_WIDTH, MIN_HEIGHT);
+    gtk_widget_set_hexpand(app->area, TRUE);
+    gtk_widget_set_vexpand(app->area, TRUE);
+    gtk_widget_set_focusable(app->area, TRUE);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(app->area), on_draw, app, NULL);
+    gtk_box_append(GTK_BOX(app->root_box), app->area);
+
+    app->status_label = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(app->status_label), 0.0);
+    gtk_widget_set_margin_top(app->status_label, 3);
+    gtk_widget_set_margin_bottom(app->status_label, 3);
+    gtk_widget_set_margin_start(app->status_label, 8);
+    gtk_widget_set_margin_end(app->status_label, 8);
+    gtk_box_append(GTK_BOX(app->root_box), app->status_label);
+
+    GtkGesture *drag = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), GDK_BUTTON_PRIMARY);
+    g_signal_connect(drag, "drag-begin", G_CALLBACK(on_drag_begin), app);
+    g_signal_connect(drag, "drag-update", G_CALLBACK(on_drag_update), app);
+    g_signal_connect(drag, "drag-end", G_CALLBACK(on_drag_end), app);
+    gtk_widget_add_controller(app->area, GTK_EVENT_CONTROLLER(drag));
+
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "enter", G_CALLBACK(on_motion_enter), app);
+    g_signal_connect(motion, "motion", G_CALLBACK(on_motion_move), app);
+    g_signal_connect(motion, "leave", G_CALLBACK(on_motion_leave), app);
+    gtk_widget_add_controller(app->area, motion);
+
+    GtkEventController *scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL |
+                                                                 GTK_EVENT_CONTROLLER_SCROLL_DISCRETE);
+    g_signal_connect(scroll, "scroll", G_CALLBACK(on_scroll), app);
+    gtk_widget_add_controller(app->area, scroll);
+
+    GtkEventController *key = gtk_event_controller_key_new();
+    g_signal_connect(key, "key-pressed", G_CALLBACK(on_key_pressed), app);
+    gtk_widget_add_controller(app->window, key);
+
+    app->last_frame_ms = now_ms();
+    app->tick_id = g_timeout_add(1000 / MAX_FPS, on_tick, app);
+
+    update_ui(app);
+
+    gtk_window_present(GTK_WINDOW(app->window));
+    gtk_widget_grab_focus(app->area);
 }
 
+static gboolean slurp_stdin(char **out_data, gsize *out_len)
+{
+    *out_data = NULL;
+    *out_len = 0;
 
-int main(int argc, char **argv) {
+    GByteArray *buf = g_byte_array_new();
+    guint8 tmp[65536];
+
+    while (1) {
+        size_t n = fread(tmp, 1, sizeof(tmp), stdin);
+        if (n > 0) g_byte_array_append(buf, tmp, (guint)n);
+        if (n < sizeof(tmp)) {
+            if (ferror(stdin)) {
+                g_byte_array_free(buf, TRUE);
+                return FALSE;
+            }
+            break;
+        }
+    }
+
+    g_byte_array_append(buf, (const guint8 *)"\0", 1);
+    *out_len = buf->len - 1;
+    *out_data = (char *)g_byte_array_free(buf, FALSE);
+    return TRUE;
+}
+
+static gboolean load_inputs(App *app, int argc, char **argv)
+{
     gboolean has_stdin = !isatty(fileno(stdin));
-    if (argc < 2 && !has_stdin) {
-        fprintf(stderr,
+    gboolean stdin_requested = FALSE;
+    GPtrArray *files = g_ptr_array_new();
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-") == 0) {
+            stdin_requested = TRUE;
+            continue;
+        }
+
+        /* Keep RSF-style key=value arguments for sf_init(), but do not treat
+         * them as SVG paths unless such a file actually exists. */
+        if (strchr(argv[i], '=') && !g_file_test(argv[i], G_FILE_TEST_EXISTS)) {
+            continue;
+        }
+
+        g_ptr_array_add(files, argv[i]);
+    }
+
+    gboolean ok = FALSE;
+
+    if (files->len > 0) {
+        ok = svg_sequence_load_files(&app->sequence, (char **)files->pdata, (int)files->len) || ok;
+    }
+
+    if (stdin_requested || (files->len == 0 && has_stdin)) {
+        char *data = NULL;
+        gsize len = 0;
+        if (!slurp_stdin(&data, &len)) {
+            fprintf(stderr, "Failed to read SVG data from stdin.\n");
+        } else {
+            ok = svg_sequence_load_from_stream(&app->sequence, data, len) || ok;
+            g_free(data);
+        }
+    }
+
+    g_ptr_array_free(files, TRUE);
+    return ok;
+}
+
+static void print_usage(const char *prog)
+{
+    fprintf(stderr,
             "Usage:\n"
             "  %s file.svg             # Load from file\n"
             "  cat file.svg | %s       # Load from stdin\n"
             "  %s - < file.svg         # Explicit stdin\n",
-            argv[0], argv[0], argv[0]);
+            prog, prog, prog);
+}
+
+int main(int argc, char **argv)
+{
+    gboolean has_stdin = !isatty(fileno(stdin));
+    if (argc < 2 && !has_stdin) {
+        print_usage(argv[0]);
         return 1;
     }
 
     sf_init(argc, argv);
 
-    // Init X
     App app;
     memset(&app, 0, sizeof(app));
-    app.toolbar_h = MIN_BAR_HEIGHT;
-    app.hintbar_h = MIN_BAR_HEIGHT;
-    app.win_w = DEFAULT_WIDTH;
-    app.win_h = DEFAULT_HEIGHT;
-    app.resize_w = app.win_w;
-    app.resize_h = app.win_h;
-    app.pan_x = 0;
-    app.pan_y = 0;
+    app.canvas_w = DEFAULT_WIDTH;
+    app.canvas_h = DEFAULT_HEIGHT;
+    app.pan_x = 0.0;
+    app.pan_y = 0.0;
     app.dragging = FALSE;
     app.zoom_scale = 1.0;
-    app.drag_mode = FALSE;
-    app.zoom_mode = FALSE;
     app.stretch_mode = FALSE;
-    app.active_button = -1;
-    clock_gettime(CLOCK_MONOTONIC, &app.last_zoom_time);
-    app.last_drag_time = app.last_zoom_time;
-    app.last_resize_time = app.last_zoom_time;
-    app.zooming = FALSE;
+    app.tool = TOOL_NONE;
+    app.pen_tool = PEN_TOOL_BRUSH;
+    app.pen_width = 3.0;
+    set_rgba(&app.recent_colors[0], 1.0, 0.10, 0.10, 1.0);
+    set_rgba(&app.recent_colors[1], 0.00, 0.75, 0.20, 1.0);
+    set_rgba(&app.recent_colors[2], 0.05, 0.25, 1.00, 1.0);
+    app.pen_color = app.recent_colors[0];
+    app.custom_color = app.pen_color;
+    app.color_slot = COLOR_SLOT_RECENT0;
+    app.annotations = g_ptr_array_new_with_free_func(annotation_free);
+    app.undo_stack = g_ptr_array_new_with_free_func(annotation_layer_snapshot_free);
+    app.redo_stack = g_ptr_array_new_with_free_func(annotation_layer_snapshot_free);
+    app.active_annotation = NULL;
+    app.sequence.fps = 12;
+    app.sequence.playing = FALSE;
 
-    app.sequence.count = 0;
-    app.sequence.current_index = 0;
-    memset(app.last_press_time, 0, sizeof(app.last_press_time));
-    app.pressing = FALSE;
-
-
-
-    app.dpy = XOpenDisplay(NULL);
-    if (!app.dpy) fatal("Cannot open X display");
-    app.screen = DefaultScreen(app.dpy);
-    app.win = XCreateSimpleWindow(app.dpy, RootWindow(app.dpy, app.screen),
-                                  0, 0, app.win_w, app.win_h, 0,
-                                  BlackPixel(app.dpy, app.screen),
-                                  WhitePixel(app.dpy, app.screen));
-
-    // Load SVGs: from args or stdin
-    gboolean check_input = FALSE;
-
-
-    // Read from stdin
-    GError *err = NULL;
-    gchar *content = NULL;
-    gsize len = 0;
-    if(has_stdin){
-        if (!g_file_get_contents("/dev/stdin", &content, &len, &err)) {
-        fprintf(stderr, "Ignore stdin: %s\n", err->message);
-        g_clear_error(&err);
-        }else{
-        check_input = svg_sequence_load_from_stream(&app.sequence, content, len);
-        g_free(content);
-        }
-    }
-    if (argc >= 2 && strcmp(argv[1], "-") != 0) {
-        // Read from file paths
-        check_input = svg_sequence_load_files(&app.sequence, &argv[1], argc - 1);
-    }
-    app.sequence.current_index = 0;
-
-
-    if (!check_input || app.sequence.count == 0) {
-        fprintf(stderr, "Failed to load SVG sequence. Exiting.\n");
+    if (!load_inputs(&app, argc, argv)) {
+        fprintf(stderr, "Failed to load SVG input.\n");
         return 1;
     }
 
-    create_cairo(&app);
-    adjust_bar(&app);
+    if (app.sequence.count > 1) app.sequence.playing = TRUE;
+    svg_sequence_set_handle_cache_radius(&app.sequence, 1);
 
-    XStoreName(app.dpy, app.win, WINDOW_TITLE);
-    set_window_icon_from_svg(app.dpy, app.win, APP_ICON_SVG, 128);
+    GtkApplication *gtk_app = gtk_application_new(APP_ID, G_APPLICATION_NON_UNIQUE);
+    g_signal_connect(gtk_app, "activate", G_CALLBACK(activate), &app);
 
-    run_loop(&app);
+    char *gtk_argv[] = { argv[0], NULL };
+    int status = g_application_run(G_APPLICATION(gtk_app), 1, gtk_argv);
 
-    // cleanup
-    if (app.cr) cairo_destroy(app.cr);
-    if (app.surface) cairo_surface_destroy(app.surface);
-    XDestroyWindow(app.dpy, app.win);
-    XCloseDisplay(app.dpy);
+    if (app.tick_id) g_source_remove(app.tick_id);
+    g_object_unref(gtk_app);
     svg_sequence_free(&app.sequence);
+    if (app.annotations) g_ptr_array_free(app.annotations, TRUE);
+    if (app.undo_stack) g_ptr_array_free(app.undo_stack, TRUE);
+    if (app.redo_stack) g_ptr_array_free(app.redo_stack, TRUE);
 
-    exit (0);
+    return status;
 }

@@ -6,7 +6,6 @@
 
 #define WINDOW_TITLE "RSFPY - SVG Sequence Viewer"
 
-
 /* Aspect */
 #define DEFAULT_DPI 90
 #define DEFAULT_WIDTH 960
@@ -51,44 +50,66 @@
 
 #define WAIT_TIME_MS 100
 
+/* The old code used fixed MAX_FRAMES/MAX_TMP_FILES arrays.  The new
+ * sequence layer grows dynamically, so these values are no longer hard
+ * limits.  Keep the names for source compatibility with older callers. */
 #define MAX_FRAMES 1000
 #define MAX_TMP_FILES 1000
 
 #define PXPT_TRANS 1.066667f /* 96/90 */
 #define SPLIT_MARKER "<!-- RSFPY_SPLIT -->"
 
-#define MIN_WIDTH 500
-#define MIN_HEIGHT 450
-
-// #define MAX_IMAGE_SURFACE ((size_t)INT_MAX)
+/* How many non-current RsvgHandle objects to keep around on each side of the
+ * current frame.  0 is the most memory-friendly default.  Increase it later if
+ * playback smoothness matters more than memory. */
+#define SVG_SEQUENCE_DEFAULT_HANDLE_CACHE_RADIUS 0
 
 typedef struct {
+    /* User-facing path shown by the viewer, e.g. file.svg.frame[12]. */
     char *path;
     char *framelabel;
+
+    /* Actual source.  For a normal SVG this is the original file.  For a
+     * sequence frame it is the parent file plus byte range.  For stdin it is a
+     * temporary file. */
+    char *source_path;
+    goffset data_offset;
+    gsize data_len;
+    gboolean use_range;
+    gboolean remove_source_on_free;
+
+    /* Loaded lazily.  No cairo_surface_t is stored here; X11/GTK frontends pass
+     * their drawing cairo_t into svg_sequence_render_frame(). */
     RsvgHandle *handle;
-    cairo_surface_t *surface;
     double width, height;
-    gboolean rendered;
-    double cached_scale;
-    int cached_win_w;
-    int cached_win_h;
-    gboolean cached_stretch_mode;
+    gboolean dimensions_valid;
 } SvgFrame;
 
 typedef struct {
-    SvgFrame frames[MAX_FRAMES];
+    SvgFrame *frames;
     int count;
+    int capacity;
     int current_index;
     int fps;
     gboolean playing;
+
+    int handle_cache_radius;
 } SvgSequence;
 
 void sf_init(int argc, char **argv);
 void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str);
+
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num);
-void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr, int win_w, int win_h, int pan_x, int pan_y, double zoom_scale, gboolean stretch_mode, int toolbar_h, int hintbar_h) ;
+void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
+                               int win_w, int win_h,
+                               double pan_x, double pan_y,
+                               double zoom_scale,
+                               gboolean stretch_mode,
+                               int toolbar_h, int hintbar_h);
 void svg_sequence_advance(SvgSequence *seq);
 void svg_sequence_free(SvgSequence *seq);
 gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_t len);
 
-
+/* Optional tuning hook for future frontends.  0 keeps only the current frame's
+ * handle; 1 keeps prev/current/next; negative values are treated as 0. */
+void svg_sequence_set_handle_cache_radius(SvgSequence *seq, int radius);

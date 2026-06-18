@@ -62,3 +62,36 @@ Finally decided to add this changelog.
 - Low efficiency in movie mode for **rsfgrey** and **rsfgrey3**. Use *maxframe=* to control the maximum number of frames.
 - Stretched subfigures in **svgviewer** may sometimes look odd. Try adjusting the figure height/width parameters when drawing.
 - Reduced *X11* rendering performance in **svgviewer** during image dragging and zooming, especially over *SSH tunnels*.
+
+
+
+## Version 0.1.4 - 2026-06-18
+
+### Added
+
+* Added a new GTK backend for **svgviewer**.
+* Added annotation tools in the GTK viewer, including brush, dashed brush, rectangle, dashed rectangle, arrow, eraser, color selection, line-width selection, clear, undo, and redo.
+* Added box-zoom interaction in the GTK viewer.
+* Added optional GTK/X11 backend selection for the SVG viewer. The GTK backend is preferred when available, while the X11 backend remains supported as a fallback.
+* Added support for building both `svgviewer-gtk` and `svgviewer-x11`, with automatic fallback when one backend is unavailable.
+
+### Changed
+
+* Refactored the GTK viewer UI to use native GTK controls for the toolbar, pen toolbar, and status bar.
+* Improved the SVG viewer rendering architecture by separating the viewer frontend from the SVG sequence layer.
+* Improved annotation interaction: drawing now starts on mouse press and finishes on mouse release.
+* Moved undo/redo controls into the pen toolbar.
+* Updated the SVG viewer launcher to prefer the GTK backend and fall back to X11 when needed.
+
+### Fixed
+
+* Improved SVG viewer responsiveness during drawing and annotation operations.
+* Improved handling of large or complex SVG sequences by reducing unnecessary rendering and UI coupling.
+* Fixed several UI and interaction issues in the new GTK viewer.
+
+### Known Issues
+
+* The GTK backend is still experimental and may behave differently from the legacy X11 viewer.
+* The X11 backend is still supported, but may be deprecated in a future release.
+* Very large SVG files containing oversized embedded Base64 bitmap data may still fail to load due to librsvg safety limits.
+* Some annotation and zoom interactions may still require further refinement.

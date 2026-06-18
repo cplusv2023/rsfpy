@@ -18,23 +18,79 @@ pip install .
 ```
 
 ### 📚 Requirements
-#### Python libraries
-- Python >= 3
-- Numpy
-- Matplotlib
-- (*optional*) lxml
 
-Requirements installed by:
+#### Python libraries
+
+* Python >= 3
+* NumPy
+* Matplotlib
+* (*optional*) lxml, required only for `rsfsvgpen`
+
+Install Python requirements by:
+
 ```bash
 pip install -r requirements.txt
-
 ```
-#### Others (for building svg viewer)
-- gcc/clang
-- X11 (libx11-dev)
-- Cairo (libcairo2-dev)
-- rsvg2 (librsvg2-dev)
-- glib2.0 (libglib2.0-dev)
+
+#### Native dependencies for building the SVG viewer
+
+The SVG viewer has two optional native backends:
+
+* `svgviewer-gtk`: GTK4 backend, preferred when available
+* `svgviewer-x11`: X11 backend, fallback backend
+
+At least one backend must be built successfully. If GTK4 is unavailable, the installer will try to build the X11 backend.
+
+##### Ubuntu / Debian
+
+For the GTK4 backend:
+
+```bash
+sudo apt install build-essential pkg-config \
+    libgtk-4-dev librsvg2-dev libcairo2-dev libglib2.0-dev
+```
+
+For the X11 fallback backend:
+
+```bash
+sudo apt install build-essential pkg-config \
+    libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
+```
+
+To support both backends:
+
+```bash
+sudo apt install build-essential pkg-config \
+    libgtk-4-dev libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
+```
+
+##### macOS / Homebrew
+
+For the GTK4 backend:
+
+```bash
+brew install pkgconf gtk4 librsvg cairo glib
+```
+
+For the X11 fallback backend:
+
+```bash
+brew install pkgconf libx11 cairo librsvg glib
+```
+
+On Apple Silicon Macs, if `pkg-config` cannot find Homebrew packages, set:
+
+```bash
+export PATH="/opt/homebrew/bin:$PATH"
+export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:$PKG_CONFIG_PATH"
+```
+
+Then verify:
+
+```bash
+pkg-config --exists gtk4 && echo "gtk4 ok"
+pkg-config --exists librsvg-2.0 && echo "librsvg ok"
+```
 
 Other requirements installed by:
 ```bash
