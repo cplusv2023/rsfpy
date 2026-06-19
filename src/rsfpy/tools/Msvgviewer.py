@@ -58,7 +58,7 @@ import importlib.resources
 
 from rsfpy import bin
 from rsfpy.utils import _get_stdname
-from rsfpy.version import __version__, __email__, __author__, __github__
+from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
 
 
 __progname__ = os.path.basename(sys.argv[0])
@@ -118,12 +118,6 @@ def is_remote_mode():
         for k in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
     )
 
-def warning(msg):
-    try:
-        sys.stderr.write("\033[1;33mWarning:\033[0m %s\n" % msg)
-        sys.stderr.flush()
-    except Exception:
-        pass
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -249,28 +243,75 @@ def command_exists(cmd):
     return shutil.which(exe) is not None
 
 
-def read_svg_files(files):
+def read_svg_sources(args, stdin_data):
     """
-    Read one or more SVG files and return a list of (title, data).
-    """
-    items = []
+    Read SVG inputs from file arguments and stdin.
 
-    for path in files:
-        with open(path, "rb") as f:
+    Rules:
+        - file arguments are read in command-line order.
+        - '-' means stdin position.
+        - if stdin exists but '-' is not used, stdin is appended after files.
+
+    Note:
+        Shell redirection does not preserve its textual position. For example:
+            svgviewer a1.svg < a2.svg a3.svg
+        gives this program argv=[a1.svg, a3.svg] and stdin=a2.svg.
+        If exact ordering is needed, use:
+            svgviewer a1.svg - a3.svg < a2.svg
+    """
+    sources = []
+    stdin_used = False
+
+    for item in args:
+        if item == "-":
+            if stdin_data is None:
+                raise RuntimeError("'-' was specified but stdin is empty")
+            sources.append(("stdin", stdin_data))
+            stdin_used = True
+            continue
+
+        with open(item, "rb") as f:
             data = f.read()
 
-        title = os.path.splitext(os.path.basename(path))[0] or "figure"
-        items.append((title, data))
+        title = os.path.splitext(os.path.basename(item))[0] or "figure"
+        sources.append((title, data))
 
-    return items
+    if stdin_data is not None and not stdin_used:
+        sources.append(("stdin", stdin_data))
+
+    return sources
+
+
+def build_svg_sequence_payload(args, stdin_data):
+    """
+    Build one payload for client backend.
+
+    A single SVG is sent unchanged.
+    Multiple SVGs are joined by __SVG_SPLITTER so that local svgviewer
+    opens them as one sequence/window.
+    """
+    sources = read_svg_sources(args, stdin_data)
+
+    if not sources:
+        raise RuntimeError("no SVG input for client backend")
+
+    if len(sources) == 1:
+        return sources[0][0], sources[0][1]
+
+    splitter = ("\n" + __SVG_SPLITTER + "\n").encode("utf-8")
+    payload = splitter.join(data for _title, data in sources)
+    title = "sequence_%d" % len(sources)
+
+    return title, payload
 
 
 def send_with_client(args, stdin_data):
     """
     Send SVG data through rsfclient --send.
 
-    If stdin_data is available, it is sent as one payload.
-    Otherwise, every file in args is read and sent separately.
+    All SVG inputs are packed into one payload:
+        - one input  -> raw SVG
+        - many inputs -> RSFPY_SPLIT SVG sequence
 
     Return subprocess-style return code.
     """
@@ -284,36 +325,24 @@ def send_with_client(args, stdin_data):
         return 127
 
     try:
-        if stdin_data is not None:
-            result = run(
-                cmd_base,
-                input=stdin_data,
-                capture_output=False,
-            )
-            return result.returncode
+        title, payload = build_svg_sequence_payload(args, stdin_data)
 
-        if not args:
-            sys.stderr.write("No SVG input for client backend.\n")
-            return 1
+        cmd = list(cmd_base)
+        if title:
+            cmd += ["--title", title]
 
-        ret = 0
-        for title, data in read_svg_files(args):
-            cmd = list(cmd_base) + ["--title", title]
-            result = run(
-                cmd,
-                input=data,
-                capture_output=False,
-            )
+        result = run(
+            cmd,
+            input=payload,
+            capture_output=False,
+        )
 
-            if result.returncode != 0:
-                ret = result.returncode
-                break
-
-        return ret
+        return result.returncode
 
     except Exception as e:
         sys.stderr.write("Client sender failed: %s\n" % e)
         return 1
+
 
 
 def run_viewer(backend, args, stdin_data):
@@ -326,17 +355,10 @@ def run_viewer(backend, args, stdin_data):
             if ret == 0:
                 return 0
 
-            cmd_text = " ".join(shlex.quote(x) for x in client_sender_command())
-
             tried.append("CLIENT: exited with code %s: %s" % (
                 ret,
-                cmd_text,
+                " ".join(shlex.quote(x) for x in client_sender_command()),
             ))
-
-            warning(
-                "failed to send SVG through rsfclient --send "
-                "(exit code %s). Falling back to local viewer backend." % ret
-            )
 
             # 用户显式指定 client 时，不自动 fallback
             if backend == "client":

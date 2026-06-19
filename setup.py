@@ -117,6 +117,17 @@ def compile_svgviewer(target_dir):
         out=gtk_out,
     )
 
+    gtk_ok = try_compile_one(
+        name="rsfclient",
+        sources=[tools_dir / "rsfclient.c"],
+        packages=[
+            "gtk4",
+            "glib-2.0",
+            "gio-2.0",
+        ],
+        out=target_dir / "rsfclient",
+    )
+
     x11_ok = try_compile_one(
         name="svgviewer-x11",
         sources=x11_sources,
@@ -282,7 +293,7 @@ setup(
             "rsfgrey3 = rsfpy.tools.Mpygrey:main",
             "svgviewer = rsfpy.tools.Msvgviewer:main",
             "rsfmath = rsfpy.tools.Mrsfmath:main",
-            "rsfclient = rsfpy.tools.Mrsfview_client:main",
+            "rsfclient = rsfpy.tools.Mrsfclient:main",
         ]
     },
 
