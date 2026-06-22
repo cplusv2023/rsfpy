@@ -46,6 +46,7 @@ def try_compile_one(name, sources, packages, out):
 
     cmd = [
         os.environ.get("CC", "cc"),
+        "-std=gnu99",
         *[str(src) for src in sources],
         "-o",
         str(out),
