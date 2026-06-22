@@ -13,9 +13,9 @@ Local GUI client:
 Remote sender:
     sfspike n1=10 | rsfgraph | Mrsfview_client.py --send
 
-This Python entry no longer implements the client GUI/CLI itself.
-Only --send is kept in Python so the remote side can send SVG data without
-requiring the compiled GTK client binary.
+This Python entry delegates to the bundled native rsfclient whenever possible.
+The Python --send implementation is kept only as a fallback so a remote-side
+pure Python install can still send SVG data without the compiled GTK binary.
 """
 
 import os
@@ -26,15 +26,13 @@ import socket
 import struct
 import argparse
 import subprocess
-import importlib.resources
 from pathlib import Path
 
-from rsfpy import bin
 
-
-APP_VERSION = "runner-send-v1-2026-06-19"
+APP_VERSION = "runner-v2-native-first-2026-06-22"
 MAGIC = b"RSFVIEW2"
 MAX_PAYLOAD = 1024 * 1024 * 1024
+NATIVE_NAMES = ("rsfclient.exe", "rsfclient") if os.name == "nt" else ("rsfclient", "rsfclient.exe")
 
 
 def now_string():
@@ -146,7 +144,11 @@ def sender_main(argv):
 # ----------------------------------------------------------------------
 
 def resource_path(name):
-    return importlib.resources.files(bin).joinpath(name)
+    return resource_dir().joinpath(name)
+
+
+def resource_dir():
+    return Path(__file__).resolve().parents[1].joinpath("bin")
 
 
 def is_executable(path):
@@ -168,12 +170,8 @@ def candidate_rsfclient_paths():
     if env:
         yield Path(env)
 
-    if os.name == "nt":
-        yield resource_path("rsfclient.exe")
-        yield resource_path("rsfclient")
-    else:
-        yield resource_path("rsfclient")
-        yield resource_path("rsfclient.exe")
+    for name in NATIVE_NAMES:
+        yield resource_path(name)
 
 
 def find_rsfclient():
@@ -184,25 +182,71 @@ def find_rsfclient():
     return ""
 
 
+def prepend_path(env, *paths):
+    current = env.get("PATH", "")
+    parts = []
+    seen = set()
+
+    for path in paths:
+        if not path:
+            continue
+
+        s = str(path)
+        if not s or s in seen:
+            continue
+
+        parts.append(s)
+        seen.add(s)
+
+    if current:
+        parts.append(current)
+
+    env["PATH"] = os.pathsep.join(parts)
+
+
+def native_env(exe):
+    """
+    Environment for the native client.
+
+    The C client defaults to viewer_cmd=svgviewer.  Prepending the bundled bin
+    directory lets that resolve to the matching packaged svgviewer first.
+    """
+    env = os.environ.copy()
+    exe_dir = Path(exe).resolve().parent
+
+    try:
+        bin_dir = resource_dir()
+    except Exception:
+        bin_dir = exe_dir
+
+    prepend_path(env, exe_dir, bin_dir)
+    return env
+
+
 def run_bundled_client(argv):
     exe = find_rsfclient()
 
     if not exe:
-        sys.stderr.write(
-            "No bundled rsfclient executable found.\n"
-            "Expected one of: bin/rsfclient or bin/rsfclient.exe.\n"
-            "You can also set RSFPY_RSFCLIENT_BIN=/path/to/rsfclient.\n"
-        )
-        return 127
+        return None
 
     try:
-        result = subprocess.run([exe] + list(argv))
+        result = subprocess.run([exe] + list(argv), env=native_env(exe))
         return result.returncode
     except KeyboardInterrupt:
         return 130
     except Exception as e:
         sys.stderr.write("failed to run rsfclient: %s\n" % e)
         return 1
+
+
+def report_missing_native():
+    names = ", ".join("bin/%s" % name for name in NATIVE_NAMES)
+    sys.stderr.write(
+        "No bundled native rsfclient executable found.\n"
+        "Expected one of: %s.\n"
+        "You can also set RSFPY_RSFCLIENT_BIN=/path/to/rsfclient.\n"
+        % names
+    )
 
 
 def print_help():
@@ -216,11 +260,16 @@ Usage:
         Pass args to bundled bin/rsfclient.
 
     {prog} --send [--host 127.0.0.1] [--port 17890] [--token TOKEN] [--title TITLE] < figure.svg
-        Send SVG from stdin to a running rsfclient receiver.
+        Send SVG from stdin to a running rsfclient receiver. Uses the native
+        sender when available; otherwise falls back to the Python sender.
 
 Environment:
     RSFPY_RSFCLIENT_BIN
         Override bundled rsfclient executable path.
+
+    PATH
+        The runner prepends the bundled bin directory before launching native
+        rsfclient, so the native GUI can find the matching svgviewer by default.
 
     RSFVIEW_TOKEN
         Default token for --send mode.
@@ -234,19 +283,28 @@ Version:
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
 
-    if "--send" in argv:
-        idx = argv.index("--send")
-        return sender_main(argv[:idx] + argv[idx + 1:])
-
     if "--runner-version" in argv:
         print(APP_VERSION)
         return 0
+
+    if "--send" in argv:
+        ret = run_bundled_client(argv)
+        if ret is not None:
+            return ret
+
+        idx = argv.index("--send")
+        return sender_main(argv[:idx] + argv[idx + 1:])
 
     if "--help" in argv or "-h" in argv:
         print_help()
         return 0
 
-    return run_bundled_client(argv)
+    ret = run_bundled_client(argv)
+    if ret is not None:
+        return ret
+
+    report_missing_native()
+    return 127
 
 
 if __name__ == "__main__":

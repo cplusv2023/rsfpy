@@ -1,4 +1,10 @@
 *.py[cod]
 *.ignore
+*.so
 __pycache__/
-rsfpy.egg-info/
+build/
+dist/
+*.egg-info/
+src/rsfpy/bin/rsfclient*
+src/rsfpy/bin/svgviewer*
+src/rsfpy/tools/rsfclient

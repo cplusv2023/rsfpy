@@ -1,5 +1,6 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
 #include <math.h>
 #include <stdio.h>
@@ -146,6 +147,85 @@ typedef struct {
 
 static const char *APP_ID = "org.rsfpy.svgviewer.gtk";
 #define UNDO_LIMIT 64
+
+static const char *ICON_PREV =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M6 5h2v14H6zM18 5v14l-8-7z'/>"
+    "</svg>";
+
+static const char *ICON_NEXT =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M16 5h2v14h-2zM6 5v14l8-7z'/>"
+    "</svg>";
+
+static const char *ICON_PLAY =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M7 4v16l13-8z'/>"
+    "</svg>";
+
+static const char *ICON_PAUSE =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M7 5h4v14H7zM13 5h4v14h-4z'/>"
+    "</svg>";
+
+static const char *ICON_SLOWER =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M11 5v14l-8-7zM21 5v14l-8-7z'/>"
+    "</svg>";
+
+static const char *ICON_FASTER =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='#20242a' d='M3 5v14l8-7zM13 5v14l8-7z'/>"
+    "</svg>";
+
+static const char *ICON_PAN =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<g fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3'/>"
+    "</g>"
+    "</svg>";
+
+static const char *ICON_ZOOM =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<g fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round'>"
+    "<circle cx='10' cy='10' r='6'/>"
+    "<path d='M15 15l5 5M7 10h6M10 7v6'/>"
+    "</g>"
+    "</svg>";
+
+static const char *ICON_PEN =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M4 20l4-1 11-11-3-3L5 16zM14 6l3 3'/>"
+    "</svg>";
+
+static const char *ICON_RESET =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M20 12a8 8 0 1 1-2.34-5.66L20 9M20 4v5h-5'/>"
+    "</svg>";
+
+static const char *ICON_STRETCH =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<g fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M8 8L3 3M3 3h6M3 3v6M16 8l5-5M21 3h-6M21 3v6M8 16l-5 5M3 21h6M3 21v-6M16 16l5 5M21 21h-6M21 21v-6'/>"
+    "</g>"
+    "</svg>";
+
+static const char *ICON_UNDO =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M9 7H4v5M4 7l5 5M5 12a8 8 0 1 0 2-5'/>"
+    "</svg>";
+
+static const char *ICON_REDO =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<path fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M15 7h5v5M20 7l-5 5M19 12a8 8 0 1 1-2-5'/>"
+    "</svg>";
+
+static const char *ICON_CLEAR =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<g fill='none' stroke='#20242a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3'/>"
+    "</g>"
+    "</svg>";
 
 static void update_ui(App *app);
 static void queue_canvas(App *app);
@@ -765,22 +845,68 @@ static void on_stretch_toggled(GtkToggleButton *button, gpointer user_data)
     queue_canvas(app);
 }
 
-static GtkWidget *make_button(const char *label,
-                              GCallback callback,
-                              App *app)
+static GtkWidget *make_icon_child(const char *svg, const char *fallback)
 {
-    GtkWidget *button = gtk_button_new_with_label(label);
+    GdkPixbufLoader *loader;
+    GdkPixbuf *pixbuf;
+    GdkTexture *texture;
+    GtkWidget *image;
+    GError *err = NULL;
+
+    if (svg) {
+        loader = gdk_pixbuf_loader_new_with_type("svg", &err);
+        if (!loader) {
+            if (err) g_error_free(err);
+            loader = gdk_pixbuf_loader_new();
+        }
+
+        if (loader &&
+            gdk_pixbuf_loader_write(loader, (const guchar *)svg, strlen(svg), &err) &&
+            gdk_pixbuf_loader_close(loader, &err)) {
+            pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+            if (pixbuf) {
+                g_object_ref(pixbuf);
+                texture = gdk_texture_new_for_pixbuf(pixbuf);
+                image = gtk_image_new_from_paintable(GDK_PAINTABLE(texture));
+                gtk_image_set_pixel_size(GTK_IMAGE(image), 18);
+                g_object_unref(texture);
+                g_object_unref(pixbuf);
+                g_object_unref(loader);
+                return image;
+            }
+        }
+
+        if (err) g_error_free(err);
+        if (loader) g_object_unref(loader);
+    }
+
+    return gtk_label_new(fallback ? fallback : "");
+}
+
+static GtkWidget *make_icon_button(const char *svg,
+                                   const char *tooltip,
+                                   const char *fallback,
+                                   GCallback callback,
+                                   App *app)
+{
+    GtkWidget *button = gtk_button_new();
     gtk_widget_set_focus_on_click(button, FALSE);
+    gtk_widget_set_tooltip_text(button, tooltip ? tooltip : fallback);
+    gtk_button_set_child(GTK_BUTTON(button), make_icon_child(svg, fallback));
     g_signal_connect(button, "clicked", callback, app);
     return button;
 }
 
-static GtkWidget *make_toggle(const char *label,
-                              GCallback callback,
-                              App *app)
+static GtkWidget *make_icon_toggle(const char *svg,
+                                   const char *tooltip,
+                                   const char *fallback,
+                                   GCallback callback,
+                                   App *app)
 {
-    GtkWidget *button = gtk_toggle_button_new_with_label(label);
+    GtkWidget *button = gtk_toggle_button_new();
     gtk_widget_set_focus_on_click(button, FALSE);
+    gtk_widget_set_tooltip_text(button, tooltip ? tooltip : fallback);
+    gtk_button_set_child(GTK_BUTTON(button), make_icon_child(svg, fallback));
     g_signal_connect(button, "toggled", callback, app);
     return button;
 }
@@ -1163,17 +1289,28 @@ static GtkWidget *create_main_toolbar(App *app)
     gtk_widget_set_margin_start(bar, 6);
     gtk_widget_set_margin_end(bar, 6);
 
-    app->btn_prev = make_button("Prev", G_CALLBACK(on_prev_clicked), app);
-    app->btn_next = make_button("Next", G_CALLBACK(on_next_clicked), app);
-    app->btn_run = make_button("Run", G_CALLBACK(on_run_clicked), app);
-    app->btn_pause = make_button("Pause", G_CALLBACK(on_pause_clicked), app);
-    app->btn_slower = make_button("Slower", G_CALLBACK(on_slower_clicked), app);
-    app->btn_faster = make_button("Faster", G_CALLBACK(on_faster_clicked), app);
-    app->toggle_pan = make_toggle("Pan", G_CALLBACK(on_pan_toggled), app);
-    app->toggle_zoom = make_toggle("Zoom", G_CALLBACK(on_zoom_toggled), app);
-    app->toggle_pen = make_toggle("Pen", G_CALLBACK(on_pen_toggled), app);
-    app->btn_reset = make_button("Reset", G_CALLBACK(on_reset_clicked), app);
-    app->toggle_stretch = make_toggle("Stretch", G_CALLBACK(on_stretch_toggled), app);
+    app->btn_prev = make_icon_button(ICON_PREV, "Previous frame", "Prev",
+                                     G_CALLBACK(on_prev_clicked), app);
+    app->btn_next = make_icon_button(ICON_NEXT, "Next frame", "Next",
+                                     G_CALLBACK(on_next_clicked), app);
+    app->btn_run = make_icon_button(ICON_PLAY, "Play sequence", "Run",
+                                    G_CALLBACK(on_run_clicked), app);
+    app->btn_pause = make_icon_button(ICON_PAUSE, "Pause sequence", "Pause",
+                                      G_CALLBACK(on_pause_clicked), app);
+    app->btn_slower = make_icon_button(ICON_SLOWER, "Slower playback", "Slower",
+                                       G_CALLBACK(on_slower_clicked), app);
+    app->btn_faster = make_icon_button(ICON_FASTER, "Faster playback", "Faster",
+                                       G_CALLBACK(on_faster_clicked), app);
+    app->toggle_pan = make_icon_toggle(ICON_PAN, "Pan tool", "Pan",
+                                       G_CALLBACK(on_pan_toggled), app);
+    app->toggle_zoom = make_icon_toggle(ICON_ZOOM, "Zoom box tool", "Zoom",
+                                        G_CALLBACK(on_zoom_toggled), app);
+    app->toggle_pen = make_icon_toggle(ICON_PEN, "Annotation tools", "Pen",
+                                       G_CALLBACK(on_pen_toggled), app);
+    app->btn_reset = make_icon_button(ICON_RESET, "Reset view", "Reset",
+                                      G_CALLBACK(on_reset_clicked), app);
+    app->toggle_stretch = make_icon_toggle(ICON_STRETCH, "Stretch to fit", "Stretch",
+                                           G_CALLBACK(on_stretch_toggled), app);
 
     gtk_box_append(GTK_BOX(bar), app->btn_prev);
     gtk_box_append(GTK_BOX(bar), app->btn_next);
@@ -1256,18 +1393,17 @@ static GtkWidget *create_pen_toolbar(App *app)
     gtk_box_append(GTK_BOX(bar), blue);
     gtk_box_append(GTK_BOX(bar), custom);
 
-    app->pen_clear_button = gtk_button_new_with_label("Clear");
-    gtk_widget_set_focus_on_click(app->pen_clear_button, FALSE);
+    app->pen_clear_button = make_icon_button(ICON_CLEAR, "Clear all annotations", "Clear",
+                                             G_CALLBACK(on_pen_clear_clicked), app);
     gtk_widget_set_margin_start(app->pen_clear_button, 6);
-    gtk_widget_set_tooltip_text(app->pen_clear_button, "Clear all annotations");
-    g_signal_connect(app->pen_clear_button, "clicked", G_CALLBACK(on_pen_clear_clicked), app);
     gtk_box_append(GTK_BOX(bar), app->pen_clear_button);
 
     append_sep(bar);
-    app->btn_undo = make_button("Undo", G_CALLBACK(on_undo_clicked), app);
-    app->btn_redo = make_button("Redo", G_CALLBACK(on_redo_clicked), app);
-    gtk_widget_set_tooltip_text(app->btn_undo, "Undo annotation edit (Ctrl+Z)");
-    gtk_widget_set_tooltip_text(app->btn_redo, "Redo annotation edit (Ctrl+Y / Ctrl+Shift+Z)");
+    app->btn_undo = make_icon_button(ICON_UNDO, "Undo annotation edit (Ctrl+Z)", "Undo",
+                                     G_CALLBACK(on_undo_clicked), app);
+    app->btn_redo = make_icon_button(ICON_REDO,
+                                     "Redo annotation edit (Ctrl+Y / Ctrl+Shift+Z)",
+                                     "Redo", G_CALLBACK(on_redo_clicked), app);
     gtk_box_append(GTK_BOX(bar), app->btn_undo);
     gtk_box_append(GTK_BOX(bar), app->btn_redo);
 

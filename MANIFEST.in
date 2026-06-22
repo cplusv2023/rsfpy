@@ -3,14 +3,17 @@
 # 包含许可证、README 和依赖列表
 include LICENSE
 include README.md
-include requirements
+include requirements.txt
 include test/dat.test
 
-# 包含所有源代码（.py），以及可能的配置文件
-recursive-include src/rsfpy *.py
+# 包含 Python 和 native source，确保 sdist 可以编译扩展和可选工具
+recursive-include src/rsfpy *.py *.c *.h
 
 # 包含测试文件
 recursive-include test *.py
+
+# 排除本地构建产物
+prune build
 
 # 排除虚拟环境文件
 global-exclude *.py[cod]

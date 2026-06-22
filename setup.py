@@ -1,290 +1,272 @@
-# setup.py
 import io
 import os
 import shlex
-import subprocess
-from pathlib import Path
 import shutil
+import subprocess
+import warnings
+from pathlib import Path
+
 import numpy
-from setuptools import setup, find_packages, Extension
-from setuptools.command.install import install
-from setuptools.command.develop import develop
+from setuptools import Command, Extension, find_packages, setup
+from setuptools.command.build_py import build_py
 
 
-here = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent
+SRC_DIR = HERE / "src"
+TOOLS_DIR = SRC_DIR / "rsfpy" / "tools"
 
-def pkg_config_flags(packages):
+
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def run_pkg_config(packages):
+    pkg_config = os.environ.get("PKG_CONFIG", "pkg-config")
     return subprocess.check_output(
-        ["pkg-config", "--cflags", "--libs", *packages],
+        [pkg_config, "--cflags", "--libs", *packages],
         text=True,
     )
 
 
-def try_compile_one(name, sources, packages, out):
-    """
-    Try to compile one svgviewer backend.
+def executable_mode(path):
+    path.chmod(path.stat().st_mode | 0o111)
 
-    Returns:
-        True  if compile succeeded
-        False if compile failed
-    """
+
+def compile_executable(name, sources, packages, output):
     missing_sources = [src for src in sources if not src.exists()]
     if missing_sources:
-        print(f"Skip {name}: missing source file(s):")
-        for src in missing_sources:
-            print(f"  {src}")
-        return False
+        raise FileNotFoundError(
+            f"{name}: missing source file(s): "
+            + ", ".join(str(src) for src in missing_sources)
+        )
 
-    try:
-        pkg_flags = pkg_config_flags(packages)
-    except FileNotFoundError:
-        print(f"Skip {name}: pkg-config not found.")
-        return False
-    except subprocess.CalledProcessError:
-        print(f"Skip {name}: failed to get pkg-config flags for: {' '.join(packages)}")
-        return False
+    pkg_flags = shlex.split(run_pkg_config(packages))
+    compiler = shlex.split(os.environ.get("CC", "cc"))
+    cflags = shlex.split(os.environ.get("CFLAGS", ""))
+    ldflags = shlex.split(os.environ.get("LDFLAGS", ""))
 
     cmd = [
-        os.environ.get("CC", "cc"),
+        *compiler,
         "-std=gnu99",
-        *[str(src) for src in sources],
+        "-O2",
+        *cflags,
+        *(str(src) for src in sources),
         "-o",
-        str(out),
-    ] + shlex.split(pkg_flags)
-
-    print(f"Compiling {name}:")
-    print(" ".join(shlex.quote(x) for x in cmd))
-
-    try:
-        subprocess.check_call(cmd)
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to compile {name}: {e}")
-        return False
-
-    return True
-
-
-def install_default_viewer(src, dst):
-    """
-    Copy selected backend binary to the default svgviewer name.
-    This is more portable than symlink.
-    """
-    shutil.copy2(src, dst)
-
-    mode = dst.stat().st_mode
-    dst.chmod(mode | 0o111)
-
-
-def compile_svgviewer(target_dir):
-    """
-    Compile optional GTK and X11 svgviewer backends.
-
-    Outputs:
-        svgviewer-gtk  if GTK build succeeds
-        svgviewer-x11  if X11 build succeeds
-        svgviewer      default viewer, preferring GTK when available
-
-    At least one backend must compile successfully.
-    """
-    target_dir = Path(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    tools_dir = here / "src" / "rsfpy" / "tools"
-
-    gtk_sources = [
-        tools_dir / "svgviewer.c",
-        tools_dir / "svgsequence.c",
+        str(output),
+        *pkg_flags,
+        *ldflags,
     ]
 
-    x11_sources = [
-        tools_dir / "svgviewer_x11.c",
-        tools_dir / "svgsequence_x11.c",
-    ]
+    print(f"building native tool {name}")
+    print(" ".join(shlex.quote(part) for part in cmd))
+    subprocess.check_call(cmd)
+    executable_mode(output)
 
-    gtk_out = target_dir / "svgviewer-gtk"
-    x11_out = target_dir / "svgviewer-x11"
-    default_out = target_dir / "svgviewer"
 
-    gtk_ok = try_compile_one(
-        name="svgviewer-gtk",
-        sources=gtk_sources,
-        packages=[
+NATIVE_TOOLS = {
+    "svgviewer-gtk": {
+        "sources": [
+            TOOLS_DIR / "svgviewer.c",
+            TOOLS_DIR / "svgsequence.c",
+        ],
+        "packages": [
             "gtk4",
             "librsvg-2.0",
             "cairo",
             "glib-2.0",
             "gio-2.0",
         ],
-        out=gtk_out,
-    )
-
-    gtk_ok = try_compile_one(
-        name="rsfclient",
-        sources=[tools_dir / "rsfclient.c"],
-        packages=[
-            "gtk4",
-            "glib-2.0",
-            "gio-2.0",
+    },
+    "svgviewer-x11": {
+        "sources": [
+            TOOLS_DIR / "svgviewer_x11.c",
+            TOOLS_DIR / "svgsequence_x11.c",
         ],
-        out=target_dir / "rsfclient",
-    )
-
-    x11_ok = try_compile_one(
-        name="svgviewer-x11",
-        sources=x11_sources,
-        packages=[
+        "packages": [
             "x11",
             "cairo",
             "glib-2.0",
             "librsvg-2.0",
         ],
-        out=x11_out,
-    )
+    },
+    "rsfclient": {
+        "sources": [
+            TOOLS_DIR / "rsfclient.c",
+        ],
+        "packages": [
+            "gtk4",
+            "glib-2.0",
+            "gio-2.0",
+        ],
+    },
+}
 
-    if gtk_ok:
-        install_default_viewer(gtk_out, default_out)
-        print("Default svgviewer -> svgviewer-gtk")
-    elif x11_ok:
-        install_default_viewer(x11_out, default_out)
-        print("Default svgviewer -> svgviewer-x11")
-    else:
-        raise RuntimeError(
-            "Failed to compile svgviewer. "
-            "Neither GTK backend nor X11 backend was built successfully. "
-            "Please install either GTK4 development files or X11/Cairo/librsvg development files."
+
+def build_native_tools(target_dir, required=False):
+    """
+    Build optional bundled executables into rsfpy/bin.
+
+    Missing system libraries should not prevent the core Python API from being
+    installed. Set RSFPY_REQUIRE_NATIVE=1 when packaging a release that must
+    include the native viewer/client programs.
+    """
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if os.name == "nt":
+        message = "native rsfpy tools are not built from source on Windows"
+        if required:
+            raise RuntimeError(message)
+        warnings.warn(message)
+        return {}
+
+    built = {}
+    failures = {}
+
+    for name, spec in NATIVE_TOOLS.items():
+        output = target_dir / name
+        try:
+            compile_executable(
+                name=name,
+                sources=spec["sources"],
+                packages=spec["packages"],
+                output=output,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            failures[name] = str(exc)
+            warnings.warn(f"could not build optional native tool {name}: {exc}")
+        else:
+            built[name] = output
+
+    default_viewer = target_dir / "svgviewer"
+    if "svgviewer-gtk" in built:
+        shutil.copy2(built["svgviewer-gtk"], default_viewer)
+        executable_mode(default_viewer)
+        built["svgviewer"] = default_viewer
+    elif "svgviewer-x11" in built:
+        shutil.copy2(built["svgviewer-x11"], default_viewer)
+        executable_mode(default_viewer)
+        built["svgviewer"] = default_viewer
+
+    if required:
+        required_names = {"svgviewer", "rsfclient"}
+        missing = sorted(required_names.difference(built))
+        if missing:
+            details = "\n".join(
+                f"  {name}: {failures.get(name, 'not built')}"
+                for name in sorted(failures)
+            )
+            raise RuntimeError(
+                "failed to build required native rsfpy tool(s): "
+                + ", ".join(missing)
+                + ("\n" + details if details else "")
+            )
+
+    if not built:
+        warnings.warn(
+            "no optional native rsfpy tools were built; Python APIs and "
+            "pure-Python command wrappers are still installed"
         )
 
-def read_requirements():
-    req_file = here / "requirements.txt"
-    with io.open(req_file, encoding="utf-8") as f:
+    return built
+
+
+class BuildPy(build_py):
+    def run(self):
+        super().run()
+
+        if env_bool("RSFPY_BUILD_NATIVE", True):
+            target_dir = Path(self.build_lib) / "rsfpy" / "bin"
+            build_native_tools(
+                target_dir=target_dir,
+                required=env_bool("RSFPY_REQUIRE_NATIVE", False),
+            )
+        else:
+            print("skipping optional native rsfpy tools (RSFPY_BUILD_NATIVE=0)")
+
+
+class BuildNative(Command):
+    description = "build optional rsfpy native tools"
+    user_options = [
+        ("inplace", "i", "build tools into src/rsfpy/bin"),
+        ("required", None, "fail if svgviewer and rsfclient cannot be built"),
+    ]
+    boolean_options = ["inplace", "required"]
+
+    def initialize_options(self):
+        self.inplace = False
+        self.required = False
+        self.build_lib = None
+
+    def finalize_options(self):
+        self.set_undefined_options("build_py", ("build_lib", "build_lib"))
+
+    def run(self):
+        target_dir = (
+            SRC_DIR / "rsfpy" / "bin"
+            if self.inplace
+            else Path(self.build_lib) / "rsfpy" / "bin"
+        )
+        build_native_tools(target_dir=target_dir, required=self.required)
+
+
+def read_requirements(exclude=()):
+    excluded = set(exclude)
+    req_file = HERE / "requirements.txt"
+    with io.open(req_file, encoding="utf-8") as handle:
         return [
             line.strip()
-            for line in f
-            if line.strip() and not line.startswith("#")
+            for line in handle
+            if line.strip()
+            and not line.startswith("#")
+            and line.strip() not in excluded
         ]
 
 
 def read_long_description():
-    readme = here / "README.md"
-    with io.open(readme, encoding="utf-8") as f:
-        return f.read()
+    readme = HERE / "README.md"
+    with io.open(readme, encoding="utf-8") as handle:
+        return handle.read()
 
 
 def read_version():
     version_ns = {}
-    version_file = here / "src" / "rsfpy" / "version.py"
-    with open(version_file, encoding="utf-8") as f:
-        exec(f.read(), version_ns)
+    version_file = SRC_DIR / "rsfpy" / "version.py"
+    with open(version_file, encoding="utf-8") as handle:
+        exec(handle.read(), version_ns)
     return version_ns["__version__"]
-
-
-# def compile_svgviewer(target_dir):
-#     """
-#     Compile src/rsfpy/tools/svgviewer.c + svgsequence.c into target_dir/svgviewer.
-#     """
-#     target_dir = Path(target_dir)
-#     target_dir.mkdir(parents=True, exist_ok=True)
-
-#     src1 = here / "src" / "rsfpy" / "tools" / "svgviewer.c"
-#     src2 = here / "src" / "rsfpy" / "tools" / "svgsequence.c"
-#     out = target_dir / "svgviewer"
-
-#     if not src1.exists():
-#         raise FileNotFoundError(f"Missing source file: {src1}")
-#     if not src2.exists():
-#         raise FileNotFoundError(f"Missing source file: {src2}")
-
-#     try:
-#         pkg_flags = subprocess.check_output(
-#             [
-#                 "pkg-config",
-#                 "--cflags",
-#                 "--libs",
-#                 "x11",
-#                 "cairo",
-#                 "glib-2.0",
-#                 "librsvg-2.0",
-#             ],
-#             text=True,
-#         )
-#     except FileNotFoundError as e:
-#         raise RuntimeError(
-#             "pkg-config not found. Please install pkg-config first."
-#         ) from e
-#     except subprocess.CalledProcessError as e:
-#         raise RuntimeError(
-#             "Failed to get compile flags from pkg-config. "
-#             "Please check that x11, cairo, glib-2.0 and librsvg-2.0 development files are installed."
-#         ) from e
-
-#     cmd = [
-#         os.environ.get("CC", "cc"),
-#         str(src1),
-#         str(src2),
-#         "-o",
-#         str(out),
-#     ] + shlex.split(pkg_flags)
-
-#     print("Compiling svgviewer:")
-#     print(" ".join(shlex.quote(x) for x in cmd))
-
-#     subprocess.check_call(cmd)
-
-
-class CustomInstall(install):
-    def run(self):
-        super().run()
-
-        target_dir = Path(self.install_lib) / "rsfpy" / "bin"
-        try:
-            compile_svgviewer(target_dir)
-        except Exception as e:
-            raise RuntimeError(f"Failed to compile svgviewer: {e}") from e
-
-
-class CustomDevelop(develop):
-    def run(self):
-        super().run()
-
-        # In editable/develop mode, rsfpy is imported from src/rsfpy,
-        # so the binary should be placed under the source package.
-        target_dir = here / "src" / "rsfpy" / "bin"
-        try:
-            compile_svgviewer(target_dir)
-        except Exception as e:
-            raise RuntimeError(f"Failed to compile svgviewer: {e}") from e
-
-
-__version__ = read_version()
 
 
 setup(
     name="rsfpy",
-    version=__version__,
+    version=read_version(),
     description="A Python toolkit for RSF data IO",
     long_description=read_long_description(),
     long_description_content_type="text/markdown",
     author="jwchen",
     author_email="cplusv_official@qq.com",
     url="https://github.com/cplusv2023/rsfpy",
-    license="GPLv2",
+    license="GPL-2.0-only",
     python_requires=">=3",
-
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     include_package_data=True,
-
-    install_requires=read_requirements(),
+    package_data={
+        "rsfpy.bin": ["*"],
+    },
+    install_requires=read_requirements(exclude={"lxml"}),
     extras_require={
         "rsfsvgpen": ["lxml"],
+        "plot": ["matplotlib"],
     },
-
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: GPLv2 License",
         "Operating System :: OS Independent",
     ],
-
     entry_points={
         "console_scripts": [
             "rsfgrey = rsfpy.tools.Mpygrey:main",
@@ -297,12 +279,10 @@ setup(
             "rsfclient = rsfpy.tools.Mrsfclient:main",
         ]
     },
-
     cmdclass={
-        "install": CustomInstall,
-        "develop": CustomDevelop,
+        "build_py": BuildPy,
+        "build_native": BuildNative,
     },
-
     ext_modules=[
         Extension(
             "rsfpy.plot.rsfpy_utils",
