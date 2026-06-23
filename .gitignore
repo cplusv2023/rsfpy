@@ -8,3 +8,4 @@ dist/
 src/rsfpy/bin/rsfclient*
 src/rsfpy/bin/svgviewer*
 src/rsfpy/tools/rsfclient
+.DS_Store

@@ -4,7 +4,7 @@
 #include <glib.h>
 #include <math.h>
 
-#define WINDOW_TITLE "RSFPY - SVG Sequence Viewer"
+#define WINDOW_TITLE "RSFPY - SVG Viewer"
 
 /* Aspect */
 #define DEFAULT_DPI 90

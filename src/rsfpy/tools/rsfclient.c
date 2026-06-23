@@ -328,6 +328,53 @@ static gchar *resolve_executable_path(const gchar *argv0)
     return g_find_program_in_path(argv0);
 }
 
+#ifdef G_OS_WIN32
+static void setup_windows_bundle_env(const gchar *exe_path)
+{
+    gchar *dir = NULL;
+    const gchar *old_path;
+    gchar *new_path;
+    gchar *share;
+    gchar *schemas;
+    gchar *loaders;
+    gchar *loader_cache;
+
+    if (!str_empty(exe_path)) {
+        dir = g_path_get_dirname(exe_path);
+    }
+    if (str_empty(dir)) {
+        g_free(dir);
+        dir = g_get_current_dir();
+    }
+
+    old_path = g_getenv("PATH");
+    new_path = g_strconcat(dir, G_SEARCHPATH_SEPARATOR_S,
+                           old_path ? old_path : "", NULL);
+    share = g_build_filename(dir, "share", NULL);
+    schemas = g_build_filename(dir, "share", "glib-2.0", "schemas", NULL);
+    loaders = g_build_filename(dir, "lib", "gdk-pixbuf-2.0", "2.10.0", "loaders", NULL);
+    loader_cache = g_build_filename(dir, "lib", "gdk-pixbuf-2.0", "2.10.0", "loaders.cache", NULL);
+
+    g_setenv("PATH", new_path, TRUE);
+    g_setenv("XDG_DATA_DIRS", share, TRUE);
+    g_setenv("GSETTINGS_SCHEMA_DIR", schemas, TRUE);
+    g_setenv("GTK_DATA_PREFIX", dir, TRUE);
+    g_setenv("GTK_EXE_PREFIX", dir, TRUE);
+    g_setenv("GTK_PATH", dir, TRUE);
+    g_setenv("GDK_PIXBUF_MODULEDIR", loaders, TRUE);
+    if (g_file_test(loader_cache, G_FILE_TEST_EXISTS)) {
+        g_setenv("GDK_PIXBUF_MODULE_FILE", loader_cache, TRUE);
+    }
+
+    g_free(loader_cache);
+    g_free(loaders);
+    g_free(schemas);
+    g_free(share);
+    g_free(new_path);
+    g_free(dir);
+}
+#endif
+
 static gchar *default_ssh_command(void)
 {
     gchar *path = g_find_program_in_path("ssh");
@@ -579,6 +626,77 @@ static gboolean key_get_bool_default(GKeyFile *kf, const gchar *group,
     return v;
 }
 
+static gchar *password_codec_key(void)
+{
+    const gchar *user = g_get_user_name();
+    const gchar *home = g_get_home_dir();
+    gchar *seed = g_strdup_printf("rsfclient-profile-password-v1|%s|%s",
+                                  user ? user : "",
+                                  home ? home : "");
+    gchar *key = g_compute_checksum_for_string(G_CHECKSUM_SHA256, seed, -1);
+    g_free(seed);
+    return key;
+}
+
+static void xor_password_bytes(guchar *data, gsize len, const gchar *key)
+{
+    gsize key_len = key ? strlen(key) : 0;
+    if (!data || len == 0 || key_len == 0) return;
+
+    for (gsize i = 0; i < len; i++) {
+        data[i] = (guchar)(data[i] ^ (guchar)key[i % key_len] ^ 0xA5);
+    }
+}
+
+static gchar *profile_password_encrypt(const gchar *plain)
+{
+    gchar *key;
+    guchar *buf;
+    gchar *b64;
+    gchar *out;
+    gsize len;
+
+    if (str_empty(plain)) return g_strdup("");
+
+    key = password_codec_key();
+    len = strlen(plain);
+    buf = (guchar *)g_memdup2(plain, len);
+    xor_password_bytes(buf, len, key);
+    b64 = g_base64_encode(buf, len);
+    out = g_strconcat("enc:v1:", b64, NULL);
+
+    g_free(b64);
+    g_free(buf);
+    g_free(key);
+    return out;
+}
+
+static gchar *profile_password_decrypt(const gchar *stored)
+{
+    gchar *key;
+    guchar *buf;
+    gsize len = 0;
+    gchar *out;
+
+    if (str_empty(stored)) return g_strdup("");
+    if (!g_str_has_prefix(stored, "enc:v1:")) {
+        return g_strdup(stored);
+    }
+
+    key = password_codec_key();
+    buf = g_base64_decode(stored + strlen("enc:v1:"), &len);
+    if (!buf) {
+        g_free(key);
+        return g_strdup("");
+    }
+
+    xor_password_bytes(buf, len, key);
+    out = g_strndup((const gchar *)buf, len);
+    g_free(buf);
+    g_free(key);
+    return out;
+}
+
 static Profile *profile_load_from_group(GKeyFile *kf, const gchar *group)
 {
     Profile *p = profile_new_default();
@@ -602,7 +720,12 @@ static Profile *profile_load_from_group(GKeyFile *kf, const gchar *group)
     SET_STR(host, "host", "");
     p->ssh_port = key_get_int_default(kf, group, "ssh_port", 22);
     SET_STR(auth_method, "auth_method", "default");
-    SET_STR(password, "password", "");
+    {
+        gchar *stored_password = key_get_string_default(kf, group, "password", "");
+        g_free(p->password);
+        p->password = profile_password_decrypt(stored_password);
+        g_free(stored_password);
+    }
     SET_STR(identity_file, "identity_file", "");
 
     SET_STR(local_host, "local_host", "127.0.0.1");
@@ -642,7 +765,11 @@ static void profile_save_to_keyfile(GKeyFile *kf, Profile *p)
     SET_STR("host", p->host);
     g_key_file_set_integer(kf, group, "ssh_port", p->ssh_port);
     SET_STR("auth_method", p->auth_method);
-    SET_STR("password", p->password);
+    {
+        gchar *stored_password = profile_password_encrypt(p->password);
+        SET_STR("password", stored_password);
+        g_free(stored_password);
+    }
     SET_STR("identity_file", p->identity_file);
 
     SET_STR("local_host", p->local_host);
@@ -3004,25 +3131,75 @@ static void on_edit_profile_clicked(GtkButton *b, gpointer data)
     show_profile_form(app, app_get_profile_by_index(app, idx));
 }
 
+typedef struct {
+    AppState *app;
+    gchar *group;
+    gchar *name;
+} DeleteProfileState;
+
+static void on_delete_profile_confirm_response(GtkDialog *dialog,
+                                               int response,
+                                               gpointer user_data)
+{
+    DeleteProfileState *st = user_data;
+
+    if (st && response == GTK_RESPONSE_ACCEPT) {
+        g_key_file_remove_group(st->app->config, st->group, NULL);
+        app_save_config(st->app);
+        show_start_screen(st->app);
+    }
+
+    gtk_window_destroy(GTK_WINDOW(dialog));
+    if (st) {
+        g_free(st->group);
+        g_free(st->name);
+        g_free(st);
+    }
+}
+
 static void on_delete_profile_clicked(GtkButton *b, gpointer data)
 {
     AppState *app = (AppState *)data;
     gboolean ok;
     guint idx = get_selected_profile_index(app, &ok);
     Profile *p;
-    gchar *group;
+    DeleteProfileState *st;
+    GtkWidget *dialog;
+    GtkWidget *content;
+    GtkWidget *label;
+    gchar *msg;
 
+    (void)b;
     if (!ok) return;
 
     p = app_get_profile_by_index(app, idx);
     if (!p) return;
 
-    group = profile_group_name(p->name);
-    g_key_file_remove_group(app->config, group, NULL);
-    g_free(group);
+    dialog = gtk_dialog_new_with_buttons("Delete profile",
+                                         GTK_WINDOW(app->window),
+                                         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                         "Delete",
+                                         GTK_RESPONSE_ACCEPT,
+                                         "Cancel",
+                                         GTK_RESPONSE_CANCEL,
+                                         NULL);
+    content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    msg = g_strdup_printf("Delete profile \"%s\"?", str_empty(p->name) ? "(unnamed)" : p->name);
+    label = gtk_label_new(msg);
+    gtk_widget_set_margin_top(label, 12);
+    gtk_widget_set_margin_bottom(label, 12);
+    gtk_widget_set_margin_start(label, 12);
+    gtk_widget_set_margin_end(label, 12);
+    gtk_box_append(GTK_BOX(content), label);
 
-    app_save_config(app);
-    show_start_screen(app);
+    st = g_new0(DeleteProfileState, 1);
+    st->app = app;
+    st->group = profile_group_name(p->name);
+    st->name = g_strdup(p->name);
+    g_signal_connect(dialog, "response", G_CALLBACK(on_delete_profile_confirm_response), st);
+
+    g_free(msg);
+    gtk_window_present(GTK_WINDOW(dialog));
 }
 
 static void show_start_screen(AppState *app)
@@ -3618,6 +3795,10 @@ static gboolean argv_has(int argc, char **argv, const gchar *opt)
 int main(int argc, char **argv)
 {
     self_exe_path = resolve_executable_path(argc > 0 ? argv[0] : NULL);
+
+#ifdef G_OS_WIN32
+    setup_windows_bundle_env(self_exe_path);
+#endif
 
     if (g_strcmp0(g_getenv("RSFCLIENT_ASKPASS"), "1") == 0 ||
         argv_has(argc, argv, "--askpass")) {

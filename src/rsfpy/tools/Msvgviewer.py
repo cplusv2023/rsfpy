@@ -406,8 +406,8 @@ def main():
     parser = build_parser()
     ns, unknown = parser.parse_known_args()
 
-    if ns.help or (len(sys.argv) < 2 and sys.stdin.isatty()):
-        show_help(0 if ns.help else 1)
+    if ns.help:
+        show_help(0)
 
     args = ns.files + unknown
     stdin_data = None
@@ -418,9 +418,6 @@ def main():
         args = [stdname[1]] + args
     elif not sys.stdin.isatty():
         stdin_data = sys.stdin.buffer.read()
-
-    if not args and stdin_data is None:
-        show_help(1)
 
     ret = run_viewer(ns.backend, args, stdin_data)
     sys.exit(ret)
