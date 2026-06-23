@@ -9,15 +9,15 @@ __doc__ = """
 
     \tIn SSH mode, backend=auto first tries:
     \t    rsfclient --send
-    \tIf sending fails, it continues to the next available backend.
+    \tIf sending fails, it tries the X11 backend.
 
 \033[1mSYNOPSIS\033[0m
     \tMsvgviewer.py [--backend client|gtk|x11|auto] [< in0.svg] in1.svg in2.svg ...
 
 \033[1mBACKENDS\033[0m
     \tauto
-    \t    Local mode: GTK -> X11.
-    \t    SSH mode: client -> X11 -> GTK.
+    \t    Local mode: GTK.
+    \t    SSH mode: client -> X11.
 
     \tclient
     \t    Send SVG data to rsfclient --send.
@@ -52,13 +52,15 @@ import sys
 import shlex
 import shutil
 import argparse
+import getpass
+import tempfile
 from subprocess import run
 from textwrap import dedent
 import importlib.resources
 
 from rsfpy import bin
 from rsfpy.utils import _get_stdname
-from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER
+from rsfpy.version import __version__, __email__, __author__, __github__
 
 
 __progname__ = os.path.basename(sys.argv[0])
@@ -156,8 +158,8 @@ def get_backend_order(backend):
     Explicit backend selection is respected.
 
     Auto mode:
-        local  -> GTK -> X11
-        SSH    -> client -> X11 -> GTK
+        local  -> GTK
+        SSH    -> client -> X11
     """
     if backend == "client":
         return [("CLIENT", None)]
@@ -169,15 +171,13 @@ def get_backend_order(backend):
         return [("X11", svgviewer_path_x11)]
 
     if is_remote_mode():
-        return [
-            ("CLIENT", None),
-            ("X11", svgviewer_path_x11),
-            ("GTK", svgviewer_path_gtk),
-        ]
+        order = [("CLIENT", None)]
+        if os.environ.get("DISPLAY"):
+            order.append(("X11", svgviewer_path_x11))
+        return order
 
     return [
         ("GTK", svgviewer_path_gtk),
-        ("X11", svgviewer_path_x11),
     ]
 
 
@@ -231,6 +231,86 @@ def client_sender_command():
     return parts
 
 
+def current_server_user():
+    for key in ("RSFCLIENT_SERVER_USER", "USER", "LOGNAME", "USERNAME"):
+        value = os.environ.get(key)
+        if value:
+            return value
+
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
+
+
+def pair_config_paths():
+    user = current_server_user()
+    name = ".rsfclient_server_%s" % user
+    paths = []
+
+    for base in (tempfile.gettempdir(), os.path.expanduser("~")):
+        if base and base not in ("~", ""):
+            paths.append(os.path.join(base, name))
+
+    return paths
+
+
+def read_pair_config():
+    for path in pair_config_paths():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+
+        data = {}
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            data[key.strip()] = value.strip()
+
+        if data:
+            return data, path
+
+    return {}, None
+
+
+def client_connection_options():
+    cfg, cfg_path = read_pair_config()
+    host = (
+        cfg.get("host")
+        or os.environ.get("RSFCLIENT_SEND_HOST")
+        or os.environ.get("RSFVIEW_HOST")
+        or "127.0.0.1"
+    )
+    port = (
+        cfg.get("port")
+        or os.environ.get("RSFCLIENT_SEND_PORT")
+        or os.environ.get("RSFVIEW_PORT")
+        or "17890"
+    )
+    token = (
+        cfg.get("token")
+        or os.environ.get("RSFCLIENT_SEND_TOKEN")
+        or os.environ.get("RSFVIEW_TOKEN")
+        or ""
+    )
+    return host, port, token, cfg_path
+
+
+def remove_stale_pair_config(path):
+    if not path:
+        return
+
+    try:
+        os.unlink(path)
+        sys.stderr.write("Removed stale rsfclient pair config: %s\n" % path)
+    except OSError:
+        pass
+
+
 def command_exists(cmd):
     if not cmd:
         return False
@@ -266,7 +346,7 @@ def read_svg_sources(args, stdin_data):
         if item == "-":
             if stdin_data is None:
                 raise RuntimeError("'-' was specified but stdin is empty")
-            sources.append(("stdin", stdin_data))
+            sources.append(("stdin", stdin_data, "stdin"))
             stdin_used = True
             continue
 
@@ -274,12 +354,35 @@ def read_svg_sources(args, stdin_data):
             data = f.read()
 
         title = os.path.splitext(os.path.basename(item))[0] or "figure"
-        sources.append((title, data))
+        sources.append((title, data, item))
 
     if stdin_data is not None and not stdin_used:
-        sources.append(("stdin", stdin_data))
+        sources.append(("stdin", stdin_data, "stdin"))
 
     return sources
+
+
+def xml_attr_escape(value):
+    value = "" if value is None else str(value)
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace("\t", " ")
+    )
+
+
+def frame_marker(title, source_path):
+    filename = source_path if source_path and source_path != "stdin" else "stdin"
+    label_base = os.path.basename(filename) if filename != "stdin" else filename
+    label = title or os.path.splitext(label_base)[0] or "figure"
+    return (
+        '<!-- RSFPY_SPLIT filename="%s" framelabel="%s" -->\n'
+        % (xml_attr_escape(filename), xml_attr_escape(label))
+    ).encode("utf-8")
 
 
 def build_svg_sequence_payload(args, stdin_data):
@@ -295,14 +398,17 @@ def build_svg_sequence_payload(args, stdin_data):
     if not sources:
         raise RuntimeError("no SVG input for client backend")
 
+    chunks = []
+    for title, data, source_path in sources:
+        chunks.append(frame_marker(title, source_path))
+        chunks.append(data)
+        chunks.append(b"\n")
+
     if len(sources) == 1:
-        return sources[0][0], sources[0][1]
+        return sources[0][0], b"".join(chunks)
 
-    splitter = ("\n" + __SVG_SPLITTER + "\n").encode("utf-8")
-    payload = splitter.join(data for _title, data in sources)
     title = "sequence_%d" % len(sources)
-
-    return title, payload
+    return title, b"".join(chunks)
 
 
 def send_with_client(args, stdin_data):
@@ -326,16 +432,26 @@ def send_with_client(args, stdin_data):
 
     try:
         title, payload = build_svg_sequence_payload(args, stdin_data)
+        host, port, token, cfg_path = client_connection_options()
 
         cmd = list(cmd_base)
+        cmd += ["--host", host, "--port", str(port)]
+        if token:
+            cmd += ["--token", token]
         if title:
             cmd += ["--title", title]
+
+        if cfg_path:
+            sys.stderr.write("Using rsfclient pair config: %s\n" % cfg_path)
 
         result = run(
             cmd,
             input=payload,
             capture_output=False,
         )
+
+        if result.returncode != 0 and cfg_path:
+            remove_stale_pair_config(cfg_path)
 
         return result.returncode
 
@@ -364,7 +480,7 @@ def run_viewer(backend, args, stdin_data):
             if backend == "client":
                 return ret
 
-            # auto 模式下 client 失败，继续尝试下一个后端
+            # auto 模式下 client 失败，继续尝试 X11 后端
             continue
 
         if not is_executable(path):
@@ -383,9 +499,7 @@ def run_viewer(backend, args, stdin_data):
 
         tried.append(f"{name}: exited with code {result.returncode}: {path}")
 
-        # 用户显式指定 gtk/x11 时，不自动 fallback
-        if backend in ("gtk", "x11"):
-            return result.returncode
+        return result.returncode
 
     sys.stderr.write("No usable SVG viewer backend succeeded.\n")
     for item in tried:

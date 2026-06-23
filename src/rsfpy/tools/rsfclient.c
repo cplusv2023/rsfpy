@@ -47,6 +47,8 @@
 #define MAGIC "RSFVIEW2"
 #define MAGIC_LEN 8
 #define DEFAULT_PORT 17890
+#define RANDOM_PORT_MIN 49152
+#define RANDOM_PORT_MAX 65535
 #define MAX_PAYLOAD ((guint64)1024 * 1024 * 1024)
 #define MAX_RETRIES 3
 #define RETRY_DELAY_SEC 3
@@ -107,8 +109,11 @@ struct _Runtime {
     GMutex lock;
     gboolean stopping;
     gboolean auth_failed;
+    gboolean pair_uploaded;
+    gboolean tunnel_ready;
     gchar *auth_failure_reason;
     gchar *askpass_cancel_path;
+    gchar *pair_token;
     GSubprocess *ssh_proc;
 #ifdef G_OS_WIN32
     WinSshProcess *win_ssh_proc;
@@ -163,6 +168,32 @@ static gchar *strdup0(const gchar *s)
 static gboolean str_empty(const gchar *s)
 {
     return (NULL == s || '\0' == *s);
+}
+
+static gboolean viewer_command_wants_backend_arg(const gchar *viewer_cmd,
+                                                  const gchar *backend)
+{
+    gchar **argv = NULL;
+    gchar *base = NULL;
+    gboolean wants = FALSE;
+    gint argc = 0;
+
+    if (str_empty(backend) || g_strcmp0(backend, "none") == 0) return FALSE;
+    if (!g_shell_parse_argv(str_empty(viewer_cmd) ? "svgviewer" : viewer_cmd,
+                            &argc, &argv, NULL)) {
+        return FALSE;
+    }
+    if (argc <= 0 || !argv || !argv[0]) goto done;
+
+    base = g_path_get_basename(argv[0]);
+    if (g_strrstr(base, "Msvgviewer") || g_strrstr(base, "Msvgviewer.py")) {
+        wants = TRUE;
+    }
+
+done:
+    g_free(base);
+    g_strfreev(argv);
+    return wants;
 }
 
 static gchar *now_string(void)
@@ -362,6 +393,9 @@ static void setup_windows_bundle_env(const gchar *exe_path)
     g_setenv("GTK_EXE_PREFIX", dir, TRUE);
     g_setenv("GTK_PATH", dir, TRUE);
     g_setenv("GDK_PIXBUF_MODULEDIR", loaders, TRUE);
+    if (!g_getenv("GSK_RENDERER")) {
+        g_setenv("GSK_RENDERER", "cairo", TRUE);
+    }
     if (g_file_test(loader_cache, G_FILE_TEST_EXISTS)) {
         g_setenv("GDK_PIXBUF_MODULE_FILE", loader_cache, TRUE);
     }
@@ -470,10 +504,10 @@ static Profile *profile_new_default(void)
     p->identity_file = g_strdup("");
 
     p->local_host = g_strdup("127.0.0.1");
-    p->local_port = DEFAULT_PORT;
+    p->local_port = 0;
 
     p->remote_bind_host = g_strdup("127.0.0.1");
-    p->remote_port = DEFAULT_PORT;
+    p->remote_port = 0;
 
     p->viewer_cmd = g_strdup("svgviewer");
     p->backend = g_strdup("gtk");
@@ -729,10 +763,10 @@ static Profile *profile_load_from_group(GKeyFile *kf, const gchar *group)
     SET_STR(identity_file, "identity_file", "");
 
     SET_STR(local_host, "local_host", "127.0.0.1");
-    p->local_port = key_get_int_default(kf, group, "local_port", DEFAULT_PORT);
+    p->local_port = key_get_int_default(kf, group, "local_port", 0);
 
     SET_STR(remote_bind_host, "remote_bind_host", "127.0.0.1");
-    p->remote_port = key_get_int_default(kf, group, "remote_port", DEFAULT_PORT);
+    p->remote_port = key_get_int_default(kf, group, "remote_port", 0);
 
     SET_STR(viewer_cmd, "viewer_cmd", "svgviewer");
     SET_STR(backend, "backend", "gtk");
@@ -1043,14 +1077,22 @@ done:
 
 static int sender_main(int argc, char **argv)
 {
-    const gchar *host = "127.0.0.1";
-    const gchar *token = g_getenv("RSFVIEW_TOKEN");
+    const gchar *host = g_getenv("RSFCLIENT_SEND_HOST");
+    const gchar *token = g_getenv("RSFCLIENT_SEND_TOKEN");
     const gchar *title = "";
-    gint port = DEFAULT_PORT;
+    const gchar *port_env = g_getenv("RSFCLIENT_SEND_PORT");
+    gint port = port_env ? atoi(port_env) : DEFAULT_PORT;
     GByteArray *payload = NULL;
     GError *err = NULL;
     int i;
 
+    if (str_empty(host)) host = g_getenv("RSFVIEW_HOST");
+    if (str_empty(host)) host = "127.0.0.1";
+    if (!port_env) {
+        const gchar *legacy_port = g_getenv("RSFVIEW_PORT");
+        if (!str_empty(legacy_port)) port = atoi(legacy_port);
+    }
+    if (str_empty(token)) token = g_getenv("RSFVIEW_TOKEN");
     if (!token) token = "";
 
     for (i = 1; i < argc; i++) {
@@ -1065,7 +1107,7 @@ static int sender_main(int argc, char **argv)
         } else if (g_strcmp0(argv[i], "--title") == 0 && i + 1 < argc) {
             title = argv[++i];
         } else if (g_strcmp0(argv[i], "--help") == 0 || g_strcmp0(argv[i], "-h") == 0) {
-            g_print("Usage: rsfclient --send [--host 127.0.0.1] [--port 17890] [--token TOKEN] [--title TITLE] < figure.svg\n");
+            g_print("Usage: rsfclient --send [--host 127.0.0.1] [--port PORT] [--token TOKEN] [--title TITLE] < figure.svg\n");
             return 0;
         }
     }
@@ -1259,23 +1301,27 @@ static gboolean input_read_exact(GInputStream *in, void *buf, gsize len, GError 
     return g_input_stream_read_all(in, buf, len, &done, NULL, err);
 }
 
-static gchar *extract_title_from_meta(const gchar *meta)
+static gchar *extract_string_from_meta(const gchar *meta, const gchar *key, const gchar *fallback)
 {
     const gchar *p;
     const gchar *colon;
     const gchar *q;
     GString *out;
 
-    if (str_empty(meta)) return g_strdup("figure");
+    if (str_empty(meta) || str_empty(key)) return g_strdup(fallback ? fallback : "");
 
-    p = g_strstr_len(meta, -1, "\"title\"");
-    if (!p) return g_strdup("figure");
+    {
+        gchar *needle = g_strdup_printf("\"%s\"", key);
+        p = g_strstr_len(meta, -1, needle);
+        g_free(needle);
+    }
+    if (!p) return g_strdup(fallback ? fallback : "");
 
     colon = strchr(p, ':');
-    if (!colon) return g_strdup("figure");
+    if (!colon) return g_strdup(fallback ? fallback : "");
 
     q = strchr(colon, '"');
-    if (!q) return g_strdup("figure");
+    if (!q) return g_strdup(fallback ? fallback : "");
     q++;
 
     out = g_string_new("");
@@ -1299,10 +1345,15 @@ static gchar *extract_title_from_meta(const gchar *meta)
     }
 
     if (out->len == 0) {
-        g_string_append(out, "figure");
+        g_string_append(out, fallback ? fallback : "");
     }
 
     return g_string_free(out, FALSE);
+}
+
+static gchar *extract_title_from_meta(const gchar *meta)
+{
+    return extract_string_from_meta(meta, "title", "figure");
 }
 
 typedef struct {
@@ -1317,7 +1368,9 @@ static gchar *make_output_path(Profile *p, const gchar *title, gboolean *tempora
 {
     gchar *safe = safe_name(title);
     gchar *stamp = timestamp_name();
-    gchar *filename = g_strdup_printf("%s_%s.svg", safe, stamp);
+    gchar *uuid = g_uuid_string_random();
+    gchar *short_uuid = g_strndup(uuid, 8);
+    gchar *filename = g_strdup_printf("%s_%s_%s.svg", safe, stamp, short_uuid);
     gchar *base = NULL;
     gchar *path;
 
@@ -1329,6 +1382,8 @@ static gchar *make_output_path(Profile *p, const gchar *title, gboolean *tempora
 
     g_free(safe);
     g_free(stamp);
+    g_free(uuid);
+    g_free(short_uuid);
     g_free(filename);
     g_free(base);
 
@@ -1628,7 +1683,7 @@ static gboolean open_viewer_idle(gpointer data)
         g_ptr_array_add(arr, g_strdup(base_argv[i]));
     }
 
-    if (!str_empty(p->backend) && g_strcmp0(p->backend, "none") != 0) {
+    if (viewer_command_wants_backend_arg(p->viewer_cmd, p->backend)) {
         g_ptr_array_add(arr, g_strdup("--backend"));
         g_ptr_array_add(arr, g_strdup(p->backend));
     }
@@ -1731,18 +1786,23 @@ static gboolean runtime_get_auth_failure(Runtime *rt, gchar **reason)
     return failed;
 }
 
-static gchar **build_ssh_argv(Profile *p)
+static gchar *shell_single_quote(const gchar *s);
+static gchar *pair_config_keepalive_command(Runtime *rt);
+
+static gchar **build_ssh_argv(Runtime *rt)
 {
+    Profile *p = rt->profile;
     GPtrArray *arr = g_ptr_array_new_with_free_func(g_free);
     gchar *target;
     gchar *forward;
     gchar *port_s;
+    gchar *remote_cmd;
     gchar *identity_path = NULL;
     gchar **extra = NULL;
     int i;
 
     g_ptr_array_add(arr, g_strdup(str_empty(p->ssh_cmd) ? "ssh" : p->ssh_cmd));
-    g_ptr_array_add(arr, g_strdup("-N"));
+    g_ptr_array_add(arr, g_strdup("-T"));
     g_ptr_array_add(arr, g_strdup("-p"));
 
     port_s = g_strdup_printf("%d", p->ssh_port);
@@ -1758,6 +1818,8 @@ static gchar **build_ssh_argv(Profile *p)
     g_ptr_array_add(arr, g_strdup("StrictHostKeyChecking=accept-new"));
     g_ptr_array_add(arr, g_strdup("-o"));
     g_ptr_array_add(arr, g_strdup("NumberOfPasswordPrompts=1"));
+    g_ptr_array_add(arr, g_strdup("-o"));
+    g_ptr_array_add(arr, g_strdup("ConnectTimeout=10"));
 
     if (g_strcmp0(p->auth_method, "password") == 0) {
         g_ptr_array_add(arr, g_strdup("-o"));
@@ -1801,8 +1863,154 @@ static gchar **build_ssh_argv(Profile *p)
     }
 
     g_ptr_array_add(arr, target);
+    remote_cmd = pair_config_keepalive_command(rt);
+    g_ptr_array_add(arr, remote_cmd);
     g_ptr_array_add(arr, NULL);
 
+    g_free(identity_path);
+    return (gchar **)g_ptr_array_free(arr, FALSE);
+}
+
+static gchar *shell_single_quote(const gchar *s)
+{
+    GString *out = g_string_new("'");
+    const gchar *p;
+
+    for (p = s ? s : ""; *p; p++) {
+        if (*p == '\'') {
+            g_string_append(out, "'\\''");
+        } else {
+            g_string_append_c(out, *p);
+        }
+    }
+
+    g_string_append_c(out, '\'');
+    return g_string_free(out, FALSE);
+}
+
+static gchar *pair_config_remote_name(Profile *p)
+{
+    return g_strdup_printf(".rsfclient_server_%s",
+                           str_empty(p->user) ? "default" : p->user);
+}
+
+static gchar *pair_config_content(Runtime *rt)
+{
+    return g_strdup_printf(
+        "host=127.0.0.1\n"
+        "port=%d\n"
+        "token=%s\n"
+        "user=%s\n",
+        rt->profile->remote_port,
+        rt->pair_token ? rt->pair_token : "",
+        str_empty(rt->profile->user) ? "default" : rt->profile->user);
+}
+
+static gchar *pair_config_keepalive_command(Runtime *rt)
+{
+    gchar *remote_name = pair_config_remote_name(rt->profile);
+    gchar *content = pair_config_content(rt);
+    gchar *quoted_name = shell_single_quote(remote_name);
+    gchar *quoted_content = shell_single_quote(content);
+    gchar *cmd;
+
+    cmd = g_strdup_printf(
+        "name=%s; content=%s; wrote=0; "
+        "for d in \"${TMPDIR:-/tmp}\" \"$HOME\"; do "
+        "[ -n \"$d\" ] || continue; "
+        "[ -d \"$d\" ] || continue; "
+        "[ -w \"$d\" ] || continue; "
+        "rm -f \"$d/$name\" 2>/dev/null || true; "
+        "if printf '%%s' \"$content\" > \"$d/$name\"; then wrote=1; break; fi; "
+        "done; "
+        "if [ \"$wrote\" = 1 ]; then "
+        "echo 'RSFCLIENT_READY port=%d'; "
+        "else "
+        "echo 'rsfclient: warning: could not write pair config' >&2; "
+        "fi; "
+        "while :; do sleep 3600; done",
+        quoted_name, quoted_content, rt->profile->remote_port);
+
+    g_free(quoted_content);
+    g_free(quoted_name);
+    g_free(content);
+    g_free(remote_name);
+    return cmd;
+}
+
+static gchar **build_pair_upload_ssh_argv(Runtime *rt)
+{
+    Profile *p = rt->profile;
+    GPtrArray *arr = g_ptr_array_new_with_free_func(g_free);
+    gchar *target;
+    gchar *port_s;
+    gchar *identity_path = NULL;
+    gchar **extra = NULL;
+    gchar *remote_name;
+    gchar *quoted_name;
+    gchar *remote_cmd;
+    int i;
+
+    g_ptr_array_add(arr, g_strdup(str_empty(p->ssh_cmd) ? "ssh" : p->ssh_cmd));
+    g_ptr_array_add(arr, g_strdup("-p"));
+
+    port_s = g_strdup_printf("%d", p->ssh_port);
+    g_ptr_array_add(arr, port_s);
+
+    g_ptr_array_add(arr, g_strdup("-o"));
+    g_ptr_array_add(arr, g_strdup("StrictHostKeyChecking=accept-new"));
+    g_ptr_array_add(arr, g_strdup("-o"));
+    g_ptr_array_add(arr, g_strdup("NumberOfPasswordPrompts=1"));
+
+    if (g_strcmp0(p->auth_method, "password") == 0) {
+        g_ptr_array_add(arr, g_strdup("-o"));
+        g_ptr_array_add(arr, g_strdup("PreferredAuthentications=password,keyboard-interactive"));
+        g_ptr_array_add(arr, g_strdup("-o"));
+        g_ptr_array_add(arr, g_strdup("PubkeyAuthentication=no"));
+    } else if (g_strcmp0(p->auth_method, "identity") == 0 && !str_empty(p->identity_file)) {
+        identity_path = expand_home_path(p->identity_file);
+        g_ptr_array_add(arr, g_strdup("-i"));
+        g_ptr_array_add(arr, identity_path);
+        identity_path = NULL;
+        g_ptr_array_add(arr, g_strdup("-o"));
+        g_ptr_array_add(arr, g_strdup("IdentitiesOnly=yes"));
+    }
+
+    if (!str_empty(p->extra_ssh_args)) {
+        GError *err = NULL;
+        if (g_shell_parse_argv(p->extra_ssh_args, NULL, &extra, &err)) {
+            for (i = 0; extra[i]; i++) {
+                g_ptr_array_add(arr, g_strdup(extra[i]));
+            }
+            g_strfreev(extra);
+        } else if (err) {
+            g_error_free(err);
+        }
+    }
+
+    if (!str_empty(p->user)) {
+        target = g_strdup_printf("%s@%s", p->user, p->host ? p->host : "");
+    } else {
+        target = g_strdup(p->host ? p->host : "");
+    }
+    g_ptr_array_add(arr, target);
+
+    remote_name = pair_config_remote_name(p);
+    quoted_name = shell_single_quote(remote_name);
+    remote_cmd = g_strdup_printf(
+        "name=%s; "
+        "for d in \"${TMPDIR:-/tmp}\" \"$HOME\"; do "
+        "[ -n \"$d\" ] || continue; "
+        "[ -d \"$d\" ] || continue; "
+        "[ -w \"$d\" ] || continue; "
+        "umask 077; cat > \"$d/$name\" && exit 0; "
+        "done; exit 1",
+        quoted_name);
+    g_ptr_array_add(arr, remote_cmd);
+    g_ptr_array_add(arr, NULL);
+
+    g_free(quoted_name);
+    g_free(remote_name);
     g_free(identity_path);
     return (gchar **)g_ptr_array_free(arr, FALSE);
 }
@@ -1818,7 +2026,12 @@ static gchar *ssh_argv_log_string(gchar **argv)
     masked = g_ptr_array_new_with_free_func(g_free);
 
     for (i = 0; argv[i]; i++) {
-        g_ptr_array_add(masked, g_strdup(argv[i]));
+        if (g_strstr_len(argv[i], -1, "RSFCLIENT_READY") ||
+            g_strstr_len(argv[i], -1, "token=")) {
+            g_ptr_array_add(masked, g_strdup("[remote rsfclient pair setup]"));
+        } else {
+            g_ptr_array_add(masked, g_strdup(argv[i]));
+        }
     }
 
     g_ptr_array_add(masked, NULL);
@@ -1826,6 +2039,70 @@ static gchar *ssh_argv_log_string(gchar **argv)
     g_ptr_array_free(masked, TRUE);
 
     return cmdline;
+}
+
+static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
+                                             Profile *p,
+                                             const gchar *askpass_cancel_path);
+
+static gboolean upload_pair_config(Runtime *rt)
+{
+    gchar **argv = NULL;
+    gchar *content = NULL;
+    gchar *stderr_text = NULL;
+    GSubprocessLauncher *launcher = NULL;
+    GSubprocess *proc = NULL;
+    GError *err = NULL;
+    gboolean ok = FALSE;
+
+    if (!rt || rt->pair_uploaded) return TRUE;
+
+    argv = build_pair_upload_ssh_argv(rt);
+    content = pair_config_content(rt);
+
+    launcher = g_subprocess_launcher_new(
+        G_SUBPROCESS_FLAGS_STDIN_PIPE |
+        G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+        G_SUBPROCESS_FLAGS_STDERR_PIPE
+    );
+    launcher_set_askpass_environment(launcher, rt->profile, rt->askpass_cancel_path);
+    proc = g_subprocess_launcher_spawnv(launcher, (const gchar * const *)argv, &err);
+    g_object_unref(launcher);
+
+    if (!proc) {
+        app_log(rt->app, err ? err->message : "failed to start pair config upload", "warning");
+        g_clear_error(&err);
+        goto done;
+    }
+
+    if (!g_subprocess_communicate_utf8(proc, content, NULL, NULL, &stderr_text, &err)) {
+        app_log(rt->app, err ? err->message : "failed to upload pair config", "warning");
+        g_clear_error(&err);
+        goto done;
+    }
+
+    if (g_subprocess_get_if_exited(proc) &&
+        g_subprocess_get_exit_status(proc) == 0) {
+        gchar *msg = g_strdup_printf("uploaded server pair config for port %d",
+                                     rt->profile->remote_port);
+        app_log(rt->app, msg, "success");
+        g_free(msg);
+        rt->pair_uploaded = TRUE;
+        ok = TRUE;
+    } else {
+        gchar *msg = g_strdup_printf("server pair config upload failed%s%s",
+                                     str_empty(stderr_text) ? "" : ": ",
+                                     str_empty(stderr_text) ? "" : stderr_text);
+        app_log(rt->app, msg, "warning");
+        g_free(msg);
+    }
+
+done:
+    if (proc) g_object_unref(proc);
+    g_strfreev(argv);
+    g_free(content);
+    g_free(stderr_text);
+    return ok;
 }
 
 static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
@@ -2184,6 +2461,18 @@ static void handle_ssh_output_line(Runtime *rt, const gchar *line)
 
     if (!rt || str_empty(line)) return;
 
+    if (g_str_has_prefix(line, "RSFCLIENT_READY")) {
+        g_mutex_lock(&rt->lock);
+        rt->tunnel_ready = TRUE;
+        rt->pair_uploaded = TRUE;
+        g_mutex_unlock(&rt->lock);
+
+        msg = g_strdup_printf("ssh tunnel established; %s", line);
+        app_log(rt->app, msg, "success");
+        g_free(msg);
+        return;
+    }
+
     msg = g_strdup_printf("ssh: %s", line);
     if (is_auth_failure_text(line)) {
         runtime_mark_auth_failure(rt, line);
@@ -2311,7 +2600,7 @@ static gpointer tunnel_thread_func(gpointer data)
     int retries = 0;
 
     while (!runtime_is_stopping(rt)) {
-        gchar **argv = build_ssh_argv(rt->profile);
+        gchar **argv = build_ssh_argv(rt);
         gchar *cmdline = ssh_argv_log_string(argv);
         GError *err = NULL;
         WaitState ws;
@@ -2320,6 +2609,10 @@ static gpointer tunnel_thread_func(gpointer data)
         gint64 until;
 
         runtime_clear_auth_failure(rt);
+        g_mutex_lock(&rt->lock);
+        rt->tunnel_ready = FALSE;
+        rt->pair_uploaded = FALSE;
+        g_mutex_unlock(&rt->lock);
 
         {
             gchar *msg = g_strdup_printf("starting ssh tunnel: %s", cmdline);
@@ -2379,7 +2672,7 @@ static gpointer tunnel_thread_func(gpointer data)
 
         if (!early_exit) {
             retries = 0;
-            app_log(rt->app, "ssh process is running; complete authentication in the GUI if prompted", "info");
+            app_log(rt->app, "ssh process started; waiting for tunnel confirmation", "info");
         }
 
         g_mutex_lock(&ws.mutex);
@@ -2483,9 +2776,30 @@ static gpointer listener_thread_func(gpointer data)
 static Runtime *runtime_new(AppState *app, Profile *profile)
 {
     Runtime *rt = g_new0(Runtime, 1);
+    gint session_port;
+    gchar *salt;
+    gchar *hash;
 
     rt->app = app;
     rt->profile = profile_copy(profile);
+    session_port = g_random_int_range(RANDOM_PORT_MIN, RANDOM_PORT_MAX + 1);
+    if (rt->profile->local_port <= 0 && rt->profile->remote_port <= 0) {
+        rt->profile->local_port = session_port;
+        rt->profile->remote_port = session_port;
+    } else if (rt->profile->local_port <= 0) {
+        rt->profile->local_port = rt->profile->remote_port;
+    } else if (rt->profile->remote_port <= 0) {
+        rt->profile->remote_port = rt->profile->local_port;
+    }
+
+    rt->pair_token = g_uuid_string_random();
+    salt = make_salt();
+    hash = sha256_hex_with_salt(salt, rt->pair_token);
+    g_free(rt->profile->token_salt);
+    g_free(rt->profile->token_hash);
+    rt->profile->token_salt = salt;
+    rt->profile->token_hash = hash;
+
     rt->listener = NULL;
     rt->cancel = g_cancellable_new();
     rt->ssh_proc = NULL;
@@ -2593,6 +2907,7 @@ static void runtime_free(Runtime *rt)
         g_remove(rt->askpass_cancel_path);
     }
     g_free(rt->askpass_cancel_path);
+    g_free(rt->pair_token);
     g_mutex_clear(&rt->lock);
     g_free(rt);
 }
@@ -3331,10 +3646,10 @@ static void save_form_profile(AppState *app, gboolean connect_after)
     GET_STR_FIELD(identity_file, "identity_file");
 
     GET_STR_FIELD(local_host, "local_host");
-    p->local_port = form_get_int(app, "local_port", DEFAULT_PORT);
+    p->local_port = form_get_int(app, "local_port", 0);
 
     GET_STR_FIELD(remote_bind_host, "remote_bind_host");
-    p->remote_port = form_get_int(app, "remote_port", DEFAULT_PORT);
+    p->remote_port = form_get_int(app, "remote_port", 0);
 
     GET_STR_FIELD(viewer_cmd, "viewer_cmd");
     GET_STR_FIELD(save_dir, "save_dir");
@@ -3645,7 +3960,7 @@ static void show_profile_form(AppState *app, Profile *existing)
 
     {
         gchar *s = g_strdup_printf("%d", base->local_port);
-        form_add_entry(app, advanced_grid, row++, "local_port", "Local listen port", s);
+        form_add_entry(app, advanced_grid, row++, "local_port", "Local listen port (0=random)", s);
         g_free(s);
     }
 
@@ -3653,7 +3968,7 @@ static void show_profile_form(AppState *app, Profile *existing)
 
     {
         gchar *s = g_strdup_printf("%d", base->remote_port);
-        form_add_entry(app, advanced_grid, row++, "remote_port", "Remote reverse port", s);
+        form_add_entry(app, advanced_grid, row++, "remote_port", "Remote reverse port (0=random)", s);
         g_free(s);
     }
 

@@ -8,7 +8,7 @@ include test/dat.test
 include scripts/*.sh
 
 # 包含 Python 和 native source，确保 sdist 可以编译扩展和可选工具
-recursive-include src/rsfpy *.py *.c *.h
+recursive-include src/rsfpy *.py *.c *.h *.m
 
 # 包含测试文件
 recursive-include test *.py

@@ -123,19 +123,76 @@ static void trim_range(const char *base, const char **start, const char **end)
     (void)base;
 }
 
-static char *extract_frame_label(const char *comment_start, const char *comment_end)
+static char *xml_attr_unescape(const char *s, gsize len)
 {
-    static const char key[] = "framelabel=\"";
+    GString *out = g_string_new("");
+    const char *p = s;
+    const char *end = s + len;
+
+    while (p < end) {
+        if (*p == '&') {
+            if ((gsize)(end - p) >= 5 && memcmp(p, "&amp;", 5) == 0) {
+                g_string_append_c(out, '&');
+                p += 5;
+                continue;
+            }
+            if ((gsize)(end - p) >= 6 && memcmp(p, "&quot;", 6) == 0) {
+                g_string_append_c(out, '"');
+                p += 6;
+                continue;
+            }
+            if ((gsize)(end - p) >= 4 && memcmp(p, "&lt;", 4) == 0) {
+                g_string_append_c(out, '<');
+                p += 4;
+                continue;
+            }
+            if ((gsize)(end - p) >= 4 && memcmp(p, "&gt;", 4) == 0) {
+                g_string_append_c(out, '>');
+                p += 4;
+                continue;
+            }
+        }
+
+        g_string_append_c(out, *p);
+        p++;
+    }
+
+    return g_string_free(out, FALSE);
+}
+
+static char *extract_comment_attr(const char *comment_start,
+                                  const char *comment_end,
+                                  const char *attr)
+{
+    char *key = g_strdup_printf("%s=\"", attr);
     const char *p = find_mem(comment_start,
                              (gsize)(comment_end - comment_start),
                              key, strlen(key));
-    if (!p) return NULL;
+    char *out = NULL;
+
+    if (!p) {
+        g_free(key);
+        return NULL;
+    }
 
     p += strlen(key);
     const char *q = memchr(p, '"', (size_t)(comment_end - p));
-    if (!q || q <= p) return NULL;
+    if (q && q > p) {
+        out = xml_attr_unescape(p, (gsize)(q - p));
+    }
 
-    return g_strndup(p, (gsize)(q - p));
+    g_free(key);
+    return out;
+}
+
+static char *extract_frame_label(const char *comment_start, const char *comment_end)
+{
+    return extract_comment_attr(comment_start, comment_end, "framelabel");
+}
+
+static char *extract_frame_filename(const char *comment_start, const char *comment_end)
+{
+    return extract_comment_attr(comment_start, comment_end, "filename");
 }
 
 static void svg_sequence_init_if_needed(SvgSequence *seq)
@@ -202,6 +259,7 @@ static void svg_frame_free(SvgFrame *f)
     g_free(f->path);
     g_free(f->framelabel);
     g_free(f->source_path);
+    if (f->source_bytes) g_bytes_unref(f->source_bytes);
     memset(f, 0, sizeof(*f));
 }
 
@@ -218,6 +276,28 @@ static void add_file_frame(SvgSequence *seq, const char *path, const char *label
     f->data_len = 0;
 }
 
+static void add_range_frame_full(SvgSequence *seq,
+                                 const char *source_path,
+                                 const char *display_path,
+                                 const char *label,
+                                 goffset offset,
+                                 gsize len,
+                                 gboolean remove_source_on_free,
+                                 GBytes *source_bytes)
+{
+    SvgFrame *f = svg_sequence_append_frame(seq);
+    if (!f) return;
+
+    f->path = g_strdup(display_path ? display_path : source_path);
+    f->framelabel = label ? g_strdup(label) : g_strdup_printf("Frame %d", seq->count - 1);
+    f->source_path = g_strdup(source_path);
+    f->source_bytes = source_bytes ? g_bytes_ref(source_bytes) : NULL;
+    f->data_offset = offset;
+    f->data_len = len;
+    f->use_range = TRUE;
+    f->remove_source_on_free = remove_source_on_free;
+}
+
 static void add_range_frame(SvgSequence *seq,
                             const char *source_path,
                             const char *display_path,
@@ -226,22 +306,32 @@ static void add_range_frame(SvgSequence *seq,
                             gsize len,
                             gboolean remove_source_on_free)
 {
-    SvgFrame *f = svg_sequence_append_frame(seq);
-    if (!f) return;
-
-    f->path = g_strdup(display_path ? display_path : source_path);
-    f->framelabel = label ? g_strdup(label) : g_strdup_printf("Frame %d", seq->count - 1);
-    f->source_path = g_strdup(source_path);
-    f->data_offset = offset;
-    f->data_len = len;
-    f->use_range = TRUE;
-    f->remove_source_on_free = remove_source_on_free;
+    add_range_frame_full(seq, source_path, display_path, label,
+                         offset, len, remove_source_on_free, NULL);
 }
 
 static gboolean read_frame_range(const SvgFrame *f, char **out, gsize *out_len)
 {
     *out = NULL;
     *out_len = 0;
+
+    if (f->source_bytes) {
+        gsize total_len = 0;
+        const guint8 *bytes = g_bytes_get_data(f->source_bytes, &total_len);
+        if (!bytes || f->data_offset < 0 || (guint64)f->data_offset > (guint64)total_len ||
+            f->data_len > total_len - (gsize)f->data_offset) {
+            fprintf(stderr, "Invalid in-memory SVG range for %s\n",
+                    f->path ? f->path : "(stream)");
+            return FALSE;
+        }
+
+        char *buf = g_malloc(f->data_len + 1);
+        memcpy(buf, bytes + f->data_offset, f->data_len);
+        buf[f->data_len] = '\0';
+        *out = buf;
+        *out_len = f->data_len;
+        return TRUE;
+    }
 
     FILE *fp = fopen(f->source_path, "rb");
     if (!fp) {
@@ -541,24 +631,94 @@ static gboolean scan_split_file(SvgSequence *seq,
         comment_end += end_marker_len;
 
         char *label = extract_frame_label(m, comment_end);
+        char *filename = extract_frame_filename(m, comment_end);
         const char *content_s = comment_end;
         const char *next_m = find_mem(content_s, (gsize)(file_end - content_s), marker, marker_len);
         const char *content_e = next_m ? next_m : file_end;
         trim_range(base, &content_s, &content_e);
 
         if (content_e > content_s) {
-            char *display = g_strdup_printf("%s.frame[%d]", path, seq->count);
+            char *display = filename && *filename
+                ? g_strdup(filename)
+                : g_strdup_printf("%s.frame[%d]", path, seq->count);
             add_range_frame(seq, path, display, label,
                             (goffset)(content_s - base), (gsize)(content_e - content_s),
                             remove_source_on_free);
             g_free(display);
         }
 
+        g_free(filename);
         g_free(label);
         m = next_m;
     }
 
     g_mapped_file_unref(mapped);
+    return TRUE;
+}
+
+static gboolean scan_split_memory(SvgSequence *seq,
+                                  const char *source_name,
+                                  GBytes *bytes)
+{
+    gsize len = 0;
+    const char *data = g_bytes_get_data(bytes, &len);
+    const char marker[] = "<!-- RSFPY_SPLIT";
+    const gsize marker_len = strlen(marker);
+    const char end_marker[] = "-->";
+    const gsize end_marker_len = strlen(end_marker);
+    const char *name = source_name ? source_name : "stdin";
+
+    const char *base = data;
+    const char *file_end = data + len;
+    const char *m = find_mem(data, len, marker, marker_len);
+
+    if (!m) {
+        add_range_frame_full(seq, name, name, "Single file",
+                             0, len, FALSE, bytes);
+        return TRUE;
+    }
+
+    const char *pre_s = base;
+    const char *pre_e = m;
+    trim_range(base, &pre_s, &pre_e);
+    if (pre_e > pre_s) {
+        char *display = g_strdup_printf("%s.frame[%d]", name, seq->count);
+        add_range_frame_full(seq, name, display, NULL,
+                             (goffset)(pre_s - base), (gsize)(pre_e - pre_s),
+                             FALSE, bytes);
+        g_free(display);
+    }
+
+    while (m && m < file_end) {
+        const char *comment_end = find_mem(m, (gsize)(file_end - m), end_marker, end_marker_len);
+        if (!comment_end) {
+            fprintf(stderr, "Warning: malformed split marker in %s\n", name);
+            break;
+        }
+        comment_end += end_marker_len;
+
+        char *label = extract_frame_label(m, comment_end);
+        char *filename = extract_frame_filename(m, comment_end);
+        const char *content_s = comment_end;
+        const char *next_m = find_mem(content_s, (gsize)(file_end - content_s), marker, marker_len);
+        const char *content_e = next_m ? next_m : file_end;
+        trim_range(base, &content_s, &content_e);
+
+        if (content_e > content_s) {
+            char *display = filename && *filename
+                ? g_strdup(filename)
+                : g_strdup_printf("%s.frame[%d]", name, seq->count);
+            add_range_frame_full(seq, name, display, label,
+                                 (goffset)(content_s - base), (gsize)(content_e - content_s),
+                                 FALSE, bytes);
+            g_free(display);
+        }
+
+        g_free(filename);
+        g_free(label);
+        m = next_m;
+    }
+
     return TRUE;
 }
 
@@ -699,27 +859,24 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
     svg_sequence_init_if_needed(seq);
     if (seq->fps <= 0) seq->fps = 12;
 
-    char *tmp = make_temp_path("svgstream", ".svg");
-    GError *err = NULL;
-    if (!g_file_set_contents(tmp, data, (gssize)len, &err)) {
-        fprintf(stderr, "Failed to write temporary stream SVG %s: %s\n",
-                tmp, err ? err->message : "unknown");
-        g_clear_error(&err);
-        g_free(tmp);
-        return FALSE;
-    }
-
-    /* The frames refer to this temporary source path.  Keep the path alive and
-     * remove it once from the global temporary list during svg_sequence_free(). */
-    remember_temp_path(&tmp_svg_paths, tmp);
-
     int before = seq->count;
-    scan_split_file(seq, tmp, FALSE);
-    g_free(tmp);
+    GBytes *bytes = g_bytes_new(data, len);
+    scan_split_memory(seq, "stdin", bytes);
+    g_bytes_unref(bytes);
 
     seq->current_index = 0;
     seq->playing = (seq->count > 1);
     return seq->count > before;
+}
+
+gboolean svg_sequence_validate_current(SvgSequence *seq)
+{
+    if (!seq || seq->count <= 0 || !seq->frames) return FALSE;
+
+    if (seq->current_index < 0) seq->current_index = 0;
+    if (seq->current_index >= seq->count) seq->current_index = seq->count - 1;
+
+    return load_frame_handle(&seq->frames[seq->current_index]);
 }
 
 void svg_sequence_set_handle_cache_radius(SvgSequence *seq, int radius)

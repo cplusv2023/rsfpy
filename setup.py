@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import warnings
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def executable_mode(path):
     path.chmod(path.stat().st_mode | 0o111)
 
 
-def compile_executable(name, sources, packages, output):
+def compile_executable(name, sources, packages, output, extra_ldflags=None):
     missing_sources = [src for src in sources if not src.exists()]
     if missing_sources:
         raise FileNotFoundError(
@@ -48,6 +49,7 @@ def compile_executable(name, sources, packages, output):
     compiler = shlex.split(os.environ.get("CC", "cc"))
     cflags = shlex.split(os.environ.get("CFLAGS", ""))
     ldflags = shlex.split(os.environ.get("LDFLAGS", ""))
+    extra_ldflags = extra_ldflags or []
 
     cmd = [
         *compiler,
@@ -58,6 +60,7 @@ def compile_executable(name, sources, packages, output):
         "-o",
         str(output),
         *pkg_flags,
+        *extra_ldflags,
         *ldflags,
     ]
 
@@ -72,6 +75,15 @@ NATIVE_TOOLS = {
         "sources": [
             TOOLS_DIR / "svgviewer.c",
             TOOLS_DIR / "svgsequence.c",
+        ],
+        "darwin_sources": [
+            TOOLS_DIR / "svgviewer_clipboard_macos.m",
+        ],
+        "darwin_ldflags": [
+            "-framework",
+            "AppKit",
+            "-framework",
+            "Foundation",
         ],
         "packages": [
             "gtk4",
@@ -129,12 +141,19 @@ def build_native_tools(target_dir, required=False):
 
     for name, spec in NATIVE_TOOLS.items():
         output = target_dir / name
+        sources = list(spec["sources"])
+        extra_ldflags = []
+        if sys.platform == "darwin":
+            sources.extend(spec.get("darwin_sources", []))
+            extra_ldflags.extend(spec.get("darwin_ldflags", []))
+
         try:
             compile_executable(
                 name=name,
-                sources=spec["sources"],
+                sources=sources,
                 packages=spec["packages"],
                 output=output,
+                extra_ldflags=extra_ldflags,
             )
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             failures[name] = str(exc)

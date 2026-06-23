@@ -70,9 +70,10 @@ typedef struct {
     char *framelabel;
 
     /* Actual source.  For a normal SVG this is the original file.  For a
-     * sequence frame it is the parent file plus byte range.  For stdin it is a
-     * temporary file. */
+     * sequence frame it is the parent file plus byte range.  For stdin it can
+     * be memory-backed bytes plus byte range. */
     char *source_path;
+    GBytes *source_bytes;
     goffset data_offset;
     gsize data_len;
     gboolean use_range;
@@ -109,6 +110,7 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
 void svg_sequence_advance(SvgSequence *seq);
 void svg_sequence_free(SvgSequence *seq);
 gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_t len);
+gboolean svg_sequence_validate_current(SvgSequence *seq);
 
 /* Optional tuning hook for future frontends.  0 keeps only the current frame's
  * handle; 1 keeps prev/current/next; negative values are treated as 0. */

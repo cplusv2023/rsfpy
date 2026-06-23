@@ -61,6 +61,7 @@ build_exe() {
     "$CC" -std=gnu99 -O2 "${srcs[@]}" \
         -o "$out" \
         $(pkg_flags "${pkgs[@]}") \
+        -luser32 \
         -mwindows
 }
 
@@ -127,7 +128,7 @@ do
 done
 
 log "Copying GTK/GNOME runtime resources"
-mkdir -p "$OUTDIR/lib" "$OUTDIR/share" "$OUTDIR/etc" "$OUTDIR/tools"
+mkdir -p "$OUTDIR/lib" "$OUTDIR/share" "$OUTDIR/etc"
 
 copy_if_exists "$UCRT/lib/gdk-pixbuf-2.0" "$OUTDIR/lib/gdk-pixbuf-2.0"
 copy_if_exists "$UCRT/lib/gio" "$OUTDIR/lib/gio"
@@ -149,17 +150,16 @@ if [[ "$COPY_GTK_MODULES" == "1" ]]; then
     find "$OUTDIR/lib/gtk-4.0" -type d -iname printbackends -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 
-copy_if_exists "$UCRT/bin/gdk-pixbuf-query-loaders.exe" "$OUTDIR/tools/gdk-pixbuf-query-loaders.exe"
-copy_if_exists "$UCRT/bin/gio-querymodules.exe" "$OUTDIR/tools/gio-querymodules.exe"
+copy_if_exists "$UCRT/bin/gdk-pixbuf-query-loaders.exe" "$OUTDIR/gdk-pixbuf-query-loaders.exe"
+copy_if_exists "$UCRT/bin/gio-querymodules.exe" "$OUTDIR/gio-querymodules.exe"
 
 if [[ -x "$UCRT/bin/glib-compile-schemas.exe" && -d "$OUTDIR/share/glib-2.0/schemas" ]]; then
     log "Compiling GLib schemas"
     "$UCRT/bin/glib-compile-schemas.exe" "$OUTDIR/share/glib-2.0/schemas" || true
 fi
 
-# Avoid shipping build-machine absolute paths. The executables set
-# GDK_PIXBUF_MODULEDIR themselves; if a cache is needed later, regenerate it
-# inside the target directory.
+# Avoid shipping build-machine absolute paths. A package-local cache is
+# generated after recursive DLL collection below.
 rm -f "$OUTDIR/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" 2>/dev/null || true
 
 log "Copying DLL dependencies recursively"
@@ -216,6 +216,18 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
         break
     fi
 done
+
+if [[ -x "$OUTDIR/gdk-pixbuf-query-loaders.exe" &&
+      -d "$OUTDIR/lib/gdk-pixbuf-2.0/2.10.0/loaders" ]]; then
+    log "Generating package-local GdkPixbuf loaders.cache"
+    (
+        cd "$OUTDIR"
+        export PATH="$PWD:$PATH"
+        export GDK_PIXBUF_MODULEDIR="$(cygpath -w "$PWD/lib/gdk-pixbuf-2.0/2.10.0/loaders")"
+        ./gdk-pixbuf-query-loaders.exe \
+            > "$PWD/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+    )
+fi
 
 log "Checking for unresolved dependencies"
 missing=0
