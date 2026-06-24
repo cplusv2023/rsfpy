@@ -10,7 +10,7 @@ import sys
 from .grey import grey
 from .wiggle import wiggle
 from ..utils import _version_compare
-from ..version import __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME
+from ..version import __BASE_AX_NAME, __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME
 import matplotlib.transforms as transforms
 # from mpl_toolkits.axisartist.floating_axes import \
     # GridHelperCurveLinear
@@ -255,6 +255,7 @@ def grey3flat(
         fig = ax.figure
     ax_main = ax
     ax_main.axis("off")
+    ax_main.set_gid(__BASE_AX_NAME)
     gattr.fig = fig
     gattr.main_ax = ax_main
 
@@ -413,6 +414,7 @@ def grey3flat(
     if title:
         ax_title = ax_main.inset_axes([0.0, height, 1, 1 - height])
         gattr.title_text = ax_title.text(0.5, 0.5, title, ha="center", va="bottom", fontsize=12)
+        gattr.title_text.set_gid(f"{__BASE_AX_NAME}_title")
         ax_title.axis("off")
         gattr.title_ax = ax_title
 
@@ -614,6 +616,7 @@ def grey3cube(
     gattr.main_ax = axbase0
 
     axbase0.axis('off')
+    axbase0.set_gid(__BASE_AX_NAME)
     axbase0.set_label("Base axes")
 
     if title:
@@ -626,6 +629,7 @@ def grey3cube(
         ax_title.set_xlim([0, 1])
         ax_title.set_ylim([0, 1])
         gattr.title_text = ax_title.text(0.5, 1, title, va='bottom', ha='center')
+        gattr.title_text.set_gid(f"{__BASE_AX_NAME}_title")
         axbase0.add_child_axes(ax_title)
     else:
         topmargin = 0.

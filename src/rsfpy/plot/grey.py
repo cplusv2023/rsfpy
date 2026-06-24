@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, Union
 import warnings
+from ..version import __BASE_AX_NAME
 
 def grey(
     data: Union[np.ndarray, "Rsfarray"],
@@ -86,6 +87,7 @@ def grey(
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
+    ax.set_gid(__BASE_AX_NAME)
 
     data = data if transp else data.T
     if hasattr(data, "d1"):
@@ -173,7 +175,8 @@ def grey(
     if label2:
         ax.set_xlabel(label2)
     if title:
-        ax.set_title(title)
+        title_text = ax.set_title(title)
+        title_text.set_gid(f"{__BASE_AX_NAME}_title")
 
     ax.set_xlim(min2, max2)
     if yreverse:

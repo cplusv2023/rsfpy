@@ -44,7 +44,7 @@ __doc__ = """
 """
 
 
-import math, sys, os, subprocess, re
+import io, math, sys, os, subprocess, re
 from textwrap import dedent
 from rsfpy.utils import _str_match_re
 from rsfpy.version import __version__, __email__, __author__, __github__, __SVG_SPLITTER, __SVG_BGRECT_ID, \
@@ -71,11 +71,13 @@ def main():
         subprocess.run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
     par_dict = _str_match_re(sys.argv[1:])
-    # Check stdin
-    if sys.stdin.isatty():
-        inputs = []
-    else:
-        inputs = [sys.stdin]
+    # Check stdin. In batch/non-interactive runners stdin may be a non-tty
+    # stream with no data, so only treat it as SVG input when content exists.
+    inputs = []
+    if not sys.stdin.isatty():
+        stdin_data = sys.stdin.buffer.read()
+        if stdin_data.strip():
+            inputs.append(io.BytesIO(stdin_data))
     
     for isvg in sys.argv[1:]:
         if os.path.isfile(isvg) and isvg.lower().endswith('.svg'):
@@ -218,7 +220,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
     current_ncol = math.ceil(total / nrow)
     current_nrow = math.ceil(total / ncol)
     parser = etree.XMLParser(huge_tree=True)
-    svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
+    svgs = [parse_svg_input(f, parser=parser).getroot() for f in inputs]
 
     sizes = []
     for svg in svgs:
@@ -294,9 +296,10 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
         elif va in ('btm','bottom'):
             y_offset += hpad_ingrid
 
-        g = etree.Element("g")
         clean_fill_recursive(svg)
+        namespace_svg_ids(svg, f"rsfsvgpen_{idx}")
         add_inverse_scale_to_text(svg, (orig_scale_w * scale_x,orig_scale_h * scale_y))
+        g = etree.Element("g")
         for child in svg:
             g.append(child)
         g.attrib["transform"] = f"translate({x_offset},{y_offset}) scale({orig_scale_w * scale_x},{orig_scale_h * scale_y}) "
@@ -380,7 +383,7 @@ def grid(inputs, ncol=-1, nrow=-1, stretchx=False, stretchy=True, bgcolor=None,l
 
 def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fontweight=None):
     parser = etree.XMLParser(huge_tree=True)
-    svgs = [etree.parse(f, parser=parser).getroot() for f in inputs]
+    svgs = [parse_svg_input(f, parser=parser).getroot() for f in inputs]
     SVG_NS = "http://www.w3.org/2000/svg"
     root = etree.Element("{%s}svg" % SVG_NS, nsmap={None: SVG_NS})
     max_w = 0
@@ -393,13 +396,14 @@ def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fo
         adjust_text_style_recursive(svg, fontscale, fontfamily, fontweight)
     root.attrib["width"] = f'{max_w}px'
     root.attrib["height"] = f'{max_h}px'
-    for svg in svgs:
+    for idx, svg in enumerate(svgs):
         orig_w = allinpx(svg.attrib.get("width", "100"))
         orig_h = allinpx(svg.attrib.get("height", "100"))
         orig_scale_w = orig_w / no_pixel_unit(svg.attrib.get("width", "100"))
         orig_scale_h = orig_h / no_pixel_unit(svg.attrib.get("height", "100"))
         clean_fill_recursive(svg)
         if title is not None: replace_title_text_recursive(svg, title)
+        namespace_svg_ids(svg, f"rsfsvgpen_{idx}")
 
         g = etree.Element("g")
         for child in list(svg):
@@ -418,6 +422,53 @@ def overlay(inputs, bgcolor=None, title=None, fontscale=1.0, fontfamily=None, fo
         })
         root.insert(0, bg_rect)
     return etree.ElementTree(root)
+
+
+def parse_svg_input(item, parser=None):
+    if hasattr(item, "seek"):
+        try:
+            item.seek(0)
+        except Exception:
+            pass
+    return etree.parse(item, parser=parser)
+
+
+def namespace_svg_ids(root, prefix):
+    id_map = {}
+
+    for elem in root.iter():
+        elem_id = elem.attrib.get("id")
+        if not elem_id:
+            continue
+        new_id = f"{prefix}_{elem_id}"
+        id_map[elem_id] = new_id
+        elem.attrib["id"] = new_id
+
+    if not id_map:
+        return
+
+    for elem in root.iter():
+        for attr, value in list(elem.attrib.items()):
+            if "#" in value or "url(" in value:
+                elem.attrib[attr] = rewrite_svg_id_references(value, id_map)
+        if elem.text and ("#" in elem.text or "url(" in elem.text):
+            elem.text = rewrite_svg_id_references(elem.text, id_map)
+        if elem.tail and ("#" in elem.tail or "url(" in elem.tail):
+            elem.tail = rewrite_svg_id_references(elem.tail, id_map)
+
+
+def rewrite_svg_id_references(value, id_map):
+    def repl_url(match):
+        quote = match.group(1) or ""
+        old_id = match.group(2)
+        return f"url({quote}#{id_map.get(old_id, old_id)}{quote})"
+
+    value = re.sub(r"url\(\s*(['\"]?)#([^)'\"\s]+)\1\s*\)", repl_url, value)
+
+    if value.startswith("#") and value[1:] in id_map:
+        return "#" + id_map[value[1:]]
+
+    return value
 
 
 def clean_fill_recursive(elem):
