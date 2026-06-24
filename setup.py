@@ -297,11 +297,11 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "rsfgrey = rsfpy.tools.Mpygrey:main",
-            "rsfgraph = rsfpy.tools.Mpygrey:main",
-            "rsfwiggle = rsfpy.tools.Mpygrey:main",
+            "rsfgrey = rsfpy.tools.Mrsfgrey:main",
+            "rsfgraph = rsfpy.tools.Mrsfgraph:main",
+            "rsfwiggle = rsfpy.tools.Mrsfwiggle:main",
             "rsfsvgpen = rsfpy.tools.Msvgpen:main",
-            "rsfgrey3 = rsfpy.tools.Mpygrey:main",
+            "rsfgrey3 = rsfpy.tools.Mrsfgrey3:main",
             "svgviewer = rsfpy.tools.Msvgviewer:main",
             "vplviewer = rsfpy.tools.Mvplviewer:main",
             "rsfvpl2svg = rsfpy.tools.Mrsfvpl2svg:main",

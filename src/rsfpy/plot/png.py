@@ -3,6 +3,7 @@ import numpy as np
 from matplotlib import cm, colors
 import xml.etree.ElementTree as ET
 from ..version import __AX1_NAME
+from .display import downsample_image, estimate_gain
 
 def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
     """Create PNG chunk"""
@@ -12,6 +13,8 @@ def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
 
 
 def arr2png(arr: np.ndarray, clip=None, pclip=None, bias=0, allpos=False, cmap: str = "viridis", dpi: int = 100,
+            gain=None,
+            max_pixels=None,
             min1=None, max1=None, min2=None, max2=None, cords1=None, cords2=None) -> str:
     """
     Transform a grayscale/color array to PNG and return StringIO
@@ -40,15 +43,15 @@ def arr2png(arr: np.ndarray, clip=None, pclip=None, bias=0, allpos=False, cmap: 
     j1 = np.searchsorted(cords2, min2, side="left")
     j2 = np.searchsorted(cords2, max2, side="right")
 
-    arr = arr[i1:i2, j1:j2]
+    arr = downsample_image(arr[i1:i2, j1:j2], max_pixels)
 
     # --- Grey-scale array ---
     if arr.ndim == 2 or (arr.ndim == 3 and arr.shape[2] == 1):
         if arr.dtype == np.uint8:
             normed = arr.astype(float) / 255.0
         else:
-            vmin, vmax = clip2val(arr, clip=clip, bias=bias, pclip=pclip, allpos=allpos)
-            norm = colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+            display_gain = gain or estimate_gain(arr, clip=clip, pclip=pclip, bias=bias, allpos=allpos)
+            norm = display_gain.norm()
             normed = norm(arr)
         rgba = cm.get_cmap(cmap)(normed, bytes=True)  # (H, W, 4)
         data = rgba

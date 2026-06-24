@@ -4232,6 +4232,7 @@ int main(int argc, char **argv)
 
     if (app.sequence.count > 1) app.sequence.playing = TRUE;
     svg_sequence_set_handle_cache_radius(&app.sequence, 1);
+    svg_sequence_set_surface_cache_radius(&app.sequence, SVG_SEQUENCE_DEFAULT_SURFACE_CACHE_RADIUS);
 
     GtkApplication *gtk_app = gtk_application_new(APP_ID, G_APPLICATION_NON_UNIQUE);
     g_signal_connect(gtk_app, "activate", G_CALLBACK(activate), &app);

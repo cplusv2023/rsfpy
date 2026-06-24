@@ -64,6 +64,16 @@
  * playback smoothness matters more than memory. */
 #define SVG_SEQUENCE_DEFAULT_HANDLE_CACHE_RADIUS 0
 
+/* Rasterized cairo surfaces are much faster during playback than rerendering
+ * SVG with librsvg.  Match the old X11 behavior by keeping rendered frames
+ * unless a caller sets a non-negative cache radius. */
+#define SVG_SEQUENCE_DEFAULT_SURFACE_CACHE_RADIUS -1
+
+/* Render cached surfaces at least at 2x logical resolution.  GTK drawing
+ * areas use logical coordinates, so a 1x image cache looks soft on Retina
+ * and other high-DPI displays when it is painted back to the window. */
+#define SVG_SEQUENCE_MIN_RASTER_CACHE_SCALE 2.0
+
 typedef struct {
     /* User-facing path shown by the viewer, e.g. file.svg.frame[12]. */
     char *path;
@@ -79,11 +89,18 @@ typedef struct {
     gboolean use_range;
     gboolean remove_source_on_free;
 
-    /* Loaded lazily.  No cairo_surface_t is stored here; X11/GTK frontends pass
-     * their drawing cairo_t into svg_sequence_render_frame(). */
+    /* SVG handles are loaded lazily.  Raster surfaces cache the already-rendered
+     * frame for the current window/zoom/stretch state. */
     RsvgHandle *handle;
+    cairo_surface_t *surface;
     double width, height;
     gboolean dimensions_valid;
+    gboolean rendered;
+    double cached_zoom_scale;
+    double cached_raster_scale;
+    int cached_win_w;
+    int cached_content_h;
+    gboolean cached_stretch_mode;
 } SvgFrame;
 
 typedef struct {
@@ -95,6 +112,7 @@ typedef struct {
     gboolean playing;
 
     int handle_cache_radius;
+    int surface_cache_radius;
 } SvgSequence;
 
 void sf_init(int argc, char **argv);
@@ -115,3 +133,6 @@ gboolean svg_sequence_validate_current(SvgSequence *seq);
 /* Optional tuning hook for future frontends.  0 keeps only the current frame's
  * handle; 1 keeps prev/current/next; negative values are treated as 0. */
 void svg_sequence_set_handle_cache_radius(SvgSequence *seq, int radius);
+/* A negative radius means keep every rendered surface until size/zoom/stretch
+ * invalidates it or the sequence is freed. */
+void svg_sequence_set_surface_cache_radius(SvgSequence *seq, int radius);

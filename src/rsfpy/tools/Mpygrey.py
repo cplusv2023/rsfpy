@@ -171,7 +171,20 @@ __doc__ = __doc__.replace("version_label",__version__)
 
 DOC = dedent(__doc__.replace('Mpygrey.py', __progname__))
 
-def main():
+def command_plottype():
+    name = os.path.splitext(os.path.basename(sys.argv[0]))[0].lower()
+    if name.endswith('grey3'):
+        return 'grey3'
+    if name.endswith('wiggle'):
+        return 'wiggle'
+    if name.endswith('graph'):
+        return 'graph'
+    if name.endswith('grey'):
+        return 'grey'
+    return None
+
+
+def main(default_plottype=None):
     if len(sys.argv) < 2 and sys.stdin.isatty():
         subprocess.run(['less', '-R'], input=DOC.encode())
         sys.exit(1)
@@ -293,16 +306,10 @@ def main():
     maxframe = int(getfloat(par_dict, 'maxframe', 300))
 
     # Check plot type
-    plottype = par_dict.get('plottype', 'grey').lower()
-    # command line support
-    if sys.argv[0].endswith('grey'):
-        plottype = 'grey'
-    elif sys.argv[0].endswith('wiggle'):
-        plottype = 'wiggle'
-    elif sys.argv[0].endswith('graph'):
-        plottype = 'graph'
-    elif sys.argv[0].endswith('grey3'):
-        plottype = 'grey3'
+    plottype = par_dict.get('plottype', default_plottype or 'grey').lower()
+    command_type = default_plottype or command_plottype()
+    if command_type:
+        plottype = command_type
 
     if plottype == 'wiggle':
         if datatype == np.uint8:

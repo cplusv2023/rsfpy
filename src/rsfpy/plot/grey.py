@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, Union
 import warnings
+from .display import downsample_image, estimate_gain
 from ..version import __BASE_AX_NAME
 
 def grey(
@@ -121,6 +122,7 @@ def grey(
     if min2 is None: min2 = o2
     if max2 is None: max2 = o2 + d2 * (nx-1)
 
+    gain = params.get('gain')
     vmin = params['vmin']
     vmax = params['vmax']
     clip = params['clip']
@@ -128,7 +130,9 @@ def grey(
     allpos = params['allpos']
     pclip = params['pclip']
 
-    if bias is None:
+    if gain is not None:
+        vmin, vmax = gain.vmin, gain.vmax
+    elif bias is None:
         bias = 0
 
     if pclip is not None and (clip is None) and (vmin is None and vmax is None):
@@ -158,11 +162,15 @@ def grey(
     
     if data.dtype == np.uint8:
         vmin, vmax = 0, 255
+        gain = None
     imshow_kwargs = {k: v for k, v in params.items()
                      if k in ['cmap', 'origin', 'interpolation','aspect', 'zorder']}
-    imshow_kwargs.update({'vmin': vmin, 'vmax': vmax})
+    if gain is None:
+        imshow_kwargs.update({'vmin': vmin, 'vmax': vmax})
+    else:
+        imshow_kwargs['norm'] = gain.norm()
 
-    im = ax.imshow(data, extent=extent, **imshow_kwargs)
+    im = ax.imshow(downsample_image(data, params.get('max_pixels')), extent=extent, **imshow_kwargs)
 
     if colorbar:
         if cax is not None:

@@ -392,6 +392,11 @@ static double u_to_px(double v)
     return v * (PPI / RPERIN);
 }
 
+static double px_to_u(double v)
+{
+    return v * (RPERIN / PPI);
+}
+
 static double sx(SvgCtx *ctx, double x)
 {
     return u_to_px(x - ctx->bounds.xmin + ctx->pad);
@@ -784,6 +789,19 @@ static bool style_color(const Style *style, Color *out)
     return true;
 }
 
+static bool style_stroke_width_px(const Style *style, double *out)
+{
+    if (style->width_set) {
+        *out = style->width;
+        return true;
+    }
+    if (style->fat_set) {
+        *out = (double)style->fat;
+        return true;
+    }
+    return false;
+}
+
 static Color effective_stroke_color(SvgCtx *ctx, VplState *st)
 {
     Color c;
@@ -822,18 +840,17 @@ static double effective_stroke_width(SvgCtx *ctx, VplState *st)
 {
     int fat = st->fat > 1 ? st->fat : 1;
     const Style *specific = NULL;
+    double width;
     if (in_grid_group(st)) {
         specific = &ctx->opt.grid_style;
     } else if (in_axis_group(st) || in_frame_group(st)) {
         specific = &ctx->opt.axis_style;
     }
     if (specific) {
-        if (specific->width_set) return specific->width;
-        if (specific->fat_set) fat = specific->fat + 1;
+        if (style_stroke_width_px(specific, &width)) return width;
     }
     if (in_grid_group(st) || in_axis_group(st) || in_frame_group(st)) {
-        if (ctx->opt.frame_style.width_set) return ctx->opt.frame_style.width;
-        if (ctx->opt.frame_style.fat_set) fat = ctx->opt.frame_style.fat + 1;
+        if (style_stroke_width_px(&ctx->opt.frame_style, &width)) return width;
     }
     if (fat < 1) fat = 1;
     return u_to_px(fat);
@@ -917,28 +934,7 @@ static void emit_line(SvgCtx *ctx, VplState *st, double x1, double y1,
 static void bbox_line(SvgCtx *ctx, VplState *st, double x1, double y1,
                       double x2, double y2)
 {
-    double pad = st->fat > 1 ? st->fat : 1;
-    if (in_axis_group(st) || in_frame_group(st)) {
-        if (ctx->opt.axis_style.width_set) {
-            pad = ctx->opt.axis_style.width / (PPI / RPERIN);
-        } else if (ctx->opt.axis_style.fat_set) {
-            pad = ctx->opt.axis_style.fat + 1;
-        } else if (ctx->opt.frame_style.width_set) {
-            pad = ctx->opt.frame_style.width / (PPI / RPERIN);
-        } else if (ctx->opt.frame_style.fat_set) {
-            pad = ctx->opt.frame_style.fat + 1;
-        }
-    } else if (in_grid_group(st)) {
-        if (ctx->opt.grid_style.width_set) {
-            pad = ctx->opt.grid_style.width / (PPI / RPERIN);
-        } else if (ctx->opt.grid_style.fat_set) {
-            pad = ctx->opt.grid_style.fat + 1;
-        } else if (ctx->opt.frame_style.width_set) {
-            pad = ctx->opt.frame_style.width / (PPI / RPERIN);
-        } else if (ctx->opt.frame_style.fat_set) {
-            pad = ctx->opt.frame_style.fat + 1;
-        }
-    }
+    double pad = px_to_u(effective_stroke_width(ctx, st));
     bounds_add_fat(&ctx->bounds, x1, y1, (int)ceil(pad));
     bounds_add_fat(&ctx->bounds, x2, y2, (int)ceil(pad));
 }
@@ -1789,6 +1785,15 @@ static Style *style_for_option(ConvertOptions *opt, const char *name, const char
     return NULL;
 }
 
+static bool is_text_style(ConvertOptions *opt, Style *style)
+{
+    return style == &opt->font_style ||
+           style == &opt->label_style ||
+           style == &opt->title_style ||
+           style == &opt->barlabel_style ||
+           style == &opt->scalebar_style;
+}
+
 static bool parse_style_option(ConvertOptions *opt, const char *name,
                                const char *value)
 {
@@ -1806,20 +1811,17 @@ static bool parse_style_option(ConvertOptions *opt, const char *name,
         style->size = parse_double_arg(name, value);
         style->size_set = style->size > 0.0;
     } else if (streq_ci(suffix, "fat")) {
-        style->fat = parse_int_arg(name, value);
-        style->fat_set = true;
-    } else if (streq_ci(suffix, "width")) {
-        if (style == &opt->font_style ||
-            style == &opt->label_style ||
-            style == &opt->title_style ||
-            style == &opt->barlabel_style ||
-            style == &opt->scalebar_style) {
+        if (is_text_style(opt, style)) {
             style->fat = parse_int_arg(name, value);
             style->fat_set = true;
         } else {
             style->width = parse_double_arg(name, value);
             style->width_set = style->width > 0.0;
         }
+    } else if (streq_ci(suffix, "width")) {
+        if (is_text_style(opt, style)) return false;
+        style->width = parse_double_arg(name, value);
+        style->width_set = style->width > 0.0;
     } else if (streq_ci(suffix, "weight")) {
         style->weight = parse_int_arg(name, value);
         style->weight_set = true;

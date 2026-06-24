@@ -206,6 +206,7 @@ static void svg_sequence_init_if_needed(SvgSequence *seq)
         seq->fps = 12;
         seq->playing = FALSE;
         seq->handle_cache_radius = SVG_SEQUENCE_DEFAULT_HANDLE_CACHE_RADIUS;
+        seq->surface_cache_radius = SVG_SEQUENCE_DEFAULT_SURFACE_CACHE_RADIUS;
     }
 }
 
@@ -234,13 +235,35 @@ static SvgFrame *svg_sequence_append_frame(SvgSequence *seq)
     return f;
 }
 
-static void svg_frame_clear_loaded(SvgFrame *f)
+static void svg_frame_clear_handle(SvgFrame *f)
 {
     if (!f) return;
     if (f->handle) {
         g_object_unref(f->handle);
         f->handle = NULL;
     }
+}
+
+static void svg_frame_clear_surface(SvgFrame *f)
+{
+    if (!f) return;
+    if (f->surface) {
+        cairo_surface_destroy(f->surface);
+        f->surface = NULL;
+    }
+    f->rendered = FALSE;
+    f->cached_zoom_scale = 0.0;
+    f->cached_raster_scale = 0.0;
+    f->cached_win_w = 0;
+    f->cached_content_h = 0;
+    f->cached_stretch_mode = FALSE;
+}
+
+static void svg_frame_clear_loaded(SvgFrame *f)
+{
+    if (!f) return;
+    svg_frame_clear_handle(f);
+    svg_frame_clear_surface(f);
     f->dimensions_valid = FALSE;
     f->width = 0.0;
     f->height = 0.0;
@@ -553,7 +576,7 @@ static gboolean load_frame_handle(SvgFrame *f)
     if (!f) return FALSE;
     if (f->handle && f->dimensions_valid) return TRUE;
 
-    svg_frame_clear_loaded(f);
+    svg_frame_clear_handle(f);
     if (f->use_range) return load_handle_from_range(f);
     return load_handle_from_file(f);
 }
@@ -576,7 +599,21 @@ static void evict_distant_handles(SvgSequence *seq)
     for (int i = 0; i < seq->count; i++) {
         if (i == seq->current_index) continue;
         if (frame_distance_wrapped(i, seq->current_index, seq->count) <= radius) continue;
-        svg_frame_clear_loaded(&seq->frames[i]);
+        svg_frame_clear_handle(&seq->frames[i]);
+    }
+}
+
+static void evict_distant_surfaces(SvgSequence *seq)
+{
+    if (!seq || !seq->frames || seq->count <= 1) return;
+
+    int radius = seq->surface_cache_radius;
+    if (radius < 0) return;
+
+    for (int i = 0; i < seq->count; i++) {
+        if (i == seq->current_index) continue;
+        if (frame_distance_wrapped(i, seq->current_index, seq->count) <= radius) continue;
+        svg_frame_clear_surface(&seq->frames[i]);
     }
 }
 
@@ -787,8 +824,7 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
     if (seq->current_index >= seq->count) seq->current_index = seq->count - 1;
 
     SvgFrame *f = &seq->frames[seq->current_index];
-    if (!load_frame_handle(f)) return;
-    evict_distant_handles(seq);
+    if (!f->dimensions_valid && !load_frame_handle(f)) return;
 
     int content_h = win_h - toolbar_h - hintbar_h;
     if (content_h <= 0 || win_w <= 0 || f->width <= 0.0 || f->height <= 0.0) return;
@@ -814,6 +850,19 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
 
     ox = (win_w - dst_w) / 2.0;
     oy = (content_h - dst_h) / 2.0;
+    double device_scale_x = 1.0;
+    double device_scale_y = 1.0;
+    double raster_scale;
+    cairo_surface_get_device_scale(cairo_get_target(cr), &device_scale_x, &device_scale_y);
+    raster_scale = device_scale_x > device_scale_y ? device_scale_x : device_scale_y;
+    if (raster_scale < SVG_SEQUENCE_MIN_RASTER_CACHE_SCALE) {
+        raster_scale = SVG_SEQUENCE_MIN_RASTER_CACHE_SCALE;
+    }
+
+    int surface_w = (int)ceil(dst_w * raster_scale);
+    int surface_h = (int)ceil(dst_h * raster_scale);
+    if (surface_w < 1) surface_w = 1;
+    if (surface_h < 1) surface_h = 1;
 
     cairo_save(cr);
     cairo_set_source_rgba_string(cr, BACKGROUND_COLOR);
@@ -821,27 +870,90 @@ void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
     cairo_fill(cr);
     cairo_restore(cr);
 
+    gboolean cache_invalid = FALSE;
+    if (!f->rendered || !f->surface) {
+        cache_invalid = TRUE;
+    } else if (f->cached_win_w != win_w ||
+               f->cached_content_h != content_h ||
+               fabs(f->cached_zoom_scale - zoom_scale) > 1e-12 ||
+               fabs(f->cached_raster_scale - raster_scale) > 1e-12 ||
+               f->cached_stretch_mode != stretch_mode ||
+               cairo_image_surface_get_width(f->surface) != surface_w ||
+               cairo_image_surface_get_height(f->surface) != surface_h) {
+        cache_invalid = TRUE;
+    }
+
+    if (cache_invalid) {
+        if (!load_frame_handle(f)) return;
+        svg_frame_clear_surface(f);
+        f->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, surface_w, surface_h);
+        if (cairo_surface_status(f->surface) == CAIRO_STATUS_SUCCESS) {
+            cairo_t *cr_surf = cairo_create(f->surface);
+            cairo_set_operator(cr_surf, CAIRO_OPERATOR_CLEAR);
+            cairo_paint(cr_surf);
+            cairo_set_operator(cr_surf, CAIRO_OPERATOR_OVER);
+            cairo_scale(cr_surf, (double)surface_w / f->width, (double)surface_h / f->height);
+
+#if LIBRSVG_CHECK_VERSION(2,52,0)
+            RsvgRectangle viewport = {0.0, 0.0, f->width, f->height};
+            GError *err = NULL;
+            if (!rsvg_handle_render_document(f->handle, cr_surf, &viewport, &err)) {
+                fprintf(stderr, "Render error: %s\n", err ? err->message : "unknown");
+                g_clear_error(&err);
+            }
+#else
+            rsvg_handle_render_cairo(f->handle, cr_surf);
+#endif
+
+            cairo_destroy(cr_surf);
+            cairo_surface_flush(f->surface);
+            f->rendered = TRUE;
+            f->cached_zoom_scale = zoom_scale;
+            f->cached_raster_scale = raster_scale;
+            f->cached_win_w = win_w;
+            f->cached_content_h = content_h;
+            f->cached_stretch_mode = stretch_mode;
+        } else {
+            fprintf(stderr, "Surface creation failed: %s\n",
+                    cairo_status_to_string(cairo_surface_status(f->surface)));
+            svg_frame_clear_surface(f);
+        }
+    }
+    evict_distant_handles(seq);
+    evict_distant_surfaces(seq);
+
     cairo_save(cr);
     cairo_rectangle(cr, 0, toolbar_h, win_w, content_h);
     cairo_clip(cr);
 
     cairo_translate(cr, ox + pan_x, toolbar_h + oy + pan_y);
-    if (stretch_mode) {
-        cairo_scale(cr, sx, sy);
+
+    if (f->surface && f->rendered) {
+        /* The cache is supersampled; map its physical pixels back to the
+         * viewer's logical coordinate space with Cairo's quality filter. */
+        cairo_scale(cr, 1.0 / f->cached_raster_scale,
+                    1.0 / f->cached_raster_scale);
+        cairo_set_source_surface(cr, f->surface, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+        cairo_paint(cr);
     } else {
-        cairo_scale(cr, s, s);
-    }
+        if (stretch_mode) {
+            cairo_scale(cr, sx, sy);
+        } else {
+            cairo_scale(cr, s, s);
+        }
 
 #if LIBRSVG_CHECK_VERSION(2,52,0)
-    RsvgRectangle viewport = {0.0, 0.0, f->width, f->height};
-    GError *err = NULL;
-    if (!rsvg_handle_render_document(f->handle, cr, &viewport, &err)) {
-        fprintf(stderr, "Render error: %s\n", err ? err->message : "unknown");
-        g_clear_error(&err);
-    }
+        RsvgRectangle viewport = {0.0, 0.0, f->width, f->height};
+        GError *err = NULL;
+        if (!rsvg_handle_render_document(f->handle, cr, &viewport, &err)) {
+            fprintf(stderr, "Render error: %s\n", err ? err->message : "unknown");
+            g_clear_error(&err);
+        }
 #else
-    rsvg_handle_render_cairo(f->handle, cr);
+        rsvg_handle_render_cairo(f->handle, cr);
 #endif
+    }
 
     cairo_restore(cr);
 }
@@ -887,6 +999,13 @@ void svg_sequence_set_handle_cache_radius(SvgSequence *seq, int radius)
     evict_distant_handles(seq);
 }
 
+void svg_sequence_set_surface_cache_radius(SvgSequence *seq, int radius)
+{
+    if (!seq) return;
+    seq->surface_cache_radius = radius;
+    evict_distant_surfaces(seq);
+}
+
 void svg_sequence_free(SvgSequence *seq)
 {
     if (!seq) return;
@@ -901,6 +1020,7 @@ void svg_sequence_free(SvgSequence *seq)
     seq->current_index = 0;
     seq->playing = FALSE;
     seq->handle_cache_radius = SVG_SEQUENCE_DEFAULT_HANDLE_CACHE_RADIUS;
+    seq->surface_cache_radius = SVG_SEQUENCE_DEFAULT_SURFACE_CACHE_RADIUS;
 
     if (png_paths) {
         for (guint i = 0; i < png_paths->len; i++) {

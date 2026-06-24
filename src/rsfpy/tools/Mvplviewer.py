@@ -18,7 +18,7 @@ __doc__ = """
     \t    Fill the converted SVG canvas. Accepts matplotlib-like short names
     \t    (r, b, k), common names (red, blue), and #rgb/#rgba/#rrggbb/#rrggbbaa.
 
-    \tfont=, fontfamily=, fontsz=, fontcolor=, fontfat=/fontwidth=/fontweight=
+    \tfont=, fontfamily=, fontsz=, fontcolor=, fontfat=/fontweight=
     \t    Global text defaults. More specific title*/label*/barlabel*/
     \t    scalebar* options override these values.
 
@@ -81,22 +81,33 @@ CONVERTER_PREFIXES = (
     "grid",
 )
 
-CONVERTER_SUFFIXES = (
+TEXT_PREFIXES = {"font", "label", "title", "barlabel", "scalebar"}
+LINE_PREFIXES = {"frame", "axis", "grid"}
+
+TEXT_SUFFIXES = (
     "color",
     "col",
     "sz",
     "size",
     "fat",
-    "width",
     "weight",
+)
+
+LINE_SUFFIXES = (
+    "color",
+    "col",
+    "fat",
+    "width",
 )
 
 CONVERTER_OPTION_NAMES = {"bgcolor", "border", "font", "fontfamily"}
 
 for _prefix in CONVERTER_PREFIXES:
-    for _suffix in CONVERTER_SUFFIXES:
+    _suffixes = TEXT_SUFFIXES if _prefix in TEXT_PREFIXES else LINE_SUFFIXES
+    for _suffix in _suffixes:
         CONVERTER_OPTION_NAMES.add(_prefix + _suffix)
-    CONVERTER_OPTION_NAMES.add(_prefix + "family")
+    if _prefix in TEXT_PREFIXES:
+        CONVERTER_OPTION_NAMES.add(_prefix + "family")
 
 CONVERTER_OPTION_FLAGS = {"--" + name for name in CONVERTER_OPTION_NAMES}
 

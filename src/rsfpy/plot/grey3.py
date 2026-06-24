@@ -9,6 +9,7 @@ from typing import Optional, Union
 import sys
 from .grey import grey
 from .wiggle import wiggle
+from .display import downsample_image
 from ..utils import _version_compare
 from ..version import __BASE_AX_NAME, __AX1_HLINE_NAME, __AX2_HLINE_NAME, __AX3_HLINE_NAME, __AX1_VLINE_NAME, __AX2_VLINE_NAME, __AX3_VLINE_NAME, __FRAME1_LABEL_NAME, __FRAME2_LABEL_NAME, __FRAME3_LABEL_NAME, __AX1_NAME, __AX2_NAME, __AX3_NAME
 import matplotlib.transforms as transforms
@@ -288,9 +289,10 @@ def grey3flat(
         wiggle(slice3, ax=ax3, clip=clip, show=False, transp=False, yreverse=False, **wigparas)
         colorbar=False
     else:
-        grey(slice1, ax=ax1, cmap=cmap, vmin=vmin, vmax=vmax, show=False, zorder=1)
-        grey(slice2, ax=ax2, cmap=cmap, vmin=vmin, vmax=vmax, show=False, zorder=1)
-        grey(slice3, ax=ax3, cmap=cmap, vmin=vmin, vmax=vmax, show=False, transp=False, yreverse=False, zorder=1)
+        gain = plot_params.get('gain')
+        grey(slice1, ax=ax1, cmap=cmap, vmin=vmin, vmax=vmax, gain=gain, show=False, zorder=1)
+        grey(slice2, ax=ax2, cmap=cmap, vmin=vmin, vmax=vmax, gain=gain, show=False, zorder=1)
+        grey(slice3, ax=ax3, cmap=cmap, vmin=vmin, vmax=vmax, gain=gain, show=False, transp=False, yreverse=False, zorder=1)
 
         im1 = ax1.images[0]
         im2 = ax2.images[0]
@@ -650,8 +652,13 @@ def grey3cube(
     ax1.set_label("Axes 1 [n1, n2]")
     gattr.ax1 = ax1
 
-    im0 = ax1.imshow(slice1, aspect="auto", extent=extents[0],
-                     cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
+    gain = None if data.dtype == np.uint8 else plot_params.get("gain")
+    image_kwargs = {"aspect": "auto", "cmap": cmap, "zorder": 1}
+    if gain is None:
+        image_kwargs.update({"vmin": vmin, "vmax": vmax})
+    else:
+        image_kwargs["norm"] = gain.norm()
+    im0 = ax1.imshow(downsample_image(slice1, plot_params.get("max_pixels")), extent=extents[0], **image_kwargs)
     gattr.im1 = im0
 
     ax1.yaxis.set_major_locator(MaxNLocator1(nbins=n1tic))
@@ -664,8 +671,7 @@ def grey3cube(
     ax2.set_label("Axes 3 [n1, n3]")
     gattr.ax2 = ax2
 
-    im1 = ax2.imshow(slice3.T, aspect="auto", extent=extents[1],
-                     cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
+    im1 = ax2.imshow(downsample_image(slice3.T, plot_params.get("max_pixels")), extent=extents[1], **image_kwargs)
     gattr.im2 = im1
  
     im1.set_transform(dtrans1 + ax2.transAxes)
@@ -681,8 +687,7 @@ def grey3cube(
     ax3.set_label("Axes 2 [n2, n3]")
     gattr.ax3 = ax3
 
-    im2 = ax3.imshow(slice2, aspect="auto", extent=extents[2],
-                     cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
+    im2 = ax3.imshow(downsample_image(slice2, plot_params.get("max_pixels")), extent=extents[2], **image_kwargs)
     im2.set_transform(dtrans2 + ax3.transAxes)
     gattr.im3 = im2
     #
