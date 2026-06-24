@@ -49,6 +49,7 @@ __doc__ = """
 """
 
 import os
+import re
 import sys
 import shlex
 import shutil
@@ -98,6 +99,25 @@ for _prefix in CONVERTER_PREFIXES:
     CONVERTER_OPTION_NAMES.add(_prefix + "family")
 
 CONVERTER_OPTION_FLAGS = {"--" + name for name in CONVERTER_OPTION_NAMES}
+
+
+def strip_split_markers(svg):
+    return re.sub(br'(?m)^<!-- RSFPY_SPLIT[^\n]*-->\n?', b"", svg)
+
+
+def split_svg_frames(svg):
+    parts = re.split(br'(?=<!-- RSFPY_SPLIT\b)', svg)
+    frames = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        part = strip_split_markers(part).strip()
+        if part:
+            frames.append(part + b"\n")
+    if not frames and svg.strip():
+        frames.append(strip_split_markers(svg).strip() + b"\n")
+    return frames
 
 
 def converter_command():
@@ -351,10 +371,7 @@ def main():
         show_help(0)
 
     args, key_value_converter_args = split_vpl_args(raw_args)
-    converter_args = (
-        collect_env_converter_args()
-        + key_value_converter_args
-    )
+    converter_args = collect_env_converter_args() + key_value_converter_args
     stdin_data = None
 
     stdname = _get_stdname()

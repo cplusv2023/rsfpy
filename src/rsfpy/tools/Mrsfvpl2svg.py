@@ -30,7 +30,6 @@ __doc__ = """
 """
 
 import os
-import re
 import sys
 from textwrap import dedent
 from subprocess import run
@@ -130,27 +129,8 @@ def read_source(path, stdin_data):
     return title, data, path
 
 
-def strip_split_markers(svg):
-    return re.sub(br'(?m)^<!-- RSFPY_SPLIT[^\n]*-->\n?', b"", svg)
-
-
-def split_svg_frames(svg):
-    parts = re.split(br'(?=<!-- RSFPY_SPLIT\b)', svg)
-    frames = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        part = strip_split_markers(part).strip()
-        if part:
-            frames.append(part + b"\n")
-    if not frames and svg.strip():
-        frames.append(strip_split_markers(svg).strip() + b"\n")
-    return frames
-
-
 def sequence_frames(title, source_path, svg):
-    frames = split_svg_frames(svg)
+    frames = vplviewer.split_svg_frames(svg)
     chunks = []
     total = len(frames)
 
@@ -214,12 +194,12 @@ def main():
             svg = convert_source(cmd, converter_args, title, data, source_path)
 
             if inp == "-":
-                frames = split_svg_frames(svg) if standard else [svg]
+                frames = vplviewer.split_svg_frames(svg) if standard else [svg]
                 write_stdout(frames[0] if standard else svg)
                 continue
 
             if standard:
-                frames = split_svg_frames(svg)
+                frames = vplviewer.split_svg_frames(svg)
                 if len(frames) <= 1:
                     write_file(out, frames[0] if frames else b"")
                 else:

@@ -1377,14 +1377,16 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
     VplState st;
     unsigned char cmd;
     int current_frame = 0;
+    bool frame_has_content = false;
+    bool any_content = false;
     state_init(&st);
     if (saw_content) *saw_content = false;
 
     while (r_u8(r, &cmd)) {
         int a, b, c, d, n, i;
         char *s = NULL;
-        bool active = (target_frame < 0 || current_frame == target_frame) &&
-                      !in_frame_number_group(&st);
+        bool drawable = !in_frame_number_group(&st);
+        bool active = (target_frame < 0 || current_frame == target_frame) && drawable;
         switch (cmd) {
             case VP_SETSTYLE:
                 if (!r_u8(r, &cmd)) return false;
@@ -1396,6 +1398,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 break;
             case VP_DRAW:
                 if (!r_i16(r, &a) || !r_i16(r, &b)) return false;
+                if (drawable) {
+                    frame_has_content = true;
+                    any_content = true;
+                }
                 if (active) {
                     if (saw_content) *saw_content = true;
                     if (emit) emit_line(ctx, &st, st.x, st.y, a, b);
@@ -1419,6 +1425,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     pts[2 * i + 1] = b;
                 }
                 for (i = 1; i < n; i++) {
+                    if (drawable) {
+                        frame_has_content = true;
+                        any_content = true;
+                    }
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) emit_line(ctx, &st, pts[2 * (i - 1)], pts[2 * (i - 1) + 1], pts[2 * i], pts[2 * i + 1]);
@@ -1435,6 +1445,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 for (i = 0; i < n; i++) {
                     int x, y;
                     if (!r_i16(r, &x) || !r_i16(r, &y)) return false;
+                    if (drawable) {
+                        frame_has_content = true;
+                        any_content = true;
+                    }
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) {
@@ -1456,6 +1470,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 {
                     double pathx, pathy, upx, upy;
                     text_vectors_from_size(a, b, &pathx, &pathy, &upx, &upy);
+                    if (drawable) {
+                        frame_has_content = true;
+                        any_content = true;
+                    }
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
@@ -1468,6 +1486,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 int pathx, pathy, upx, upy;
                 if (!r_i16(r, &pathx) || !r_i16(r, &pathy) ||
                     !r_i16(r, &upx) || !r_i16(r, &upy) || !r_cstring(r, &s)) return false;
+                if (drawable) {
+                    frame_has_content = true;
+                    any_content = true;
+                }
                 if (active) {
                     if (saw_content) *saw_content = true;
                     if (emit) {
@@ -1500,6 +1522,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     pts[2 * i] = a;
                     pts[2 * i + 1] = b;
                 }
+                if (drawable) {
+                    frame_has_content = true;
+                    any_content = true;
+                }
                 if (active) {
                     if (saw_content) *saw_content = true;
                     if (emit) emit_polygon(ctx, &st, pts, n, true, false);
@@ -1521,6 +1547,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     }
                     pts[2 * i] = a;
                     pts[2 * i + 1] = b;
+                }
+                if (drawable) {
+                    frame_has_content = true;
+                    any_content = true;
                 }
                 if (active) {
                     if (saw_content) *saw_content = true;
@@ -1544,6 +1574,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     !r_i16(r, &x0) || !r_i16(r, &y0) ||
                     !r_i16(r, &x1) || !r_i16(r, &y1) ||
                     !r_i16(r, &xpix) || !r_i16(r, &ypix)) return false;
+                if (drawable) {
+                    frame_has_content = true;
+                    any_content = true;
+                }
                 if (active) {
                     if (saw_content) *saw_content = true;
                     if (emit) {
@@ -1560,8 +1594,13 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 break;
             }
             case VP_BREAK:
+                st.group_depth = 0;
+                break;
             case VP_ERASE:
-                current_frame++;
+                if (frame_has_content) {
+                    current_frame++;
+                    frame_has_content = false;
+                }
                 st.group_depth = 0;
                 break;
             case VP_PURGE:
@@ -1647,6 +1686,10 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 {
                     double pathx, pathy, upx, upy;
                     text_vectors_from_size(a, b, &pathx, &pathy, &upx, &upy);
+                    if (drawable) {
+                        frame_has_content = true;
+                        any_content = true;
+                    }
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
@@ -1659,7 +1702,9 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 die("invalid VPL command 0x%02x at byte %zu", cmd, r->pos - 1);
         }
     }
-    if (frame_count_out) *frame_count_out = current_frame + 1;
+    if (frame_count_out) {
+        *frame_count_out = any_content ? current_frame + (frame_has_content ? 1 : 0) : 1;
+    }
     return true;
 }
 
