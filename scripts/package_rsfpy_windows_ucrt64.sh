@@ -6,7 +6,7 @@ if [[ "${MSYSTEM:-}" != "UCRT64" ]]; then
     exit 1
 fi
 
-VERSION="${VERSION:-0.1.4}"
+VERSION="${VERSION:-1.0.0}"
 CC="${CC:-cc}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTDIR="${OUTDIR:-$ROOT/dist/rsfpy-viewer-win64-$VERSION}"
@@ -122,7 +122,8 @@ log "Copying GLib/GIO helper executables"
 for f in \
     gspawn-win64-helper.exe \
     gspawn-win64-helper-console.exe \
-    gdbus.exe
+    gdbus.exe \
+    vulkan-1.dll
 do
     copy_if_exists "$UCRT/bin/$f" "$OUTDIR/$f"
 done
@@ -223,6 +224,7 @@ if [[ -x "$OUTDIR/gdk-pixbuf-query-loaders.exe" &&
     (
         cd "$OUTDIR"
         export PATH="$PWD:$PATH"
+        export GSK_RENDERER=cairo
         export GDK_PIXBUF_MODULEDIR="$(cygpath -w "$PWD/lib/gdk-pixbuf-2.0/2.10.0/loaders")"
         ./gdk-pixbuf-query-loaders.exe \
             > "$PWD/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"

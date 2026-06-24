@@ -45,7 +45,7 @@ def compile_executable(name, sources, packages, output, extra_ldflags=None):
             + ", ".join(str(src) for src in missing_sources)
         )
 
-    pkg_flags = shlex.split(run_pkg_config(packages))
+    pkg_flags = shlex.split(run_pkg_config(packages)) if packages else []
     compiler = shlex.split(os.environ.get("CC", "cc"))
     cflags = shlex.split(os.environ.get("CFLAGS", ""))
     ldflags = shlex.split(os.environ.get("LDFLAGS", ""))
@@ -115,6 +115,15 @@ NATIVE_TOOLS = {
             "gio-2.0",
         ],
     },
+    "vpl2svg": {
+        "sources": [
+            TOOLS_DIR / "vpl2svg.c",
+        ],
+        "packages": [],
+        "ldflags": [
+            "-lm",
+        ],
+    },
 }
 
 
@@ -142,7 +151,7 @@ def build_native_tools(target_dir, required=False):
     for name, spec in NATIVE_TOOLS.items():
         output = target_dir / name
         sources = list(spec["sources"])
-        extra_ldflags = []
+        extra_ldflags = list(spec.get("ldflags", []))
         if sys.platform == "darwin":
             sources.extend(spec.get("darwin_sources", []))
             extra_ldflags.extend(spec.get("darwin_ldflags", []))
@@ -172,7 +181,7 @@ def build_native_tools(target_dir, required=False):
         built["svgviewer"] = default_viewer
 
     if required:
-        required_names = {"svgviewer", "rsfclient"}
+        required_names = {"svgviewer", "rsfclient", "vpl2svg"}
         missing = sorted(required_names.difference(built))
         if missing:
             details = "\n".join(
@@ -212,7 +221,7 @@ class BuildNative(Command):
     description = "build optional rsfpy native tools"
     user_options = [
         ("inplace", "i", "build tools into src/rsfpy/bin"),
-        ("required", None, "fail if svgviewer and rsfclient cannot be built"),
+        ("required", None, "fail if svgviewer, rsfclient, and vpl2svg cannot be built"),
     ]
     boolean_options = ["inplace", "required"]
 
@@ -294,6 +303,8 @@ setup(
             "rsfsvgpen = rsfpy.tools.Msvgpen:main",
             "rsfgrey3 = rsfpy.tools.Mpygrey:main",
             "svgviewer = rsfpy.tools.Msvgviewer:main",
+            "vplviewer = rsfpy.tools.Mvplviewer:main",
+            "rsfvpl2svg = rsfpy.tools.Mrsfvpl2svg:main",
             "rsfmath = rsfpy.tools.Mrsfmath:main",
             "rsfclient = rsfpy.tools.Mrsfclient:main",
         ]

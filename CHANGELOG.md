@@ -95,3 +95,54 @@ Finally decided to add this changelog.
 * The X11 backend is still supported, but may be deprecated in a future release.
 * Very large SVG files containing oversized embedded Base64 bitmap data may still fail to load due to librsvg safety limits.
 * Some annotation and zoom interactions may still require further refinement.
+
+## Version 1.0.0 - 2026-06-24
+
+### Added
+
+* Added **RSFPY m8r patch** support as a first-class workflow. Importing `rsfpy.m8r` patches Madagascar `rsf.proj.Plot` and `rsf.proj.Result` so VPL output prefers `vplviewer`, while SVG output prefers `svgviewer`.
+* Added `svgPlot` and `svgResult` helpers for SVG-oriented Madagascar project rules.
+* Added **vplviewer**, a VPL display runner that converts Madagascar VPL streams/files to SVG and then opens them through the RSFPY SVG viewer path.
+* Added **vpl2svg**, a standalone native C VPL-to-SVG converter independent of Madagascar libraries.
+* Added **rsfvpl2svg**, a command-line wrapper for saving VPL conversions as SVG:
+  * default output preserves RSFPY multi-frame SVG sequence markers;
+  * `standard=y` writes ordinary SVG files and splits multi-frame input into numbered files;
+  * `cat=y` concatenates all input frames into one RSFPY multi-frame SVG sequence on stdout.
+* Added `RSFVPLOPTS` for persistent VPL conversion defaults such as `bgcolor=`, `font=`, `fontsz=`, `axiscolor=`, and `gridfat=`.
+* Added VPL text, raster image, multi-frame stream, color table, axis/grid/frame styling, and basic Greek font switching support through `\F9`.
+* Added native handling for common Madagascar VPL output from `grey`, `grey3`, `graph`, `wiggle`, and multi-frame plotting flows.
+* Added grey3 cube/corner support in the new VPL converter, including handling of Madagascar's `corner` group and `VP_BLACK` cleanup semantics.
+* Added a profile-based **rsfclient** GUI for remote display through SSH reverse tunnels.
+* Added paired remote sender configuration for `rsfclient`, including random port selection and token-based send validation.
+* Added Windows packaging support for the viewer/client bundle, including `svgviewer`, `rsfclient`, GTK runtime resources, GLib/GIO helpers, and dependency manifests.
+
+### Changed
+
+* Repositioned RSFPY as a Madagascar / `m8r` patch-style plotting and display package rather than a general Python array API package.
+* Rewrote `README.md` around the patched `Plot` / `Result` workflow, VPL/SVG viewing, VPL-to-SVG conversion, SVG composition, and remote display.
+* Updated project version to **1.0.0**.
+* Changed viewer wrappers to use Madagascar-style argument parsing:
+  * non-`key=value` arguments are treated as input files;
+  * `key=value` arguments are treated as options;
+  * unknown options are ignored;
+  * `--backend` remains supported as a special viewer option.
+* Changed `font=` to act as an alias for `fontfamily=`.
+* Changed `svgviewer` to read invalid or inaccessible non-key arguments permissively instead of raising immediately.
+* Changed `Result(..., suffix='.vpl')` viewing behavior to use the new `vplviewer` display path when available.
+* Improved `svgviewer` GTK UI with a more compact toolbar, icon-based annotation controls, export support, context menu actions, smaller minimum window size, and better stretch/zoom behavior.
+* Improved `rsfclient` profile editing by simplifying basic fields and moving less common SSH/display settings into advanced controls.
+* Improved remote send behavior so `svgviewer` can use `rsfclient` pairing information before falling back to other viewer behavior.
+
+### Fixed
+
+* Fixed bad SVG/VPL input handling so viewer wrappers can show or report conversion errors more consistently.
+* Fixed `rsfclient` send status so tunnel success is not reported before SSH authentication/forwarding is actually usable.
+* Fixed password/askpass cancellation flow so cancelling authentication can disconnect the client workflow.
+* Fixed `svgviewer` exit handling to avoid falling through into the wrong backend after normal quit.
+* Fixed several clipboard/export edge cases in the GTK SVG viewer, with platform-specific SVG/PNG clipboard behavior improved especially on Windows and macOS.
+* Fixed Windows packaging issues around helper executables, GdkPixbuf loaders, GIO modules, and missing runtime DLLs such as `vulkan1.dll`.
+
+### Notes
+
+* `rsfmath` and the lower-level Python/NumPy API remain in the package, but the 1.0.0 user-facing documentation now focuses on Madagascar plotting, VPL/SVG conversion, viewing, and remote display.
+* `cat=y` in `rsfvpl2svg` creates a frame sequence, not one large combined drawing canvas.

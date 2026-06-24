@@ -19,7 +19,7 @@
 
 /* Zoom */
 #define MAX_ZOOM_SCALE 100.00
-#define MIN_ZOOM_SCALE 0.01
+#define MIN_ZOOM_SCALE 0.0001
 
 /* Playback */
 #define MAX_FPS 50

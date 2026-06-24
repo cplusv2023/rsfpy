@@ -33,14 +33,15 @@
 
 #include <stdint.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifdef G_OS_WIN32
 #include <windows.h>
 #include <io.h>
-#include <fcntl.h>
 #endif
 
 #define APP_VERSION "gtk-client-v4-cancel-2026-06-19"
@@ -91,6 +92,7 @@ struct _Profile {
     gchar *backend;
     gchar *save_dir;
     gboolean cleanup_temp_files;
+    gboolean forwarding_warning_shown;
     gchar *extra_ssh_args;
 
     gchar *token_salt;
@@ -113,6 +115,8 @@ struct _Runtime {
     gboolean tunnel_ready;
     gchar *auth_failure_reason;
     gchar *askpass_cancel_path;
+    gchar *askpass_save_path;
+    gchar *lock_path;
     gchar *pair_token;
     GSubprocess *ssh_proc;
 #ifdef G_OS_WIN32
@@ -138,22 +142,19 @@ struct _AppState {
 
     /* form widgets */
     GHashTable *form_entries;
-    GtkWidget *form_backend_combo;
     GtkWidget *form_auth_combo;
-    GtkWidget *form_auth_default_box;
     GtkWidget *form_auth_password_box;
     GtkWidget *form_auth_identity_box;
     GtkWidget *form_password_entry;
     GtkWidget *form_save_password;
-    GtkWidget *form_keep_password;
     GtkWidget *form_advanced_box;
     GtkWidget *form_cleanup_temp_files;
-    GtkWidget *form_keep_token;
-    GtkWidget *form_token_entry;
     GtkWidget *main_connect_button;
     GtkWidget *main_edit_button;
     GtkWidget *main_delete_button;
     Profile *editing_profile;
+    gboolean form_password_modified;
+    gboolean form_password_focus;
 };
 
 /* ---------------------------------------------------------------------- */
@@ -194,6 +195,16 @@ done:
     g_free(base);
     g_strfreev(argv);
     return wants;
+}
+
+static const gchar *profile_viewer_command(Profile *p)
+{
+    (void)p;
+#ifdef G_OS_WIN32
+    return "svgviewer.exe";
+#else
+    return "svgviewer";
+#endif
 }
 
 static gchar *now_string(void)
@@ -433,6 +444,38 @@ static gchar *make_askpass_cancel_path(void)
     return path;
 }
 
+static gchar *make_askpass_save_path(void)
+{
+    gchar *uuid = g_uuid_string_random();
+    gchar *name = g_strdup_printf("rsfclient-askpass-%s.save", uuid);
+    gchar *path = g_build_filename(g_get_tmp_dir(), name, NULL);
+
+    g_free(uuid);
+    g_free(name);
+
+    return path;
+}
+
+static gchar *profile_runtime_lock_path(Profile *p)
+{
+    gchar *key;
+    gchar *safe;
+    gchar *name;
+    gchar *path;
+
+    key = g_strdup_printf("%s@%s",
+                          str_empty(p ? p->user : NULL) ? "default" : p->user,
+                          str_empty(p ? p->host : NULL) ? "unknown" : p->host);
+    safe = safe_name(key);
+    name = g_strdup_printf("rsfclient-%s.lock", safe);
+    path = g_build_filename(g_get_tmp_dir(), name, NULL);
+
+    g_free(name);
+    g_free(safe);
+    g_free(key);
+    return path;
+}
+
 static gchar *default_config_path(void)
 {
     return g_build_filename(g_get_home_dir(), ".rsfpy_config_gtk", NULL);
@@ -499,7 +542,7 @@ static Profile *profile_new_default(void)
     p->user = g_strdup("");
     p->host = g_strdup("");
     p->ssh_port = 22;
-    p->auth_method = g_strdup("default");
+    p->auth_method = g_strdup("password");
     p->password = g_strdup("");
     p->identity_file = g_strdup("");
 
@@ -548,6 +591,7 @@ static Profile *profile_copy(Profile *src)
     CP_STR(backend);
     CP_STR(save_dir);
     p->cleanup_temp_files = src->cleanup_temp_files;
+    p->forwarding_warning_shown = src->forwarding_warning_shown;
     CP_STR(extra_ssh_args);
 
     CP_STR(token_salt);
@@ -753,7 +797,11 @@ static Profile *profile_load_from_group(GKeyFile *kf, const gchar *group)
     SET_STR(user, "user", "");
     SET_STR(host, "host", "");
     p->ssh_port = key_get_int_default(kf, group, "ssh_port", 22);
-    SET_STR(auth_method, "auth_method", "default");
+    SET_STR(auth_method, "auth_method", "password");
+    if (g_strcmp0(p->auth_method, "default") == 0) {
+        g_free(p->auth_method);
+        p->auth_method = g_strdup("password");
+    }
     {
         gchar *stored_password = key_get_string_default(kf, group, "password", "");
         g_free(p->password);
@@ -772,6 +820,7 @@ static Profile *profile_load_from_group(GKeyFile *kf, const gchar *group)
     SET_STR(backend, "backend", "gtk");
     SET_STR(save_dir, "save_dir", "");
     p->cleanup_temp_files = key_get_bool_default(kf, group, "cleanup_temp_files", TRUE);
+    p->forwarding_warning_shown = key_get_bool_default(kf, group, "forwarding_warning_shown", FALSE);
     SET_STR(extra_ssh_args, "extra_ssh_args", "");
 
     SET_STR(token_salt, "token_salt", "");
@@ -816,6 +865,7 @@ static void profile_save_to_keyfile(GKeyFile *kf, Profile *p)
     SET_STR("backend", p->backend);
     SET_STR("save_dir", p->save_dir);
     g_key_file_set_boolean(kf, group, "cleanup_temp_files", p->cleanup_temp_files);
+    g_key_file_set_boolean(kf, group, "forwarding_warning_shown", p->forwarding_warning_shown);
     SET_STR("extra_ssh_args", p->extra_ssh_args);
 
     SET_STR("token_salt", p->token_salt);
@@ -1144,8 +1194,12 @@ static int sender_main(int argc, char **argv)
 typedef struct {
     GtkApplication *app;
     gchar *prompt;
+    gchar *user;
     gchar *cancel_path;
+    gchar *save_path;
     gchar *answer;
+    GtkWidget *ok_button;
+    GtkWidget *save_check;
     guint cancel_source;
     int status;
 } AskpassState;
@@ -1174,10 +1228,26 @@ static void on_askpass_response(GtkButton *button, gpointer data)
     if (entry) {
         g_free(state->answer);
         state->answer = g_strdup(gtk_editable_get_text(GTK_EDITABLE(entry)));
+        if (state->save_check &&
+            gtk_check_button_get_active(GTK_CHECK_BUTTON(state->save_check)) &&
+            !str_empty(state->save_path) &&
+            !str_empty(state->answer)) {
+            g_file_set_contents(state->save_path, state->answer, -1, NULL);
+        }
         state->status = 0;
     }
 
     g_application_quit(G_APPLICATION(state->app));
+}
+
+static void on_askpass_entry_changed(GtkEditable *editable, gpointer data)
+{
+    AskpassState *state = (AskpassState *)data;
+    const gchar *text = gtk_editable_get_text(editable);
+
+    if (state && state->ok_button) {
+        gtk_widget_set_sensitive(state->ok_button, !str_empty(text));
+    }
 }
 
 static void on_askpass_cancel(GtkButton *button, gpointer data)
@@ -1185,6 +1255,9 @@ static void on_askpass_cancel(GtkButton *button, gpointer data)
     AskpassState *state = (AskpassState *)data;
     (void)button;
 
+    if (state && !str_empty(state->cancel_path)) {
+        g_file_set_contents(state->cancel_path, "cancel\n", -1, NULL);
+    }
     state->status = 1;
     g_application_quit(G_APPLICATION(state->app));
 }
@@ -1194,6 +1267,9 @@ static gboolean on_askpass_close(GtkWindow *window, gpointer data)
     AskpassState *state = (AskpassState *)data;
     (void)window;
 
+    if (state && !str_empty(state->cancel_path)) {
+        g_file_set_contents(state->cancel_path, "cancel\n", -1, NULL);
+    }
     state->status = 1;
     g_application_quit(G_APPLICATION(state->app));
 
@@ -1214,8 +1290,8 @@ static void askpass_activate(GtkApplication *gtk_app, gpointer user_data)
     state->app = gtk_app;
 
     window = gtk_application_window_new(gtk_app);
-    gtk_window_set_title(GTK_WINDOW(window), "RSF Client Authentication");
-    gtk_window_set_default_size(GTK_WINDOW(window), 420, 150);
+    gtk_window_set_title(GTK_WINDOW(window), "Confirm your ssh authentication");
+    gtk_window_set_default_size(GTK_WINDOW(window), 420, 190);
     g_signal_connect(window, "close-request", G_CALLBACK(on_askpass_close), state);
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
@@ -1225,19 +1301,37 @@ static void askpass_activate(GtkApplication *gtk_app, gpointer user_data)
     gtk_widget_set_margin_end(box, 12);
     gtk_window_set_child(GTK_WINDOW(window), box);
 
-    label = gtk_label_new(str_empty(state->prompt) ? "SSH authentication required" : state->prompt);
+    label = gtk_label_new("Confirm your ssh authentication");
     gtk_label_set_wrap(GTK_LABEL(label), TRUE);
     gtk_widget_set_halign(label, GTK_ALIGN_START);
+    gtk_widget_add_css_class(label, "title-3");
     gtk_box_append(GTK_BOX(box), label);
 
+    {
+        gchar *user_line = g_strdup_printf("Username: %s",
+                                           str_empty(state->user) ? "(OpenSSH default)" : state->user);
+        GtkWidget *user_label = gtk_label_new(user_line);
+        gtk_widget_set_halign(user_label, GTK_ALIGN_START);
+        gtk_box_append(GTK_BOX(box), user_label);
+        g_free(user_line);
+    }
+
     entry = gtk_password_entry_new();
+    gtk_widget_set_tooltip_text(entry, "Password");
+    g_signal_connect(entry, "changed", G_CALLBACK(on_askpass_entry_changed), state);
     gtk_box_append(GTK_BOX(box), entry);
+
+    state->save_check = gtk_check_button_new_with_label("Save password");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(state->save_check), TRUE);
+    gtk_box_append(GTK_BOX(box), state->save_check);
 
     buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(buttons, GTK_ALIGN_END);
 
     cancel = gtk_button_new_with_label("Cancel");
-    ok = gtk_button_new_with_label("OK");
+    ok = gtk_button_new_with_label("Confirm");
+    state->ok_button = ok;
+    gtk_widget_set_sensitive(ok, FALSE);
     g_object_set_data(G_OBJECT(ok), "password-entry", entry);
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_askpass_cancel), state);
     g_signal_connect(ok, "clicked", G_CALLBACK(on_askpass_response), state);
@@ -1266,7 +1360,9 @@ static int askpass_main(int argc, char **argv)
     }
 
     state.prompt = g_strdup(argc > 1 ? argv[1] : "SSH authentication required");
+    state.user = g_strdup(g_getenv("RSFCLIENT_ASKPASS_USER"));
     state.cancel_path = g_strdup(g_getenv("RSFCLIENT_ASKPASS_CANCEL_FILE"));
+    state.save_path = g_strdup(g_getenv("RSFCLIENT_ASKPASS_SAVE_FILE"));
     state.status = 1;
 
     state.app = gtk_application_new("org.rsfpy.rsfclient.askpass", G_APPLICATION_NON_UNIQUE);
@@ -1285,7 +1381,9 @@ static int askpass_main(int argc, char **argv)
     }
 
     g_free(state.prompt);
+    g_free(state.user);
     g_free(state.cancel_path);
+    g_free(state.save_path);
     g_free(state.answer);
 
     return state.status;
@@ -1670,7 +1768,7 @@ static gboolean open_viewer_idle(gpointer data)
     gint argc = 0;
     int i;
 
-    if (!g_shell_parse_argv(str_empty(p->viewer_cmd) ? "svgviewer" : p->viewer_cmd,
+    if (!g_shell_parse_argv(profile_viewer_command(p),
                             &argc, &base_argv, &err)) {
         app_log(job->rt->app, err ? err->message : "failed to parse viewer command", "error");
         if (err) g_error_free(err);
@@ -1683,7 +1781,7 @@ static gboolean open_viewer_idle(gpointer data)
         g_ptr_array_add(arr, g_strdup(base_argv[i]));
     }
 
-    if (viewer_command_wants_backend_arg(p->viewer_cmd, p->backend)) {
+    if (viewer_command_wants_backend_arg(profile_viewer_command(p), NULL)) {
         g_ptr_array_add(arr, g_strdup("--backend"));
         g_ptr_array_add(arr, g_strdup(p->backend));
     }
@@ -1754,6 +1852,13 @@ static void runtime_set_stopping(Runtime *rt, gboolean v)
     g_mutex_unlock(&rt->lock);
 }
 
+static gboolean runtime_askpass_cancelled(Runtime *rt)
+{
+    return rt &&
+           !str_empty(rt->askpass_cancel_path) &&
+           g_file_test(rt->askpass_cancel_path, G_FILE_TEST_EXISTS);
+}
+
 static void runtime_clear_auth_failure(Runtime *rt)
 {
     g_mutex_lock(&rt->lock);
@@ -1822,10 +1927,8 @@ static gchar **build_ssh_argv(Runtime *rt)
     g_ptr_array_add(arr, g_strdup("ConnectTimeout=10"));
 
     if (g_strcmp0(p->auth_method, "password") == 0) {
-        g_ptr_array_add(arr, g_strdup("-o"));
-        g_ptr_array_add(arr, g_strdup("PreferredAuthentications=password,keyboard-interactive"));
-        g_ptr_array_add(arr, g_strdup("-o"));
-        g_ptr_array_add(arr, g_strdup("PubkeyAuthentication=no"));
+        /* Password is optional in the UI.  Keep OpenSSH defaults so agent /
+           default keys can succeed before askpass is needed. */
     } else if (g_strcmp0(p->auth_method, "identity") == 0 && !str_empty(p->identity_file)) {
         identity_path = expand_home_path(p->identity_file);
         g_ptr_array_add(arr, g_strdup("-i"));
@@ -1963,10 +2066,8 @@ static gchar **build_pair_upload_ssh_argv(Runtime *rt)
     g_ptr_array_add(arr, g_strdup("NumberOfPasswordPrompts=1"));
 
     if (g_strcmp0(p->auth_method, "password") == 0) {
-        g_ptr_array_add(arr, g_strdup("-o"));
-        g_ptr_array_add(arr, g_strdup("PreferredAuthentications=password,keyboard-interactive"));
-        g_ptr_array_add(arr, g_strdup("-o"));
-        g_ptr_array_add(arr, g_strdup("PubkeyAuthentication=no"));
+        /* Password is optional in the UI.  Keep OpenSSH defaults so agent /
+           default keys can succeed before askpass is needed. */
     } else if (g_strcmp0(p->auth_method, "identity") == 0 && !str_empty(p->identity_file)) {
         identity_path = expand_home_path(p->identity_file);
         g_ptr_array_add(arr, g_strdup("-i"));
@@ -2043,7 +2144,8 @@ static gchar *ssh_argv_log_string(gchar **argv)
 
 static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
                                              Profile *p,
-                                             const gchar *askpass_cancel_path);
+                                             const gchar *askpass_cancel_path,
+                                             const gchar *askpass_save_path);
 
 static gboolean upload_pair_config(Runtime *rt)
 {
@@ -2065,7 +2167,9 @@ static gboolean upload_pair_config(Runtime *rt)
         G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
         G_SUBPROCESS_FLAGS_STDERR_PIPE
     );
-    launcher_set_askpass_environment(launcher, rt->profile, rt->askpass_cancel_path);
+    launcher_set_askpass_environment(launcher, rt->profile,
+                                     rt->askpass_cancel_path,
+                                     rt->askpass_save_path);
     proc = g_subprocess_launcher_spawnv(launcher, (const gchar * const *)argv, &err);
     g_object_unref(launcher);
 
@@ -2107,7 +2211,8 @@ done:
 
 static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
                                              Profile *p,
-                                             const gchar *askpass_cancel_path)
+                                             const gchar *askpass_cancel_path,
+                                             const gchar *askpass_save_path)
 {
     const gchar *display;
     const gchar *wayland;
@@ -2121,6 +2226,14 @@ static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
     if (!str_empty(askpass_cancel_path)) {
         g_subprocess_launcher_setenv(launcher, "RSFCLIENT_ASKPASS_CANCEL_FILE",
                                      askpass_cancel_path, TRUE);
+    }
+    if (!str_empty(askpass_save_path)) {
+        g_subprocess_launcher_setenv(launcher, "RSFCLIENT_ASKPASS_SAVE_FILE",
+                                     askpass_save_path, TRUE);
+    }
+    if (p) {
+        g_subprocess_launcher_setenv(launcher, "RSFCLIENT_ASKPASS_USER",
+                                     str_empty(p->user) ? "" : p->user, TRUE);
     }
 
     display = g_getenv("DISPLAY");
@@ -2137,7 +2250,9 @@ static void launcher_set_askpass_environment(GSubprocessLauncher *launcher,
 }
 
 #ifdef G_OS_WIN32
-static gchar **make_askpass_environment(Profile *p, const gchar *askpass_cancel_path)
+static gchar **make_askpass_environment(Profile *p,
+                                        const gchar *askpass_cancel_path,
+                                        const gchar *askpass_save_path)
 {
     gchar **envp = g_get_environ();
     const gchar *display;
@@ -2152,6 +2267,14 @@ static gchar **make_askpass_environment(Profile *p, const gchar *askpass_cancel_
     if (!str_empty(askpass_cancel_path)) {
         envp = g_environ_setenv(envp, "RSFCLIENT_ASKPASS_CANCEL_FILE",
                                 askpass_cancel_path, TRUE);
+    }
+    if (!str_empty(askpass_save_path)) {
+        envp = g_environ_setenv(envp, "RSFCLIENT_ASKPASS_SAVE_FILE",
+                                askpass_save_path, TRUE);
+    }
+    if (p) {
+        envp = g_environ_setenv(envp, "RSFCLIENT_ASKPASS_USER",
+                                str_empty(p->user) ? "" : p->user, TRUE);
     }
 
     display = g_environ_getenv(envp, "DISPLAY");
@@ -2321,7 +2444,9 @@ static gboolean win_spawn_ssh_process(Runtime *rt, gchar **argv, GError **err)
         app_w = g_utf8_to_utf16(resolved_program, -1, NULL, NULL, NULL);
     }
     cmdline_w = g_utf8_to_utf16(cmdline_utf8, -1, NULL, NULL, NULL);
-    envp = make_askpass_environment(rt->profile, rt->askpass_cancel_path);
+    envp = make_askpass_environment(rt->profile,
+                                    rt->askpass_cancel_path,
+                                    rt->askpass_save_path);
     env_block = win_env_block_from_strv(envp);
 
     if ((app_name_is_qualified && !app_w) || !cmdline_w || !env_block) {
@@ -2387,7 +2512,9 @@ static gboolean spawn_ssh_process(Runtime *rt, gchar **argv, GError **err)
         G_SUBPROCESS_FLAGS_STDERR_MERGE
     );
 
-    launcher_set_askpass_environment(launcher, rt->profile, rt->askpass_cancel_path);
+    launcher_set_askpass_environment(launcher, rt->profile,
+                                     rt->askpass_cancel_path,
+                                     rt->askpass_save_path);
 
     proc = g_subprocess_launcher_spawnv(
         launcher,
@@ -2455,6 +2582,56 @@ static gpointer subprocess_wait_thread(gpointer data)
     return NULL;
 }
 
+typedef struct {
+    AppState *app;
+    gchar *profile_name;
+    gchar *password;
+} SaveAskpassPasswordItem;
+
+static gboolean save_askpass_password_idle(gpointer data)
+{
+    SaveAskpassPasswordItem *it = data;
+
+    if (it && it->app && it->app->config &&
+        !str_empty(it->profile_name) && !str_empty(it->password)) {
+        gchar *stored = profile_password_encrypt(it->password);
+        gchar *group = profile_group_name(it->profile_name);
+        g_key_file_set_string(it->app->config, group, "password", stored);
+        g_key_file_set_string(it->app->config, group, "auth_method", "password");
+        app_save_config(it->app);
+        app_log(it->app, "saved SSH password after successful authentication", "success");
+        g_free(group);
+        g_free(stored);
+    }
+
+    if (it) {
+        g_free(it->profile_name);
+        g_free(it->password);
+        g_free(it);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void maybe_save_askpass_password(Runtime *rt)
+{
+    SaveAskpassPasswordItem *it;
+    gchar *password = NULL;
+
+    if (!rt || str_empty(rt->askpass_save_path)) return;
+    if (!g_file_get_contents(rt->askpass_save_path, &password, NULL, NULL)) return;
+    g_strchomp(password);
+    if (str_empty(password)) {
+        g_free(password);
+        return;
+    }
+
+    it = g_new0(SaveAskpassPasswordItem, 1);
+    it->app = rt->app;
+    it->profile_name = g_strdup(rt->profile ? rt->profile->name : "");
+    it->password = password;
+    g_main_context_invoke(NULL, save_askpass_password_idle, it);
+}
+
 static void handle_ssh_output_line(Runtime *rt, const gchar *line)
 {
     gchar *msg;
@@ -2466,6 +2643,7 @@ static void handle_ssh_output_line(Runtime *rt, const gchar *line)
         rt->tunnel_ready = TRUE;
         rt->pair_uploaded = TRUE;
         g_mutex_unlock(&rt->lock);
+        maybe_save_askpass_password(rt);
 
         msg = g_strdup_printf("ssh tunnel established; %s", line);
         app_log(rt->app, msg, "success");
@@ -2551,6 +2729,40 @@ static void start_ssh_output_thread(Runtime *rt)
     if (!rt || !rt->ssh_proc) return;
     g_thread_unref(g_thread_new("ssh-output", ssh_output_thread, rt));
 #endif
+}
+
+static void runtime_free_async(Runtime *rt);
+static void show_start_screen(AppState *app);
+
+typedef struct {
+    AppState *app;
+    Runtime *rt;
+} RuntimeUiCancelItem;
+
+static gboolean askpass_cancel_disconnect_idle(gpointer data)
+{
+    RuntimeUiCancelItem *it = data;
+
+    if (it && it->app && it->rt && it->app->runtime == it->rt) {
+        it->app->runtime = NULL;
+        show_start_screen(it->app);
+        runtime_free_async(it->rt);
+        it->rt = NULL;
+    }
+
+    g_free(it);
+    return G_SOURCE_REMOVE;
+}
+
+static void schedule_askpass_cancel_disconnect(Runtime *rt)
+{
+    RuntimeUiCancelItem *it;
+
+    if (!rt || !rt->app) return;
+    it = g_new0(RuntimeUiCancelItem, 1);
+    it->app = rt->app;
+    it->rt = rt;
+    g_main_context_invoke(NULL, askpass_cancel_disconnect_idle, it);
 }
 
 static void runtime_force_exit_ssh(Runtime *rt)
@@ -2683,6 +2895,16 @@ static gpointer tunnel_thread_func(gpointer data)
 
         g_thread_join(wait_thread);
 
+        if (!runtime_is_stopping(rt) && runtime_askpass_cancelled(rt)) {
+            app_log(rt->app, "SSH authentication was canceled; disconnecting", "info");
+            runtime_set_stopping(rt, TRUE);
+            runtime_clear_ssh_process(rt);
+            g_mutex_clear(&ws.mutex);
+            g_cond_clear(&ws.cond);
+            schedule_askpass_cancel_disconnect(rt);
+            break;
+        }
+
         if (runtime_is_stopping(rt)) {
             runtime_clear_ssh_process(rt);
             g_mutex_clear(&ws.mutex);
@@ -2805,8 +3027,13 @@ static Runtime *runtime_new(AppState *app, Profile *profile)
     rt->ssh_proc = NULL;
     rt->stopping = FALSE;
     rt->askpass_cancel_path = make_askpass_cancel_path();
+    rt->askpass_save_path = make_askpass_save_path();
+    rt->lock_path = profile_runtime_lock_path(rt->profile);
     if (!str_empty(rt->askpass_cancel_path)) {
         g_remove(rt->askpass_cancel_path);
+    }
+    if (!str_empty(rt->askpass_save_path)) {
+        g_remove(rt->askpass_save_path);
     }
     g_mutex_init(&rt->lock);
 
@@ -2819,6 +3046,20 @@ static gboolean runtime_start(Runtime *rt)
     GSocketAddress *saddr;
     GError *err = NULL;
     gboolean ok;
+
+    if (!str_empty(rt->lock_path)) {
+        int fd = g_open(rt->lock_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd < 0) {
+            app_log(rt->app, "this Host/User pair is already connected by another rsfclient instance", "error");
+            return FALSE;
+        }
+        {
+            gchar *pid = g_strdup_printf("%d\n", (int)getpid());
+            write(fd, pid, strlen(pid));
+            g_free(pid);
+        }
+        close(fd);
+    }
 
     rt->listener = g_socket_listener_new();
 
@@ -2906,7 +3147,15 @@ static void runtime_free(Runtime *rt)
     if (!str_empty(rt->askpass_cancel_path)) {
         g_remove(rt->askpass_cancel_path);
     }
+    if (!str_empty(rt->askpass_save_path)) {
+        g_remove(rt->askpass_save_path);
+    }
+    if (!str_empty(rt->lock_path)) {
+        g_remove(rt->lock_path);
+    }
     g_free(rt->askpass_cancel_path);
+    g_free(rt->askpass_save_path);
+    g_free(rt->lock_path);
     g_free(rt->pair_token);
     g_mutex_clear(&rt->lock);
     g_free(rt);
@@ -2989,9 +3238,116 @@ static void clear_main(AppState *app)
     }
 }
 
+static const char *ICON_NEW =
+"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'>"
+"<path fill='currentColor' d='M7.5 4a.5.5 0 0 1 .5.5V7h2.5a.5.5 0 0 1 0 1H8v2.5a.5.5 0 0 1-1 0V8H4.5a.5.5 0 0 1 0-1H7V4.5a.5.5 0 0 1 .5-.5'/>"
+"<path fill='currentColor' fill-rule='evenodd' d='M0 6.4c0-2.24 0-3.36.436-4.22A4.03 4.03 0 0 1 2.186.43c.856-.436 1.98-.436 4.22-.436h2.2c2.24 0 3.36 0 4.22.436c.753.383 1.36.995 1.75 1.75c.436.856.436 1.98.436 4.22v2.2c0 2.24 0 3.36-.436 4.22a4.03 4.03 0 0 1-1.75 1.75c-.856.436-1.98.436-4.22.436h-2.2c-2.24 0-3.36-.436-4.22-.436a4.03 4.03 0 0 1-1.75-1.75C0 11.964 0 10.84 0 8.6zM6.4 1h2.2c1.14 0 1.93 0 2.55.051c.605.05.953.142 1.22.276a3.02 3.02 0 0 1 1.31 1.31c.134.263.226.611.276 1.22c.05.617.051 1.41.051 2.55v2.2c0 1.14 0 1.93-.051 2.55c-.05.605-.142.953-.276 1.22a3 3 0 0 1-1.31 1.31c-.263.134-.611.226-1.22.276c-.617.05-1.41.051-2.55.051H6.4c-1.14 0-1.93 0-2.55-.05c-.605-.05-.953-.143-1.22-.277a3 3 0 0 1-1.31-1.31c-.134-.263-.226-.61-.276-1.22c-.05-.617-.051-1.41-.051-2.55v-2.2c0-1.14 0-1.93.051-2.55c.05-.605.142-.953.276-1.22a3.02 3.02 0 0 1 1.31-1.31c.263-.134.611-.226 1.22-.276C4.467 1.001 5.26 1 6.4 1'/>"
+"</svg>";
+
+static const char *ICON_CONNECT =
+"<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+"<path fill='currentColor' d='M18.01 14.06c.26 0 .51-.1.71-.29l2.48-2.47c.47-.47.73-1.1.73-1.77s-.26-1.3-.73-1.77l-1.77-1.77l2.12-2.12l-1.41-1.41l-2.12 2.12l-1.77-1.77c-.98-.97-2.56-.97-3.54 0l-2.47 2.47a.996.996 0 0 0 0 1.41l7.07 7.07c.2.2.45.29.71.29Zm-3.89-9.84c.13-.13.28-.15.35-.15s.23.02.35.15l4.95 4.95c.13.13.15.28.15.35s-.02.23-.15.35L18 11.64l-5.66-5.66l1.77-1.77Zm-1.06 8.13l-2.12 2.12l-1.41-1.41l2.12-2.12l-1.41-1.41l-2.12 2.12l-1.41-1.41a.996.996 0 0 0-1.41 0l-2.48 2.47c-.47.47-.73 1.1-.73 1.77s.26 1.3.73 1.77l1.77 1.77l-2.12 2.12l1.41 1.41L6 19.43l1.77 1.77c.49.49 1.13.73 1.77.73s1.28-.24 1.77-.73l2.47-2.47a.996.996 0 0 0 0-1.41l-1.41-1.41l2.12-2.12l-1.41-1.41Zm-3.18 7.42c-.13.13-.28.15-.35.15s-.23-.02-.35-.15l-4.95-4.95c-.13-.13-.15-.28-.15-.35s.02-.23.15-.35L6 12.35l3.54 3.54l1.41 1.41l.71.71l-1.77 1.77Z'/>"
+"</svg>";
+
+static const char *ICON_DELETE =
+"<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+"<path fill='currentColor' d='M7 21q-.825 0-1.412-.587T5 19V6H4V4h5V3h6v1h5v2h-1v13q0 .825-.587 1.413T17 21zM17 6H7v13h10zM9 17h2V8H9zm4 0h2V8h-2z'/>"
+"</svg>";
+
+static const char *ICON_EDIT =
+"<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+"<g fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2'><path d='M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7'/><path d='M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z'/></g>"
+"</svg>";
+
+static const char *ICON_QUIT =
+"<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+"<path fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M15 4.001H5v14a2 2 0 0 0 2 2h8m1-5l3-3m0 0l-3-3m3 3H9'/>"
+"</svg>";
+
+static const char *ICON_CANCEL =
+"<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 1024 1024'>"
+"<path fill='currentColor' d='M832.6 191.4c-84.6-84.6-221.5-84.6-306 0l-96.9 96.9l51 51l96.9-96.9c53.8-53.8 144.6-59.5 204 0c59.5 59.5 53.8 150.2 0 204l-96.9 96.9l51.1 51.1l96.9-96.9c84.4-84.6 84.4-221.5-.1-306.1M446.5 781.6c-53.8 53.8-144.6 59.5-204 0c-59.5-59.5-53.8-150.2 0-204l96.9-96.9l-51.1-51.1l-96.9 96.9c-84.6 84.6-84.6 221.5 0 306s221.5 84.6 306 0l96.9-96.9l-51-51zM260.3 209.4a8.03 8.03 0 0 0-11.3 0L209.4 249a8.03 8.03 0 0 0 0 11.3l554.4 554.4c3.1 3.1 8.2 3.1 11.3 0l39.6-39.6c3.1-3.1 3.1-8.2 0-11.3z'/>"
+"</svg>";
+
+static gchar *resolve_svg_current_color(const gchar *svg)
+{
+    const gchar *needle = "currentColor";
+    const gchar *p = svg;
+    const gchar *match;
+    GString *out;
+
+    if (!svg) return NULL;
+    out = g_string_new(NULL);
+    while ((match = strstr(p, needle)) != NULL) {
+        g_string_append_len(out, p, match - p);
+        g_string_append(out, "#202124");
+        p = match + strlen(needle);
+    }
+    g_string_append(out, p);
+    return g_string_free(out, FALSE);
+}
+
+static GtkWidget *image_from_svg(const gchar *svg)
+{
+    GError *err = NULL;
+    GdkPixbufLoader *loader;
+    GdkPixbuf *pixbuf;
+    GtkWidget *image;
+    gchar *resolved;
+
+    if (!svg) return NULL;
+    resolved = resolve_svg_current_color(svg);
+    loader = gdk_pixbuf_loader_new_with_type("svg", &err);
+    if (!loader) {
+        g_clear_error(&err);
+        g_free(resolved);
+        return NULL;
+    }
+    if (!resolved ||
+        !gdk_pixbuf_loader_write(loader, (const guchar *)resolved, strlen(resolved), &err) ||
+        !gdk_pixbuf_loader_close(loader, &err)) {
+        g_clear_error(&err);
+        g_object_unref(loader);
+        g_free(resolved);
+        return NULL;
+    }
+    pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+    image = pixbuf ? gtk_image_new_from_pixbuf(pixbuf) : NULL;
+    g_object_unref(loader);
+    g_free(resolved);
+    return image;
+}
+
 static GtkWidget *make_button(const gchar *label, GCallback cb, gpointer data)
 {
     GtkWidget *b = gtk_button_new_with_label(label);
+    const gchar *icon_svg = NULL;
+
+    if (g_strcmp0(label, "Connect") == 0 || g_strcmp0(label, "Save && Connect") == 0) {
+        icon_svg = ICON_CONNECT;
+    } else if (g_strcmp0(label, "New") == 0) {
+        icon_svg = ICON_NEW;
+    } else if (g_strcmp0(label, "Edit") == 0) {
+        icon_svg = ICON_EDIT;
+    } else if (g_strcmp0(label, "Delete") == 0) {
+        icon_svg = ICON_DELETE;
+    } else if (g_strcmp0(label, "Quit") == 0) {
+        icon_svg = ICON_QUIT;
+    } else if (g_strcmp0(label, "Cancel") == 0) {
+        icon_svg = ICON_CANCEL;
+    } else if (g_strcmp0(label, "Save") == 0) {
+        icon_svg = ICON_EDIT;
+    }
+
+    if (icon_svg) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+        GtkWidget *img = image_from_svg(icon_svg);
+        GtkWidget *txt = gtk_label_new(label);
+        if (img) gtk_box_append(GTK_BOX(box), img);
+        gtk_box_append(GTK_BOX(box), txt);
+        gtk_button_set_child(GTK_BUTTON(b), box);
+    }
+
     g_signal_connect(b, "clicked", cb, data);
     return b;
 }
@@ -3036,7 +3392,7 @@ static void form_add_entry(AppState *app, GtkWidget *grid, int row,
                            const gchar *key, const gchar *label,
                            const gchar *value)
 {
-    GtkWidget *l = form_label_new(label, FALSE);
+    GtkWidget *l = form_label_new(label, TRUE);
     GtkWidget *e = entry_new_text(value);
 
     gtk_grid_attach(GTK_GRID(grid), l, 0, row, 1, 1);
@@ -3047,11 +3403,13 @@ static void form_add_entry(AppState *app, GtkWidget *grid, int row,
 
 typedef struct {
     GtkWidget *entry;
+    GtkWidget *combo;
     gboolean folder;
 } BrowseButtonData;
 
 typedef struct {
     GtkWidget *entry;
+    GtkWidget *combo;
 } BrowseResponseData;
 
 static void on_browse_response(GtkNativeDialog *dialog, gint response, gpointer data)
@@ -3064,6 +3422,10 @@ static void on_browse_response(GtkNativeDialog *dialog, gint response, gpointer 
             gchar *path = g_file_get_path(file);
             if (!str_empty(path)) {
                 gtk_editable_set_text(GTK_EDITABLE(d->entry), path);
+                if (d->combo && GTK_IS_COMBO_BOX_TEXT(d->combo)) {
+                    gtk_combo_box_text_prepend_text(GTK_COMBO_BOX_TEXT(d->combo), path);
+                    gtk_combo_box_set_active(GTK_COMBO_BOX(d->combo), 0);
+                }
             }
             g_free(path);
             g_object_unref(file);
@@ -3072,6 +3434,9 @@ static void on_browse_response(GtkNativeDialog *dialog, gint response, gpointer 
 
     if (d && d->entry) {
         g_object_unref(d->entry);
+    }
+    if (d && d->combo) {
+        g_object_unref(d->combo);
     }
     g_free(d);
     g_object_unref(dialog);
@@ -3121,6 +3486,7 @@ static void on_browse_clicked(GtkButton *button, gpointer data)
 
     rd = g_new0(BrowseResponseData, 1);
     rd->entry = g_object_ref(bd->entry);
+    rd->combo = bd->combo ? g_object_ref(bd->combo) : NULL;
     g_signal_connect(dialog, "response", G_CALLBACK(on_browse_response), rd);
     gtk_native_dialog_show(GTK_NATIVE_DIALOG(dialog));
 }
@@ -3129,13 +3495,14 @@ static void form_add_browse_entry(AppState *app, GtkWidget *grid, int row,
                                   const gchar *key, const gchar *label,
                                   const gchar *value, gboolean folder)
 {
-    GtkWidget *l = form_label_new(label, FALSE);
+    GtkWidget *l = form_label_new(label, TRUE);
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *e = entry_new_text(value);
     GtkWidget *browse = gtk_button_new_with_label("Browse");
     BrowseButtonData *bd = g_new0(BrowseButtonData, 1);
 
     bd->entry = e;
+    bd->combo = NULL;
     bd->folder = folder;
 
     gtk_widget_set_hexpand(e, TRUE);
@@ -3170,6 +3537,322 @@ static void form_add_key_entry(AppState *app, GtkWidget *grid, int row,
     g_hash_table_insert(app->form_entries, g_strdup(key), e);
 }
 
+typedef struct {
+    gchar *alias;
+    gchar *host;
+    gchar *user;
+    gint port;
+    gchar *identity_file;
+} SshConfigHost;
+
+static void ssh_config_host_free(SshConfigHost *h)
+{
+    if (!h) return;
+    g_free(h->alias);
+    g_free(h->host);
+    g_free(h->user);
+    g_free(h->identity_file);
+    g_free(h);
+}
+
+static GPtrArray *scan_ssh_config_hosts(void)
+{
+    GPtrArray *hosts = g_ptr_array_new_with_free_func((GDestroyNotify)ssh_config_host_free);
+    gchar *path = g_build_filename(g_get_home_dir(), ".ssh", "config", NULL);
+    gchar *content = NULL;
+    gchar **lines = NULL;
+    SshConfigHost *cur = NULL;
+
+    if (!g_file_get_contents(path, &content, NULL, NULL)) {
+        g_free(path);
+        return hosts;
+    }
+
+    lines = g_strsplit(content, "\n", -1);
+    for (int i = 0; lines && lines[i]; i++) {
+        gchar *line = g_strstrip(lines[i]);
+        gchar **parts;
+
+        if (str_empty(line) || line[0] == '#') continue;
+        parts = g_strsplit_set(line, " \t", 2);
+        if (!parts[0] || !parts[1]) {
+            g_strfreev(parts);
+            continue;
+        }
+
+        if (g_ascii_strcasecmp(parts[0], "Host") == 0) {
+            gchar **aliases = g_strsplit_set(g_strstrip(parts[1]), " \t", -1);
+            cur = NULL;
+            for (int j = 0; aliases && aliases[j]; j++) {
+                if (str_empty(aliases[j]) || strchr(aliases[j], '*') || strchr(aliases[j], '?')) continue;
+                cur = g_new0(SshConfigHost, 1);
+                cur->alias = g_strdup(aliases[j]);
+                cur->port = 0;
+                g_ptr_array_add(hosts, cur);
+                break;
+            }
+            g_strfreev(aliases);
+        } else if (cur && g_ascii_strcasecmp(parts[0], "HostName") == 0) {
+            g_free(cur->host);
+            cur->host = g_strdup(g_strstrip(parts[1]));
+        } else if (cur && g_ascii_strcasecmp(parts[0], "User") == 0) {
+            g_free(cur->user);
+            cur->user = g_strdup(g_strstrip(parts[1]));
+        } else if (cur && g_ascii_strcasecmp(parts[0], "Port") == 0) {
+            cur->port = atoi(g_strstrip(parts[1]));
+        } else if (cur && g_ascii_strcasecmp(parts[0], "IdentityFile") == 0) {
+            g_free(cur->identity_file);
+            cur->identity_file = g_strdup(g_strstrip(parts[1]));
+        }
+
+        g_strfreev(parts);
+    }
+
+    g_strfreev(lines);
+    g_free(content);
+    g_free(path);
+    return hosts;
+}
+
+static void collect_identity_files(GPtrArray *items)
+{
+    gchar *dir_path = g_build_filename(g_get_home_dir(), ".ssh", NULL);
+    GDir *dir = g_dir_open(dir_path, 0, NULL);
+    const gchar *name;
+
+    if (!dir) {
+        g_free(dir_path);
+        return;
+    }
+
+    while ((name = g_dir_read_name(dir)) != NULL) {
+        gchar *path;
+
+        if (g_str_has_suffix(name, ".pub") ||
+            g_str_has_suffix(name, ".old") ||
+            g_str_has_suffix(name, ".bak") ||
+            g_strcmp0(name, "config") == 0 ||
+            g_strcmp0(name, "known_hosts") == 0 ||
+            g_str_has_prefix(name, "known_hosts")) {
+            continue;
+        }
+
+        if (!(g_str_has_prefix(name, "id_") ||
+              g_str_has_suffix(name, ".pem") ||
+              g_str_has_suffix(name, ".key"))) {
+            continue;
+        }
+
+        path = g_build_filename(dir_path, name, NULL);
+        if (g_file_test(path, G_FILE_TEST_IS_REGULAR)) {
+            g_ptr_array_add(items, path);
+        } else {
+            g_free(path);
+        }
+    }
+
+    g_dir_close(dir);
+    g_free(dir_path);
+}
+
+static GtkWidget *combo_text_entry(GtkWidget *combo)
+{
+    GtkWidget *child = gtk_combo_box_get_child(GTK_COMBO_BOX(combo));
+    return child && GTK_IS_EDITABLE(child) ? child : NULL;
+}
+
+static GtkWidget *form_add_combo_entry(AppState *app, GtkWidget *grid, int row,
+                                       const gchar *key, const gchar *label,
+                                       const gchar *value,
+                                       gboolean important)
+{
+    GtkWidget *l = form_label_new(label, important);
+    GtkWidget *combo = gtk_combo_box_text_new_with_entry();
+    GtkWidget *entry = combo_text_entry(combo);
+
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), value ? value : "");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    if (entry) {
+        gtk_editable_set_text(GTK_EDITABLE(entry), value ? value : "");
+        if (important) gtk_widget_add_css_class(entry, "key-entry");
+        g_hash_table_insert(app->form_entries, g_strdup(key), entry);
+    }
+
+    gtk_grid_attach(GTK_GRID(grid), l, 0, row, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), combo, 1, row, 1, 1);
+    return combo;
+}
+
+static void on_host_combo_changed(GtkComboBox *combo, gpointer data)
+{
+    AppState *app = (AppState *)data;
+    GPtrArray *hosts = g_object_get_data(G_OBJECT(combo), "ssh-config-hosts");
+    gint active = gtk_combo_box_get_active(combo);
+    SshConfigHost *h;
+
+    if (!hosts || active <= 0 || (guint)(active - 1) >= hosts->len) return;
+    h = g_ptr_array_index(hosts, (guint)(active - 1));
+    if (!h) return;
+
+    if (!str_empty(h->alias)) {
+        GtkWidget *e = g_hash_table_lookup(app->form_entries, "host");
+        if (e) gtk_editable_set_text(GTK_EDITABLE(e), h->alias);
+    }
+    if (!str_empty(h->user)) {
+        GtkWidget *e = g_hash_table_lookup(app->form_entries, "password_user");
+        if (e) gtk_editable_set_text(GTK_EDITABLE(e), h->user);
+        e = g_hash_table_lookup(app->form_entries, "identity_user");
+        if (e) gtk_editable_set_text(GTK_EDITABLE(e), h->user);
+    }
+    if (h->port > 0) {
+        GtkWidget *e = g_hash_table_lookup(app->form_entries, "ssh_port");
+        gchar *s = g_strdup_printf("%d", h->port);
+        if (e) gtk_editable_set_text(GTK_EDITABLE(e), s);
+        g_free(s);
+    }
+    if (!str_empty(h->identity_file)) {
+        GtkWidget *e = g_hash_table_lookup(app->form_entries, "identity_file");
+        if (e) gtk_editable_set_text(GTK_EDITABLE(e), h->identity_file);
+    }
+}
+
+static void form_add_host_entry(AppState *app, GtkWidget *grid, int row,
+                                const gchar *value)
+{
+    GtkWidget *combo = form_add_combo_entry(app, grid, row, "host", "Host",
+                                           value, TRUE);
+    GPtrArray *hosts = scan_ssh_config_hosts();
+
+    for (guint i = 0; i < hosts->len; i++) {
+        SshConfigHost *h = g_ptr_array_index(hosts, i);
+        if (h && !str_empty(h->alias)) {
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), h->alias);
+        }
+    }
+
+    g_object_set_data_full(G_OBJECT(combo), "ssh-config-hosts", hosts,
+                           (GDestroyNotify)g_ptr_array_unref);
+    g_signal_connect(combo, "changed", G_CALLBACK(on_host_combo_changed), app);
+}
+
+static void form_add_identity_entry(AppState *app, GtkWidget *grid, int row,
+                                    const gchar *value)
+{
+    GtkWidget *l = form_label_new("Identity file", TRUE);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *combo = gtk_combo_box_text_new_with_entry();
+    GtkWidget *entry = combo_text_entry(combo);
+    GtkWidget *browse = gtk_button_new_with_label("Browse");
+    BrowseButtonData *bd = g_new0(BrowseButtonData, 1);
+    GPtrArray *items = g_ptr_array_new_with_free_func(g_free);
+
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), value ? value : "");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    if (entry) {
+        gtk_editable_set_text(GTK_EDITABLE(entry), value ? value : "");
+        gtk_widget_set_hexpand(entry, TRUE);
+        g_hash_table_insert(app->form_entries, g_strdup("identity_file"), entry);
+    }
+
+    collect_identity_files(items);
+    for (guint i = 0; i < items->len; i++) {
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo),
+                                       g_ptr_array_index(items, i));
+    }
+    g_ptr_array_unref(items);
+
+    bd->entry = entry;
+    bd->combo = combo;
+    bd->folder = FALSE;
+    g_object_set_data_full(G_OBJECT(browse), "browse-data", bd, g_free);
+    g_signal_connect(browse, "clicked", G_CALLBACK(on_browse_clicked), app);
+
+    gtk_widget_set_hexpand(combo, TRUE);
+    gtk_box_append(GTK_BOX(box), combo);
+    gtk_box_append(GTK_BOX(box), browse);
+
+    gtk_grid_attach(GTK_GRID(grid), l, 0, row, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), box, 1, row, 1, 1);
+}
+
+#define PASSWORD_PLACEHOLDER "*******************"
+
+static void password_entry_set_silent(GtkWidget *entry, const gchar *text)
+{
+    g_object_set_data(G_OBJECT(entry), "rsfclient-silent-change", GINT_TO_POINTER(1));
+    gtk_editable_set_text(GTK_EDITABLE(entry), text ? text : "");
+    g_object_set_data(G_OBJECT(entry), "rsfclient-silent-change", NULL);
+}
+
+static gboolean form_has_existing_password(AppState *app)
+{
+    return app && app->editing_profile && !str_empty(app->editing_profile->password);
+}
+
+static void on_form_password_changed(GtkEditable *editable, gpointer data)
+{
+    AppState *app = (AppState *)data;
+    const gchar *text;
+
+    if (!app || !form_has_existing_password(app)) return;
+    if (g_object_get_data(G_OBJECT(editable), "rsfclient-silent-change")) return;
+    if (!app->form_password_focus) return;
+
+    text = gtk_editable_get_text(editable);
+    app->form_password_modified = !str_empty(text);
+}
+
+static void on_form_password_focus_enter(GtkEventControllerFocus *controller,
+                                         gpointer data)
+{
+    AppState *app = (AppState *)data;
+    GtkWidget *entry = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
+
+    if (!app || !entry) return;
+    app->form_password_focus = TRUE;
+
+    if (form_has_existing_password(app) &&
+        !app->form_password_modified &&
+        g_strcmp0(entry_text(entry), PASSWORD_PLACEHOLDER) == 0) {
+        password_entry_set_silent(entry, "");
+    }
+}
+
+static void on_form_password_focus_leave(GtkEventControllerFocus *controller,
+                                         gpointer data)
+{
+    AppState *app = (AppState *)data;
+    GtkWidget *entry = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
+
+    if (!app || !entry) return;
+    app->form_password_focus = FALSE;
+
+    if (form_has_existing_password(app) &&
+        !app->form_password_modified &&
+        str_empty(entry_text(entry))) {
+        password_entry_set_silent(entry, PASSWORD_PLACEHOLDER);
+    }
+}
+
+static GtkWidget *make_managed_password_entry(AppState *app, const gchar *saved_password)
+{
+    GtkWidget *entry = gtk_password_entry_new();
+    GtkEventController *focus = gtk_event_controller_focus_new();
+
+    app->form_password_modified = FALSE;
+    app->form_password_focus = FALSE;
+
+    if (!str_empty(saved_password)) {
+        password_entry_set_silent(entry, PASSWORD_PLACEHOLDER);
+    }
+
+    g_signal_connect(entry, "changed", G_CALLBACK(on_form_password_changed), app);
+    g_signal_connect(focus, "enter", G_CALLBACK(on_form_password_focus_enter), app);
+    g_signal_connect(focus, "leave", G_CALLBACK(on_form_password_focus_leave), app);
+    gtk_widget_add_controller(entry, focus);
+    return entry;
+}
+
 static gchar *form_get(AppState *app, const gchar *key)
 {
     GtkWidget *e = g_hash_table_lookup(app->form_entries, key);
@@ -3193,7 +3876,6 @@ typedef struct {
 } AuthOption;
 
 static const AuthOption AUTH_OPTIONS[] = {
-    {"default", "Default keys / ssh-agent"},
     {"password", "Username / Password"},
     {"identity", "Identity file"},
     {NULL, NULL}
@@ -3225,11 +3907,6 @@ static void update_auth_visibility(AppState *app)
 
     selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(app->form_auth_combo));
     method = auth_method_from_index(selected);
-
-    if (app->form_auth_default_box) {
-        gtk_widget_set_visible(app->form_auth_default_box,
-                               g_strcmp0(method, "default") == 0);
-    }
 
     if (app->form_auth_password_box) {
         gtk_widget_set_visible(app->form_auth_password_box,
@@ -3278,6 +3955,7 @@ static void on_exit_clicked(GtkButton *b, gpointer data)
 }
 
 static void show_run_screen(AppState *app);
+static void connect_profile(AppState *app, Profile *p);
 
 static void on_disconnect_clicked(GtkButton *b, gpointer data)
 {
@@ -3290,6 +3968,122 @@ static void on_disconnect_clicked(GtkButton *b, gpointer data)
     }
 
     show_start_screen(app);
+}
+
+static gboolean is_default_bind_host(const gchar *s)
+{
+    return str_empty(s) ||
+           g_strcmp0(s, "127.0.0.1") == 0 ||
+           g_strcmp0(s, "localhost") == 0;
+}
+
+static gboolean profile_has_custom_forwarding(Profile *p)
+{
+    if (!p) return FALSE;
+    return !is_default_bind_host(p->local_host) ||
+           !is_default_bind_host(p->remote_bind_host) ||
+           p->local_port != 0 ||
+           p->remote_port != 0;
+}
+
+static void finish_save_profile(AppState *app,
+                                Profile *p,
+                                gboolean connect_after,
+                                gboolean save_password)
+{
+    Profile *persisted;
+
+    persisted = profile_copy(p);
+    if (g_strcmp0(persisted->auth_method, "password") != 0 || !save_password) {
+        g_free(persisted->password);
+        persisted->password = g_strdup("");
+    }
+
+    profile_save_to_keyfile(app->config, persisted);
+    profile_free(persisted);
+
+    if (app_save_config(app)) {
+        app_log(app, "profile saved successfully", "success");
+    } else {
+        app_log(app, "failed to save config", "error");
+    }
+
+    if (connect_after) {
+        connect_profile(app, p);
+    } else {
+        show_start_screen(app);
+    }
+
+    profile_free(p);
+}
+
+typedef struct {
+    AppState *app;
+    Profile *profile;
+    gboolean connect_after;
+    gboolean save_password;
+} ForwardWarningState;
+
+static void on_forward_warning_response(GtkDialog *dialog,
+                                        int response,
+                                        gpointer user_data)
+{
+    ForwardWarningState *st = user_data;
+
+    if (st && response == 1) {
+        st->profile->forwarding_warning_shown = TRUE;
+        finish_save_profile(st->app, st->profile, st->connect_after, st->save_password);
+        st->profile = NULL;
+    }
+
+    gtk_window_destroy(GTK_WINDOW(dialog));
+    if (st) {
+        profile_free(st->profile);
+        g_free(st);
+    }
+}
+
+static void show_forward_warning(AppState *app,
+                                 Profile *p,
+                                 gboolean connect_after,
+                                 gboolean save_password)
+{
+    GtkWidget *dialog;
+    GtkWidget *content;
+    GtkWidget *label;
+    ForwardWarningState *st;
+
+    dialog = gtk_dialog_new_with_buttons(
+        "Warning",
+        GTK_WINDOW(app->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Confirm", 1,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        NULL);
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(app->window));
+
+    content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    label = gtk_label_new(
+        "You are changing the local listen or remote reverse address/port.\n"
+        "The recommended setting is 127.0.0.1 with port 0, which lets RSFPY choose a safe random paired port.\n"
+        "Only continue with custom values if you know why the tunnel must bind to those addresses or fixed ports.\n\n"
+        "Do you want to continue?");
+    gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+    gtk_widget_set_margin_top(label, 12);
+    gtk_widget_set_margin_bottom(label, 12);
+    gtk_widget_set_margin_start(label, 12);
+    gtk_widget_set_margin_end(label, 12);
+    gtk_box_append(GTK_BOX(content), label);
+
+    st = g_new0(ForwardWarningState, 1);
+    st->app = app;
+    st->profile = p;
+    st->connect_after = connect_after;
+    st->save_password = save_password;
+    g_signal_connect(dialog, "response", G_CALLBACK(on_forward_warning_response), st);
+    gtk_window_present(GTK_WINDOW(app->window));
+    gtk_window_present(GTK_WINDOW(dialog));
 }
 
 static gboolean profile_validate_for_connect(Profile *p, gchar **message)
@@ -3309,12 +4103,7 @@ static gboolean profile_validate_for_connect(Profile *p, gchar **message)
         return FALSE;
     }
 
-    if (g_strcmp0(p->auth_method, "password") == 0) {
-        if (str_empty(p->user)) {
-            if (message) *message = g_strdup("Username is required for Username / Password authentication.");
-            return FALSE;
-        }
-    } else if (g_strcmp0(p->auth_method, "identity") == 0) {
+    if (g_strcmp0(p->auth_method, "identity") == 0) {
         gchar *identity_path;
         gboolean exists;
 
@@ -3498,6 +4287,8 @@ static void on_delete_profile_clicked(GtkButton *b, gpointer data)
                                          "Cancel",
                                          GTK_RESPONSE_CANCEL,
                                          NULL);
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(app->window));
     content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
     msg = g_strdup_printf("Delete profile \"%s\"?", str_empty(p->name) ? "(unnamed)" : p->name);
     label = gtk_label_new(msg);
@@ -3514,6 +4305,7 @@ static void on_delete_profile_clicked(GtkButton *b, gpointer data)
     g_signal_connect(dialog, "response", G_CALLBACK(on_delete_profile_confirm_response), st);
 
     g_free(msg);
+    gtk_window_present(GTK_WINDOW(app->window));
     gtk_window_present(GTK_WINDOW(dialog));
 }
 
@@ -3561,14 +4353,14 @@ static void show_start_screen(AppState *app)
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 
         app->main_connect_button = make_green_button("Connect", G_CALLBACK(on_connect_clicked), app);
-        app->main_edit_button = make_button("Edit Profile", G_CALLBACK(on_edit_profile_clicked), app);
-        app->main_delete_button = make_button("Delete Profile", G_CALLBACK(on_delete_profile_clicked), app);
+        app->main_edit_button = make_button("Edit", G_CALLBACK(on_edit_profile_clicked), app);
+        app->main_delete_button = make_button("Delete", G_CALLBACK(on_delete_profile_clicked), app);
 
         gtk_box_append(GTK_BOX(box), app->main_connect_button);
-        gtk_box_append(GTK_BOX(box), make_button("New Profile", G_CALLBACK(on_new_profile_clicked), app));
+        gtk_box_append(GTK_BOX(box), make_button("New", G_CALLBACK(on_new_profile_clicked), app));
         gtk_box_append(GTK_BOX(box), app->main_edit_button);
         gtk_box_append(GTK_BOX(box), app->main_delete_button);
-        gtk_box_append(GTK_BOX(box), make_button("Exit", G_CALLBACK(on_exit_clicked), app));
+        gtk_box_append(GTK_BOX(box), make_button("Quit", G_CALLBACK(on_exit_clicked), app));
 
         gtk_box_append(GTK_BOX(app->main_box), box);
     }
@@ -3584,8 +4376,7 @@ static void show_run_screen(AppState *app)
     clear_main(app);
 
     btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_append(GTK_BOX(btns), make_button("Disconnect", G_CALLBACK(on_disconnect_clicked), app));
-    gtk_box_append(GTK_BOX(btns), make_button("Exit", G_CALLBACK(on_exit_clicked), app));
+    gtk_box_append(GTK_BOX(btns), make_button("Cancel", G_CALLBACK(on_disconnect_clicked), app));
     gtk_box_append(GTK_BOX(app->main_box), btns);
 
     app->log_view = gtk_text_view_new();
@@ -3616,8 +4407,6 @@ static void show_run_screen(AppState *app)
 static void save_form_profile(AppState *app, gboolean connect_after)
 {
     Profile *p = profile_new_default();
-    Profile *persisted = NULL;
-    gchar *token;
     gchar *password;
     const gchar *auth_method;
     gboolean save_password = FALSE;
@@ -3639,8 +4428,6 @@ static void save_form_profile(AppState *app, gboolean connect_after)
         GET_STR_FIELD(user, "identity_user");
     } else if (g_strcmp0(p->auth_method, "password") == 0) {
         GET_STR_FIELD(user, "password_user");
-    } else {
-        GET_STR_FIELD(user, "default_user");
     }
 
     GET_STR_FIELD(identity_file, "identity_file");
@@ -3651,7 +4438,6 @@ static void save_form_profile(AppState *app, gboolean connect_after)
     GET_STR_FIELD(remote_bind_host, "remote_bind_host");
     p->remote_port = form_get_int(app, "remote_port", 0);
 
-    GET_STR_FIELD(viewer_cmd, "viewer_cmd");
     GET_STR_FIELD(save_dir, "save_dir");
     GET_STR_FIELD(extra_ssh_args, "extra_ssh_args");
 
@@ -3674,28 +4460,30 @@ static void save_form_profile(AppState *app, gboolean connect_after)
     }
 
     password = g_strdup(entry_text(app->form_password_entry));
-    if (!str_empty(password)) {
-        g_free(p->password);
-        p->password = g_strdup(password);
-    } else if (app->editing_profile &&
-               app->form_keep_password &&
-               gtk_check_button_get_active(GTK_CHECK_BUTTON(app->form_keep_password))) {
+    if (app->editing_profile && !app->form_password_modified) {
         g_free(p->password);
         p->password = strdup0(app->editing_profile->password);
+    } else if (!str_empty(password)) {
+        g_free(p->password);
+        p->password = g_strdup(password);
     }
 
     if (app->form_save_password) {
         save_password = gtk_check_button_get_active(GTK_CHECK_BUTTON(app->form_save_password));
     }
 
+    g_free(p->viewer_cmd);
+    p->viewer_cmd = g_strdup("svgviewer");
     g_free(p->backend);
-    p->backend = g_strdup(gtk_string_object_get_string(
-        gtk_drop_down_get_selected_item(GTK_DROP_DOWN(app->form_backend_combo))
-    ));
+    p->backend = g_strdup("gtk");
 
-    token = g_strdup(entry_text(app->form_token_entry));
-
-    if (!str_empty(token)) {
+    if (app->editing_profile && !str_empty(app->editing_profile->token_hash)) {
+        g_free(p->token_salt);
+        g_free(p->token_hash);
+        p->token_salt = strdup0(app->editing_profile->token_salt);
+        p->token_hash = strdup0(app->editing_profile->token_hash);
+    } else {
+        gchar *token = g_uuid_string_random();
         gchar *salt = make_salt();
         gchar *hash = sha256_hex_with_salt(salt, token);
 
@@ -3703,46 +4491,24 @@ static void save_form_profile(AppState *app, gboolean connect_after)
         g_free(p->token_hash);
         p->token_salt = salt;
         p->token_hash = hash;
-    } else if (app->editing_profile &&
-               gtk_check_button_get_active(GTK_CHECK_BUTTON(app->form_keep_token))) {
-        g_free(p->token_salt);
-        g_free(p->token_hash);
-        p->token_salt = strdup0(app->editing_profile->token_salt);
-        p->token_hash = strdup0(app->editing_profile->token_hash);
+        g_free(token);
     }
 
     if (str_empty(p->name) || str_empty(p->host)) {
         app_log(app, "profile name or host is empty", "error");
         profile_free(p);
         g_free(password);
-        g_free(token);
         return;
     }
 
-    persisted = profile_copy(p);
-    if (g_strcmp0(persisted->auth_method, "password") != 0 || !save_password) {
-        g_free(persisted->password);
-        persisted->password = g_strdup("");
+    if (profile_has_custom_forwarding(p) && !p->forwarding_warning_shown) {
+        show_forward_warning(app, p, connect_after, save_password);
+        g_free(password);
+        return;
     }
 
-    profile_save_to_keyfile(app->config, persisted);
-    profile_free(persisted);
-
-    if (app_save_config(app)) {
-        app_log(app, "profile saved successfully", "success");
-    } else {
-        app_log(app, "failed to save config", "error");
-    }
-
-    if (connect_after) {
-        connect_profile(app, p);
-    } else {
-        show_start_screen(app);
-    }
-
-    profile_free(p);
+    finish_save_profile(app, p, connect_after, save_password);
     g_free(password);
-    g_free(token);
 }
 
 static void on_save_profile_clicked(GtkButton *b, gpointer data)
@@ -3796,10 +4562,8 @@ static void show_profile_form(AppState *app, Profile *existing)
     GtkWidget *advanced_grid;
     GtkWidget *advanced_check;
     GtkWidget *btns;
-    GtkStringList *backend_list;
     GtkStringList *auth_list;
     gchar *svg_temp_dir;
-    guint selected = 0;
     guint i;
     int row;
 
@@ -3830,7 +4594,7 @@ static void show_profile_form(AppState *app, Profile *existing)
     gtk_widget_set_hexpand(basic_grid, TRUE);
 
     form_add_key_entry(app, basic_grid, 0, "name", "Profile name", base->name, "New profile 1");
-    form_add_key_entry(app, basic_grid, 1, "host", "Host", base->host, "example.com or 192.168.1.10");
+    form_add_host_entry(app, basic_grid, 1, base->host);
 
     {
         gchar *s = g_strdup_printf("%d", base->ssh_port);
@@ -3870,24 +4634,6 @@ static void show_profile_form(AppState *app, Profile *existing)
                          G_CALLBACK(on_auth_selected_changed), app);
     }
 
-    app->form_auth_default_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-    {
-        GtkWidget *default_grid = gtk_grid_new();
-        gtk_grid_set_row_spacing(GTK_GRID(default_grid), 6);
-        gtk_grid_set_column_spacing(GTK_GRID(default_grid), 8);
-
-        form_add_entry(app, default_grid, 0, "default_user",
-                       "Username (optional)", base->user);
-
-        {
-            GtkWidget *hint = gtk_label_new("Leave empty to let OpenSSH use the current local login name.");
-            gtk_widget_set_halign(hint, GTK_ALIGN_START);
-            gtk_box_append(GTK_BOX(app->form_auth_default_box), default_grid);
-            gtk_box_append(GTK_BOX(app->form_auth_default_box), hint);
-        }
-    }
-    gtk_grid_attach(GTK_GRID(auth_grid), app->form_auth_default_box, 1, 1, 1, 1);
-
     app->form_auth_password_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     {
         GtkWidget *password_grid = gtk_grid_new();
@@ -3898,7 +4644,7 @@ static void show_profile_form(AppState *app, Profile *existing)
 
         {
             GtkWidget *l = form_label_new("Password", TRUE);
-            app->form_password_entry = gtk_password_entry_new();
+            app->form_password_entry = make_managed_password_entry(app, base->password);
             gtk_grid_attach(GTK_GRID(password_grid), l, 0, 1, 1, 1);
             gtk_grid_attach(GTK_GRID(password_grid), app->form_password_entry, 1, 1, 1, 1);
         }
@@ -3907,17 +4653,10 @@ static void show_profile_form(AppState *app, Profile *existing)
         gtk_check_button_set_active(GTK_CHECK_BUTTON(app->form_save_password),
                                     !str_empty(base->password));
 
-        app->form_keep_password = gtk_check_button_new_with_label("Keep saved password if password is empty");
-        gtk_check_button_set_active(GTK_CHECK_BUTTON(app->form_keep_password),
-                                    existing && !str_empty(existing->password));
-        gtk_widget_set_visible(app->form_keep_password,
-                               existing && !str_empty(existing->password));
-
         gtk_box_append(GTK_BOX(app->form_auth_password_box), password_grid);
         gtk_box_append(GTK_BOX(app->form_auth_password_box), app->form_save_password);
-        gtk_box_append(GTK_BOX(app->form_auth_password_box), app->form_keep_password);
     }
-    gtk_grid_attach(GTK_GRID(auth_grid), app->form_auth_password_box, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(auth_grid), app->form_auth_password_box, 1, 1, 1, 1);
 
     app->form_auth_identity_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     {
@@ -3925,7 +4664,7 @@ static void show_profile_form(AppState *app, Profile *existing)
         gtk_grid_set_row_spacing(GTK_GRID(identity_grid), 6);
         gtk_grid_set_column_spacing(GTK_GRID(identity_grid), 8);
 
-        form_add_browse_entry(app, identity_grid, 0, "identity_file", "Identity file", base->identity_file, FALSE);
+        form_add_identity_entry(app, identity_grid, 0, base->identity_file);
         form_add_entry(app, identity_grid, 1, "identity_user", "Username", base->user);
 
         {
@@ -3935,7 +4674,7 @@ static void show_profile_form(AppState *app, Profile *existing)
         }
         gtk_box_append(GTK_BOX(app->form_auth_identity_box), identity_grid);
     }
-    gtk_grid_attach(GTK_GRID(auth_grid), app->form_auth_identity_box, 1, 3, 1, 1);
+    gtk_grid_attach(GTK_GRID(auth_grid), app->form_auth_identity_box, 1, 2, 1, 1);
 
     gtk_box_append(GTK_BOX(app->main_box), auth_grid);
     update_auth_visibility(app);
@@ -3956,39 +4695,20 @@ static void show_profile_form(AppState *app, Profile *existing)
     row = 0;
     form_add_browse_entry(app, advanced_grid, row++, "ssh_cmd", "SSH executable", base->ssh_cmd, FALSE);
 
-    form_add_entry(app, advanced_grid, row++, "local_host", "Local listen address", base->local_host);
+    form_add_entry(app, advanced_grid, row++, "local_host", "Local listen host", base->local_host);
 
     {
         gchar *s = g_strdup_printf("%d", base->local_port);
-        form_add_entry(app, advanced_grid, row++, "local_port", "Local listen port (0=random)", s);
+        form_add_entry(app, advanced_grid, row++, "local_port", "Local listen port", s);
         g_free(s);
     }
 
-    form_add_entry(app, advanced_grid, row++, "remote_bind_host", "Remote bind address", base->remote_bind_host);
+    form_add_entry(app, advanced_grid, row++, "remote_bind_host", "Host reverse host", base->remote_bind_host);
 
     {
         gchar *s = g_strdup_printf("%d", base->remote_port);
-        form_add_entry(app, advanced_grid, row++, "remote_port", "Remote reverse port (0=random)", s);
+        form_add_entry(app, advanced_grid, row++, "remote_port", "Host reverse port", s);
         g_free(s);
-    }
-
-    form_add_entry(app, advanced_grid, row++, "viewer_cmd", "SVG viewer command", base->viewer_cmd);
-
-    {
-        GtkWidget *l = gtk_label_new("SVG viewer backend");
-        gtk_widget_set_halign(l, GTK_ALIGN_START);
-        gtk_grid_attach(GTK_GRID(advanced_grid), l, 0, row, 1, 1);
-
-        backend_list = gtk_string_list_new((const char *[]){"gtk", "x11", "auto", "none", NULL});
-        if (g_strcmp0(base->backend, "x11") == 0) selected = 1;
-        else if (g_strcmp0(base->backend, "auto") == 0) selected = 2;
-        else if (g_strcmp0(base->backend, "none") == 0) selected = 3;
-        else selected = 0;
-
-        app->form_backend_combo = gtk_drop_down_new(G_LIST_MODEL(backend_list), NULL);
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(app->form_backend_combo), selected);
-        gtk_grid_attach(GTK_GRID(advanced_grid), app->form_backend_combo, 1, row, 1, 1);
-        row++;
     }
 
     form_add_browse_entry(app, advanced_grid, row++, "save_dir", "SVG temp folder", svg_temp_dir, TRUE);
@@ -3999,26 +4719,7 @@ static void show_profile_form(AppState *app, Profile *existing)
 
     form_add_entry(app, advanced_grid, row++, "extra_ssh_args", "Extra SSH arguments", base->extra_ssh_args);
 
-    app->form_keep_token = gtk_check_button_new_with_label("Keep existing token if new token is empty");
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(app->form_keep_token),
-                                existing && !str_empty(existing->token_hash));
-
-    {
-        GtkWidget *label = gtk_label_new("New transfer token, optional");
-        gtk_widget_set_halign(label, GTK_ALIGN_START);
-        gtk_box_append(GTK_BOX(app->form_advanced_box), advanced_grid);
-        gtk_box_append(GTK_BOX(app->form_advanced_box), app->form_keep_token);
-        gtk_box_append(GTK_BOX(app->form_advanced_box), label);
-    }
-
-    app->form_token_entry = gtk_password_entry_new();
-    gtk_box_append(GTK_BOX(app->form_advanced_box), app->form_token_entry);
-
-    {
-        GtkWidget *hint = gtk_label_new("SSH password and key passphrase prompts are handled by the rsfclient GUI. Saved passwords are stored in the rsfclient profile file.");
-        gtk_widget_set_halign(hint, GTK_ALIGN_START);
-        gtk_box_append(GTK_BOX(app->form_advanced_box), hint);
-    }
+    gtk_box_append(GTK_BOX(app->form_advanced_box), advanced_grid);
 
     gtk_box_append(GTK_BOX(app->main_box), app->form_advanced_box);
 

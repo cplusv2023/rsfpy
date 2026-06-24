@@ -1,439 +1,413 @@
-# rsfpy
+# RSFPY
 
-**rsfpy** is a Python toolkit for reading, writing, manipulating, and plotting [Madagascar](https://ahay.org) [RSF (Regularly Sampled Format)](https://ahay.org/wiki/Guide_to_RSF_file_format) scientific datasets.
+RSFPY is a patch-style companion package for
+[Madagascar](https://ahay.org) / `m8r` projects.  Its main job is to make
+Madagascar plotting smoother: VPL figures, SVG figures, local viewing, and
+remote SSH viewing all behave like one workflow.
 
-Built on top of [NumPy](https://numpy.org), it supports efficient slicing, transposing, windowing, and subsampling, while automatically updating RSF metadata such as `n#`, `o#`, `d#`, `label#`, and `unit#` so that axis descriptions remain consistent after data transformations.
+Instead of replacing Madagascar, RSFPY patches `rsf.proj.Plot` and
+`rsf.proj.Result` so existing `SConstruct` projects can keep using familiar
+Madagascar commands while gaining better viewers and SVG/VPL handling.
 
-## ✨ Features
+## What It Adds
 
-* 📂 **RSF data I/O**: read and write RSF header/data files.
-* 🧮 **Array-like manipulation**: slice, transpose, window, and subsample RSF datasets with metadata synchronized automatically.
-* 📈 **Command-line plotting**: generate SVG figures using tools such as `rsfgrey`, `rsfgraph`, `rsfwiggle`, and `rsfgrey3`.
-* 🖊 **SVG composition**: combine, overlay, and arrange SVG figures using `rsfsvgpen`.
-* 🖥 **Lightweight SVG viewing**: view generated SVG figures locally with `svgviewer`.
-* 🔁 **Remote display workflow**: send SVG figures from an SSH server back to your local machine using `rsfclient`.
-* 🌍 **Applications**: geophysics, signal processing, seismic imaging, and scientific visualization.
-* 🤝 **Community driven**: the project is still growing, and contributions are welcome.
+- `vplviewer`: view Madagascar VPL output directly.
+- `svgviewer`: view SVG output, including RSFPY multi-frame SVG sequences.
+- `rsfclient`: local GUI receiver for showing figures generated on a remote SSH server.
+- `vpl2svg`: native VPL-to-SVG conversion used by the viewer tools.
+- `rsfvpl2svg`: command-line VPL-to-SVG wrapper for saving converted SVG files.
+- `rsfsvgpen`: SVG composition helper for overlaying, arranging, and combining figures.
+- `rsfpy.m8r`: patch module that makes Madagascar `Plot`, `Result`, `svgPlot`, and `svgResult` prefer the RSFPY display path.
 
-## 📦 Installation
+## Install
 
-It is strongly recommended to use a virtual Python environment to isolate dependencies and ensure reproducibility.
+From this repository:
 
 ```bash
 pip install .
 ```
 
-Install Python requirements by:
+For development:
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-## 📚 Requirements
+RSFPY builds and installs its native display tools as part of the normal package workflow.  The viewer/client stack expects GTK, librsvg, Cairo, GLib/GIO, and standard build tools to be available on Unix-like systems.
 
-### Python requirements
-
-* Python >= 3
-* NumPy
-* Matplotlib
-* Optional: `lxml`, required only for `rsfsvgpen`
-
-### Optional native tools
-
-rsfpy includes optional native tools for SVG viewing and remote display.
-
-| Tool            | Purpose                                                              | Required?                             |
-| --------------- | -------------------------------------------------------------------- | ------------------------------------- |
-| `svgviewer`     | Open SVG figures locally                                             | Optional, but recommended             |
-| `svgviewer-gtk` | GTK4 backend for SVG viewing                                         | Optional native backend               |
-| `svgviewer-x11` | X11 fallback backend for SVG viewing                                 | Optional native backend               |
-| `rsfclient`     | Receive SVG figures from remote SSH servers and display them locally | Optional, useful for remote workflows |
-
-At least one SVG viewer backend should be available if you want to use `svgviewer`.
-
-## 🖥 Why is there an `rsfclient`?
-
-Many rsfpy workflows are run on a remote Linux server, workstation, or HPC node through SSH. In that situation, plotting commands such as:
+### macOS
 
 ```bash
-rsfgrey < data.rsf > figure.svg
-svgviewer figure.svg
+brew install pkgconf gtk4 librsvg cairo glib libx11
+pip install -e .
 ```
 
-may generate the SVG file successfully, but displaying it can be inconvenient because:
-
-* the remote server may not have a graphical desktop;
-* X11 forwarding can be slow or unavailable;
-* Windows users may not have an X server installed;
-* generated figures are often temporary and only need to be viewed locally;
-* repeatedly copying SVG files from the server to the local computer interrupts the workflow.
-
-`rsfclient` solves this by running a small receiver on your local machine. It opens an SSH reverse tunnel so that the remote server can send SVG data back to your local computer.
-
-The workflow is:
-
-```text
-Remote server
-    rsfgrey / rsfgraph / rsfwiggle
-        |
-        v
-    SVG data
-        |
-        v
-    rsfclient --send
-        |
-        v
-SSH reverse tunnel
-        |
-        v
-Local machine
-    rsfclient receiver
-        |
-        v
-    svgviewer
-```
-
-In short:
-
-* `svgviewer` is the local SVG viewer.
-* `rsfclient` is the local receiver for remote SVG display.
-* `rsfclient --send` is the remote-side sender.
-* Local-only users do not need `rsfclient`.
-
-A typical remote usage example is:
-
-```bash
-sfspike n1=100 | rsfgraph | rsfclient --send
-```
-
-If you use a custom port:
-
-```bash
-sfspike n1=100 | rsfgraph | rsfclient --send --port 17891
-```
-
-For shared servers, each user should use a different remote port, for example:
-
-```bash
-export RSFVIEW_PORT=17891
-```
-
-and then send figures by:
-
-```bash
-sfspike n1=100 | rsfgraph | rsfclient --send --port "$RSFVIEW_PORT"
-```
-
-If a transfer token is enabled in the local client, set:
-
-```bash
-export RSFVIEW_TOKEN=your_token
-```
-
-Then:
-
-```bash
-sfspike n1=100 | rsfgraph | rsfclient --send --port "$RSFVIEW_PORT"
-```
-
-## 🧩 Native dependencies for SVG viewer/client
-
-The SVG viewer has two optional native backends:
-
-* `svgviewer-gtk`: GTK4 backend, preferred when available;
-* `svgviewer-x11`: X11 backend, fallback backend.
-
-The remote display client `rsfclient` uses GTK for its local GUI.
-
-### Ubuntu / Debian
-
-For the GTK4 backend and client:
-
-```bash
-sudo apt update
-sudo apt install build-essential pkg-config \
-    libgtk-4-dev librsvg2-dev libcairo2-dev libglib2.0-dev
-```
-
-For the X11 fallback backend:
-
-```bash
-sudo apt install build-essential pkg-config \
-    libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
-```
-
-To support both GTK4 and X11:
-
-```bash
-sudo apt install build-essential pkg-config \
-    libgtk-4-dev libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
-```
-
-### macOS / Homebrew
-
-For the GTK4 backend and client:
-
-```bash
-brew install pkgconf gtk4 librsvg cairo glib
-```
-
-For the X11 fallback backend:
-
-```bash
-brew install pkgconf libx11 cairo librsvg glib
-```
-
-On Apple Silicon Macs, if `pkg-config` cannot find Homebrew packages, set:
+On Apple Silicon, make sure Homebrew's `pkg-config` files are visible:
 
 ```bash
 export PATH="/opt/homebrew/bin:$PATH"
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-Then verify:
+### Ubuntu / Debian
 
 ```bash
-pkg-config --exists gtk4 && echo "gtk4 ok"
-pkg-config --exists librsvg-2.0 && echo "librsvg ok"
+sudo apt update
+sudo apt install build-essential pkg-config \
+    libgtk-4-dev librsvg2-dev libcairo2-dev libglib2.0-dev libx11-dev
+
+pip install -e .
 ```
 
 ### Windows
 
-For normal Python usage, install rsfpy as usual.
-
-For the standalone viewer/client, download the Windows viewer client package from the project release page, for example:
-
-```text
-rsfpy-viewer-client-win64-*.zip
-```
-
-Extract the whole directory and run:
+Use the packaged RSFPY viewer/client bundle for normal Windows viewing.  Keep the extracted directory intact and run:
 
 ```cmd
-rsfclient.bat
+rsfclient.exe
 ```
 
-Do not move individual `.exe` files out of the extracted directory, because the GTK runtime files, DLLs, `lib/`, `share/`, and `etc/` directories are required.
+The bundled `rsfclient.exe`, `svgviewer.exe`, DLLs, `lib/`, `share/`, and `etc/` directories are one runtime package.
 
-## 🚀 Quick start
+## Patch Madagascar Projects
 
-### Command-line plotting tools
+In an `SConstruct`, import RSFPY's m8r patch before using `Plot` or `Result`:
 
-Two main plotting components are provided:
+```python
+from rsf.proj import *
+from rsfpy.m8r import *
+```
 
-* `rsfgrey`, including variants such as `rsfgraph`, `rsfwiggle`, and `rsfgrey3`;
-* `rsfsvgpen`, used to concatenate, merge, overlay, or arrange SVG figures.
+Then write normal Madagascar plotting rules:
 
-Each command-line tool is self-documented. Run the command without arguments to view its usage.
+```python
+Flow('spike', None, 'spike n1=1001 d1=0.004 o1=-2 k1=500')
+Plot('graph', 'spike', 'bandpass flo=5 fhi=6 | window min1=-0.5 max1=0.5 | graph')
+Result('graph', 'spike', 'bandpass flo=5 fhi=6 | window min1=-0.5 max1=0.5 | graph')
+End()
+```
+
+With the patch loaded, VPL output is viewed through `vplviewer` when available.  SVG output is viewed through `svgviewer`.
+
+For direct SVG products:
+
+```python
+svgPlot('fig_svg', 'spike', 'graph | rsfvpl2svg')
+svgResult('fig_svg', 'spike', 'graph | rsfvpl2svg')
+```
+
+## RSFPY Plotting Commands
+
+RSFPY also provides SVG-oriented plotting commands that mirror common Madagascar plotting habits while producing SVG directly through Matplotlib-based renderers.
+
+| Command | Use it for |
+| --- | --- |
+| `rsfgrey` | 2-D grey/color image plots for regularly sampled RSF data. |
+| `rsfgraph` | 1-D curves and trace plots. |
+| `rsfwiggle` | Seismic-style wiggle plots. |
+| `rsfgrey3` | 3-D cube-style views for volume data. |
+
+These commands are useful when you want SVG output directly:
 
 ```bash
-rsfgrey < test/dat.test > test1.svg
-rsfwiggle < test/dat.test pcolor=r ncolor=b transp=y zplot=2 > test2.svg
+sfspike n1=1001 d1=4e-3 o1=-2 k1=500 |
+sfbandpass flo=5 fhi=6 |
+sfwindow min1=-0.5 max1=0.5 |
+rsfgraph > graph.svg
 
-rsfsvgpen < test1.svg test2.svg mode=overlay bgcolor=w > overlay.svg
-rsfsvgpen < test1.svg test2.svg mode=grid ncol=1 > rows.svg
-rsfsvgpen < test1.svg test2.svg mode=grid nrow=1 > cols.svg
-
-svgviewer < rows.svg cols.svg
+svgviewer graph.svg
 ```
 
-You can also use other SVG viewers, such as a web browser or Inkscape. `svgviewer` is provided only for convenience and for smoother rsfpy workflows.
+### rsfgrey
 
-![svgviewer-wavefield snapshot](https://raw.githubusercontent.com/cplusv2023/something/046a5760218bfccde34c9e0231e776eaa9be1e2c/sources/wfl_demo.gif)
+`rsfgrey` draws 2-D sampled data as a grey or color image:
 
-![svgviewer](./img/cols.png)
-
-## 🐍 Python API
-
-### Import
-
-```python
-from rsfpy.array import Rsfarray
+```bash
+sfspike n1=128 n2=128 k1=64 k2=64 |
+rsfgrey title="Impulse" color=j > grey.svg
 ```
 
-### Read RSF data
+It is the direct-SVG counterpart for image-style RSF plots, with familiar parameters such as labels, titles, color maps, clipping, bias, and frame styling.
 
-Read from an RSF file path:
+### rsfgraph
 
-```python
-rarray = Rsfarray("./dat.test")
+`rsfgraph` draws 1-D traces and curves:
+
+```bash
+sfspike n1=1001 d1=4e-3 o1=-2 k1=500 |
+sfbandpass flo=5 fhi=6 |
+sfwindow min1=-0.5 max1=0.5 |
+rsfgraph title="Bandpassed spike" label1="Time" unit1=s > graph.svg
 ```
 
-Read from a file object:
+Use it for line plots, trace comparison, and quick inspection of sampled signals.
 
-```python
-with open("./test/dat.test") as fp:
-    rarray = Rsfarray(fp)
+### rsfwiggle
+
+`rsfwiggle` draws wiggle plots for seismic-style sections:
+
+```bash
+sfspike n1=256 n2=32 k1=80 |
+rsfwiggle title="Wiggle" transp=y > wiggle.svg
 ```
 
-### Initialize from NumPy ndarray
+It is useful when polarity, trace shape, and lateral trace spacing matter more than a raster image.
 
-```python
-import numpy as np
-from rsfpy.array import Rsfarray
+### rsfgrey3
 
-narray = np.array([1, 2, 3])
+`rsfgrey3` draws cube-style views for 3-D data:
 
-rarray = Rsfarray(
-    narray,
-    header={
-        "d1": 1,
-        "o1": 0,
-        "label1": "X",
-        "unit1": "",
-    },
-    history="Ndarray [1, 2, 3]",
-)
+```bash
+sfspike n1=64 n2=64 n3=32 k1=32 k2=32 k3=16 |
+rsfgrey3 title="Cube" frame1=32 frame2=32 frame3=16 > grey3.svg
 ```
 
-### Empty array and override
+Use it for quick 3-D volume inspection.  For Madagascar VPL cube output, use `vplviewer` or `rsfvpl2svg`; for direct SVG cube output, use `rsfgrey3`.
 
-```python
-empty = Rsfarray()
-empty.read("./test/dat.test")
+The SVG outputs from these commands can be opened directly:
+
+```bash
+svgviewer grey.svg graph.svg wiggle.svg grey3.svg
 ```
 
-### Write RSF data
+or composed with `rsfsvgpen`:
 
-Write to an RSF file:
-
-```python
-rarray.write(
-    "./test/saved.test",  # header file
-    out="stdin",          # data path; "stdin" or None means append to header file
-    form="ascii",         # use "native" for binary
-    fmt="%.4e",           # ASCII data format, default is "%f"
-)
+```bash
+rsfsvgpen grey.svg graph.svg mode=grid ncol=1 > panel.svg
+svgviewer panel.svg
 ```
 
-Write to file-like objects:
+## View VPL Output
 
-```python
-import io
+Pipe VPL from Madagascar into `vplviewer`:
 
-meta = io.StringIO()
-dat = io.BytesIO()
-
-rarray.write(meta, out=dat)
+```bash
+sfspike n1=1001 d1=4e-3 o1=-2 k1=500 |
+sfbandpass flo=5 fhi=6 |
+sfwindow min1=-0.5 max1=0.5 |
+sfgraph |
+vplviewer
 ```
 
-### Use Rsfarray properties
+Open VPL files:
 
-```python
-data = Rsfarray("./test/dat.test")
-
-# Axis objects
-taxis, xaxis = data.axis1, data.axis2
-taxis, xaxis = data.axis([0, 1])
-
-# Sampling parameters
-nt, dt, ot = data.n1, data.d1, data.o1
-nx, dx, ox = data.n2, data.d2, data.o2
-
-label1, unit1 = data.label1, data.unit1
-label2, unit2 = data.label2, data.unit2
-
-# Or use compact accessors
-nt, nx = data.n([0, 1])
-dt, dx = data.d([0, 1])
+```bash
+vplviewer graph.vpl
+vplviewer grey.vpl grey3.vpl
 ```
 
-### Transpose while preserving metadata
+Set conversion options with Madagascar-style `key=value` arguments:
 
-```python
-print("before transpose:", data.label1, data.label2)
-
-data_t = data.T
-
-print("after transpose:", data_t.label1, data_t.label2)
+```bash
+vplviewer graph.vpl bgcolor=w font=Helvetica fontsz=14 axiscolor=k
+vplviewer grey3.vpl bgcolor=k fontcolor=w axiscolor=#ff5555 axisfat=3
 ```
 
-### Window data while preserving metadata
+Defaults can be supplied through `RSFVPLOPTS`:
 
-```python
-print("before window:", data.d1, data.o1)
-
-data1 = data.window("j1=5 f1=100")
-# or
-data1 = data.window(j1=5, f1=100)
-
-print("after window:", data1.d1, data1.o1)
+```bash
+export RSFVPLOPTS='bgcolor=w font=Helvetica fontsz=14'
+vplviewer graph.vpl
 ```
 
-### Plotting with Matplotlib
+Useful VPL/SVG conversion options include:
 
-```python
-import matplotlib.pyplot as plt
-from rsfpy.array import Rsfarray
+- `bgcolor=white`, `bgcolor=k`, `bgcolor=#ffffff`
+- `font=Helvetica`, `fontfamily="Times New Roman"`
+- `fontsz=14`, `fontcolor=k`, `fontfat=2`
+- `labelsz=12`, `labelcolor=#333333`
+- `titlecolor=red`, `titlesz=16`
+- `framecolor=k`, `framefat=2`
+- `axiscolor=k`, `axisfat=2`
+- `gridcolor=#cccccc`, `gridfat=1`
 
-data = Rsfarray("./test/dat.test")
+## Convert VPL To SVG
 
-fig, ax = plt.subplots(2, 1, figsize=(6, 8))
+`rsfvpl2svg` is the save-to-file version of the VPL viewer conversion path.
 
-data.grey(
-    cmap="seismic",
-    show=False,
-    ax=ax[0],
-    colorbar=True,
-    title="Grey plot",
-)
+Convert one file:
 
-data.wiggle(
-    transp=True,
-    yreverse=True,
-    show=False,
-    ax=ax[1],
-    colorbar=True,
-    title="Wiggle plot",
-    zplot=2.0,
-)
-
-fig.set_tight_layout(True)
-plt.show()
+```bash
+rsfvpl2svg graph.vpl
 ```
 
-![Grey/wiggle image plot](./img/figure1.png)
+This writes:
 
-## 🔁 Remote display examples
+```text
+graph.svg
+```
 
-Start the local client on your computer:
+Choose an output path:
+
+```bash
+rsfvpl2svg graph.vpl graph.svg
+```
+
+Convert multiple files:
+
+```bash
+rsfvpl2svg graph.vpl grey.vpl grey3.vpl
+```
+
+Use conversion options:
+
+```bash
+rsfvpl2svg grey3.vpl bgcolor=w font=Helvetica axisfat=2
+```
+
+Read from stdin and write SVG to stdout:
+
+```bash
+sfspike n1=100 | sfgraph | rsfvpl2svg > graph.svg
+```
+
+If stdout is a terminal, RSFPY refuses to dump raw SVG text and prints:
+
+```text
+You don't want to dump plain svg-text to terminal.
+```
+
+### Standard SVG Output
+
+By default, RSFPY preserves its multi-frame SVG sequence markers:
+
+```bash
+rsfvpl2svg grey_10frames.vpl
+```
+
+Use `standard=y` to write ordinary SVG files:
+
+```bash
+rsfvpl2svg grey_10frames.vpl standard=y
+```
+
+For multi-frame VPL input, this writes:
+
+```text
+grey_10frames_1.svg
+grey_10frames_2.svg
+...
+grey_10frames_10.svg
+```
+
+For stdin with `standard=y`, only the first frame is written to stdout:
+
+```bash
+sfspike n1=100 | sfgraph | rsfvpl2svg standard=y > first.svg
+```
+
+### Concatenate Frames
+
+`cat=y` has priority over `standard=y`.  It converts every input frame and writes a single RSFPY multi-frame SVG sequence to stdout:
+
+```bash
+rsfvpl2svg graph.vpl grey_10frames.vpl cat=y > sequence.svg
+svgviewer sequence.svg
+```
+
+This is a frame sequence, not a single large drawing canvas.
+
+## View SVG Output
+
+Open SVG files:
+
+```bash
+svgviewer graph.svg
+svgviewer graph.svg grey.svg
+```
+
+Pipe SVG:
+
+```bash
+sfspike n1=100 | sfgraph | rsfvpl2svg | svgviewer
+```
+
+Force a backend:
+
+```bash
+svgviewer backend=gtk graph.svg
+svgviewer --backend gtk graph.svg
+svgviewer --backend x11 graph.svg
+```
+
+The wrappers use Madagascar-style argument parsing: `key=value` values are options, and non-`key=value` values are input files.
+
+## Compose SVG Figures
+
+`rsfsvgpen` combines SVG figures after they have been generated.
+
+Overlay:
+
+```bash
+rsfsvgpen graph.svg wiggle.svg mode=overlay bgcolor=w > overlay.svg
+```
+
+Grid:
+
+```bash
+rsfsvgpen graph.svg grey.svg mode=grid ncol=1 > stacked.svg
+rsfsvgpen graph.svg grey.svg mode=grid nrow=1 > side_by_side.svg
+```
+
+View the result:
+
+```bash
+svgviewer stacked.svg
+```
+
+## Remote Display With rsfclient
+
+Run `rsfclient` on the local machine:
 
 ```bash
 rsfclient
 ```
 
-or on Windows:
+Create or select an SSH profile and connect.  RSFPY sets up a paired reverse tunnel and writes a small pairing file on the remote side when possible.  Remote commands can then send SVG or VPL-derived SVG back to the local viewer.
 
-```cmd
-rsfclient.bat
-```
-
-Configure an SSH profile, connect, and then run plotting commands on the remote server:
+From the remote shell:
 
 ```bash
-sfspike n1=100 | rsfgraph | rsfclient --send
+sfspike n1=100 | sfgraph | svgviewer
 ```
 
-If multiple users share the same server, use a unique port:
+or:
 
 ```bash
-sfspike n1=100 | rsfgraph | rsfclient --send --port 17891
+sfspike n1=100 | sfgraph | rsfvpl2svg | svgviewer
 ```
 
-If a token is required:
+The remote `svgviewer` first tries the paired `rsfclient` receiver.  If no pairing information is available, it falls back to the configured environment and viewer backend rules.
+
+Useful environment variables:
 
 ```bash
-RSFVIEW_TOKEN=your_token sfspike n1=100 | rsfgraph | rsfclient --send --port 17891
+export RSFPY_SVGVIEWER_BACKEND=auto
+export RSFVPLOPTS='bgcolor=w font=Helvetica'
 ```
 
-## 📝 Changelog
+`rsfclient` is most useful when:
 
-View the changelog [here](./CHANGELOG.md).
+- the compute machine has no desktop session;
+- X11 forwarding is slow or unavailable;
+- Windows users want a local receiver instead of an X server;
+- temporary plots should appear locally without manually copying files.
 
-## 📄 License
+## Commands
 
-GNU GPLv2
+| Command | Purpose |
+| --- | --- |
+| `vplviewer` | Convert VPL to SVG and show it. |
+| `rsfvpl2svg` | Convert VPL to SVG files or SVG frame sequences. |
+| `svgviewer` | Show SVG files, stdin SVG, or RSFPY SVG frame sequences. |
+| `rsfclient` | Local GUI receiver and SSH tunnel manager for remote display. |
+| `rsfsvgpen` | Compose/overlay/grid SVG figures. |
+| `rsfgrey`, `rsfgraph`, `rsfwiggle`, `rsfgrey3` | SVG-oriented plotting commands provided by RSFPY. |
 
-## 🤝 Contributing
+## Version
 
-Contributions are welcome. Feel free to open an issue or submit a pull request to improve **rsfpy**.
+Current version: `1.0.0`
+
+## License
+
+RSFPY is distributed under the GPL-2.0-only license.

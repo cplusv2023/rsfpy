@@ -2206,6 +2206,8 @@ static void apply_zoom_box(App *app, double sx0, double sy0, double sx1, double 
     double dst_w = 0.0;
     double dst_h = 0.0;
 
+    app->stretch_mode = TRUE;
+
     if (app->stretch_mode) {
         double zx = f->width / doc_w;
         double zy = f->height / doc_h;
@@ -2455,6 +2457,37 @@ static gboolean current_svg_screen_rect(App *app, ImageRect *rect)
     rect->y = iy0;
     rect->width = ix1 - ix0;
     rect->height = iy1 - iy0;
+    return TRUE;
+}
+
+static gboolean current_visible_doc_rect(App *app,
+                                         double *doc_x,
+                                         double *doc_y,
+                                         double *doc_w,
+                                         double *doc_h,
+                                         int *pixel_w,
+                                         int *pixel_h)
+{
+    ImageRect rect;
+    double dx0, dy0, dx1, dy1;
+    double x0, x1, y0, y1;
+
+    if (!current_svg_screen_rect(app, &rect)) return FALSE;
+    if (!screen_to_doc(app, rect.x, rect.y, &dx0, &dy0)) return FALSE;
+    if (!screen_to_doc(app, rect.x + rect.width, rect.y + rect.height, &dx1, &dy1)) return FALSE;
+
+    x0 = dx0 < dx1 ? dx0 : dx1;
+    x1 = dx0 < dx1 ? dx1 : dx0;
+    y0 = dy0 < dy1 ? dy0 : dy1;
+    y1 = dy0 < dy1 ? dy1 : dy0;
+    if (x1 <= x0 || y1 <= y0) return FALSE;
+
+    if (doc_x) *doc_x = x0;
+    if (doc_y) *doc_y = y0;
+    if (doc_w) *doc_w = x1 - x0;
+    if (doc_h) *doc_h = y1 - y0;
+    if (pixel_w) *pixel_w = rect.width;
+    if (pixel_h) *pixel_h = rect.height;
     return TRUE;
 }
 
@@ -2905,8 +2938,11 @@ static gchar *build_clipboard_svg(App *app, gsize *out_len, GError **err)
     gchar *src = NULL;
     gsize src_len = 0;
     gchar *close_tag;
+    gchar *inner;
     GString *overlay;
     GString *merged;
+    double doc_x, doc_y, doc_w, doc_h;
+    int pixel_w, pixel_h;
 
     if (out_len) *out_len = 0;
     if (!read_current_svg_source(app, &src, &src_len, err)) return NULL;
@@ -2927,6 +2963,24 @@ static gchar *build_clipboard_svg(App *app, gsize *out_len, GError **err)
 
     g_string_free(overlay, TRUE);
     g_free(src);
+
+    if (current_visible_doc_rect(app, &doc_x, &doc_y, &doc_w, &doc_h, &pixel_w, &pixel_h)) {
+        const gchar *svg_start = g_strstr_len(merged->str, (gssize)merged->len, "<svg");
+        GString *cropped = g_string_new(NULL);
+        inner = svg_start ? g_strdup(svg_start) : g_string_free(merged, FALSE);
+
+        g_string_append_printf(cropped,
+                               "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"%.12g %.12g %.12g %.12g\">\n",
+                               pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
+        g_string_append(cropped, inner);
+        g_string_append(cropped, "\n</svg>\n");
+        g_free(inner);
+
+        if (svg_start) g_string_free(merged, TRUE);
+        if (out_len) *out_len = cropped->len;
+        return g_string_free(cropped, FALSE);
+    }
+
     if (out_len) *out_len = merged->len;
     return g_string_free(merged, FALSE);
 }

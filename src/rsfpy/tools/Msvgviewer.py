@@ -59,7 +59,7 @@ from textwrap import dedent
 import importlib.resources
 
 from rsfpy import bin
-from rsfpy.utils import _get_stdname
+from rsfpy.utils import _get_stdname, _str_match_re
 from rsfpy.version import __version__, __email__, __author__, __github__
 
 
@@ -79,6 +79,8 @@ def resource_path(name):
 
 svgviewer_path_gtk = resource_path("svgviewer-gtk")
 svgviewer_path_x11 = resource_path("svgviewer-x11")
+
+VALID_BACKENDS = ("auto", "client", "gtk", "x11")
 
 
 def is_executable(path):
@@ -149,6 +151,114 @@ def build_parser():
     )
 
     return parser
+
+
+def normalize_backend(value):
+    value = (value or "").strip().lower()
+    if value in VALID_BACKENDS:
+        return value
+    return None
+
+
+def parse_common_cli(argv=None):
+    """
+    Parse wrapper-level options permissively.
+
+    Madagascar programs commonly use key=value arguments.  These wrappers only
+    consume help and backend controls here; the caller decides what remaining
+    key=value pairs mean.  Unknown --options are ignored so they do not become
+    accidental filenames.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+
+    backend = normalize_backend(os.environ.get("RSFPY_SVGVIEWER_BACKEND")) or "auto"
+    items = []
+    help_requested = False
+    i = 0
+
+    while i < len(argv):
+        item = argv[i]
+
+        if item in ("-h", "--help"):
+            help_requested = True
+            i += 1
+            continue
+
+        if item == "--backend":
+            if i + 1 < len(argv):
+                chosen = normalize_backend(argv[i + 1])
+                if chosen:
+                    backend = chosen
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if item.startswith("--backend="):
+            chosen = normalize_backend(item.split("=", 1)[1])
+            if chosen:
+                backend = chosen
+            i += 1
+            continue
+
+        if "=" in item:
+            parsed = _str_match_re([item])
+            key, value = next(iter(parsed.items()), ("", ""))
+            if key == "backend":
+                chosen = normalize_backend(value)
+                if chosen:
+                    backend = chosen
+            else:
+                items.append(item)
+            i += 1
+            continue
+
+        if item.startswith("--"):
+            if (
+                "=" not in item
+                and i + 1 < len(argv)
+                and not argv[i + 1].startswith("--")
+                and "=" not in argv[i + 1]
+            ):
+                i += 2
+            else:
+                i += 1
+            continue
+
+        items.append(item)
+        i += 1
+
+    return backend, items, help_requested
+
+
+def split_svg_args(items):
+    files = []
+    for item in items:
+        if item == "-":
+            files.append(item)
+            continue
+        if "=" in item:
+            continue
+        if item.startswith("--"):
+            continue
+        files.append(item)
+    return files
+
+
+def readable_input_args(args):
+    files = []
+    for item in args:
+        if item == "-":
+            files.append(item)
+            continue
+        try:
+            with open(item, "rb"):
+                pass
+        except OSError:
+            continue
+        files.append(item)
+    return files
 
 
 def get_backend_order(backend):
@@ -350,8 +460,11 @@ def read_svg_sources(args, stdin_data):
             stdin_used = True
             continue
 
-        with open(item, "rb") as f:
-            data = f.read()
+        try:
+            with open(item, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
 
         title = os.path.splitext(os.path.basename(item))[0] or "figure"
         sources.append((title, data, item))
@@ -517,13 +630,12 @@ def show_help(exit_code=0):
 
 
 def main():
-    parser = build_parser()
-    ns, unknown = parser.parse_known_args()
+    backend, raw_args, help_requested = parse_common_cli()
 
-    if ns.help:
+    if help_requested:
         show_help(0)
 
-    args = ns.files + unknown
+    args = split_svg_args(raw_args)
     stdin_data = None
 
     # in case pseudo shell
@@ -533,7 +645,8 @@ def main():
     elif not sys.stdin.isatty():
         stdin_data = sys.stdin.buffer.read()
 
-    ret = run_viewer(ns.backend, args, stdin_data)
+    args = readable_input_args(args)
+    ret = run_viewer(backend, args, stdin_data)
     sys.exit(ret)
 
 
