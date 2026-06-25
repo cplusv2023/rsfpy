@@ -653,7 +653,14 @@ def grey3cube(
     gattr.ax1 = ax1
 
     gain = None if data.dtype == np.uint8 else plot_params.get("gain")
-    image_kwargs = {"aspect": "auto", "cmap": cmap, "zorder": 1}
+    image_kwargs = {
+        "aspect": "auto",
+        "cmap": cmap,
+        "zorder": 1,
+        # Keep VPL-like raster cells discrete in both the flat and projected
+        # cube views unless a caller deliberately requests interpolation.
+        "interpolation": plot_params.get("interpolation", "none"),
+    }
     if gain is None:
         image_kwargs.update({"vmin": vmin, "vmax": vmax})
     else:

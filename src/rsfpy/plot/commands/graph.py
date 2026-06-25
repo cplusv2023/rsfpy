@@ -13,6 +13,7 @@ from rsfpy.version import __SVG_SPLITTER
 from .common import (
     PlotCommandContext, add_overlays, bool_param, configure_matplotlib,
     create_figure, decorate_axes, error, float_param, save_figure, warning,
+    show_documentation, wants_documentation,
 )
 from .io import read_stdin_rsf
 
@@ -100,7 +101,11 @@ def _render(context, data):
 
 
 def main(argv=None):
-    context = PlotCommandContext("graph", list(sys.argv[1:] if argv is None else argv))
+    args = list(sys.argv[1:] if argv is None else argv)
+    if wants_documentation(args):
+        show_documentation("graph")
+        return 0
+    context = PlotCommandContext("graph", args)
     params = context.params
     if sys.stdin.isatty():
         error("Error: no input data?")

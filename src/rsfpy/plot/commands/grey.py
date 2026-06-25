@@ -16,6 +16,7 @@ from rsfpy.plot.display import estimate_gain, make_colormap
 from .common import (
     PlotCommandContext, add_overlays, bool_param, configure_matplotlib,
     create_figure, decorate_axes, error, float_param, save_figure, warning,
+    show_documentation, wants_documentation,
 )
 from .io import read_stdin_rsf
 
@@ -109,7 +110,11 @@ def _gain_reference(params, frames, movie):
 def main(argv=None):
     """Render Madagascar RSF input as a grey plot without using Mpygrey."""
 
-    context = PlotCommandContext("grey", list(sys.argv[1:] if argv is None else argv))
+    args = list(sys.argv[1:] if argv is None else argv)
+    if wants_documentation(args):
+        show_documentation("grey")
+        return 0
+    context = PlotCommandContext("grey", args)
     params = context.params
     if sys.stdin.isatty():
         error("Error: no input data?")

@@ -16,7 +16,8 @@ from rsfpy.plot.movie.grey3 import Grey3MovieUpdater
 from rsfpy.plot.display import estimate_gain, make_colormap
 from .common import (
     PlotCommandContext, bool_param, configure_matplotlib, create_figure,
-    error, float_param, save_figure, warning,
+    error, float_param, save_figure, warning, show_documentation,
+    wants_documentation,
 )
 from .io import read_stdin_rsf
 
@@ -94,7 +95,11 @@ def _decorate(context, gattr, params, *, format1, format2, format3, ntic1, ntic2
 
 
 def main(argv=None):
-    context = PlotCommandContext("grey3", list(sys.argv[1:] if argv is None else argv))
+    args = list(sys.argv[1:] if argv is None else argv)
+    if wants_documentation(args):
+        show_documentation("grey3")
+        return 0
+    context = PlotCommandContext("grey3", args)
     params = context.params
     if sys.stdin.isatty():
         error("Error: no input data?")

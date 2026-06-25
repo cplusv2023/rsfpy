@@ -74,7 +74,9 @@ def grey(
         'cmap': 'gray',
         'aspect': 'auto',
         'origin': 'upper',
-        'interpolation': 'nearest',
+        # Preserve discrete RSF samples in vector backends as well as on
+        # screen. Callers may still explicitly request another strategy.
+        'interpolation': 'none',
         'vmin': None,
         'vmax': None,
         'clip': None,

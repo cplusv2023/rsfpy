@@ -21,6 +21,7 @@
 #define TXPERIN 33.0
 #define TEXTVECSCALE 10.0
 #define PPI 72.0
+#define VPL_STROKE_BIAS_PX 0.6
 
 #define VP_SETSTYLE         'S'
 #define VP_MOVE             'm'
@@ -853,7 +854,10 @@ static double effective_stroke_width(SvgCtx *ctx, VplState *st)
         if (style_stroke_width_px(&ctx->opt.frame_style, &width)) return width;
     }
     if (fat < 1) fat = 1;
-    return u_to_px(fat);
+    /* VPL's 600-units-per-inch pen widths are much finer than a practical
+     * screen/SVG stroke.  Preserve their relative scale while adding a
+     * readable baseline: 0.12 * fat + 0.6 px. */
+    return u_to_px(fat) + VPL_STROKE_BIAS_PX;
 }
 
 static const Style *specific_text_style(SvgCtx *ctx, VplState *st)
@@ -1340,7 +1344,9 @@ static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
     write_png_rgba(&png, display_rgba, display_w, display_h);
     free(display_rgba);
 
-    fprintf(ctx->out, "<image x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,",
+    /* VPL rasters are indexed data samples, not photographs.  Keep the
+     * source cells discrete when SVG viewers scale the embedded PNG. */
+    fprintf(ctx->out, "<image x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" preserveAspectRatio=\"none\" image-rendering=\"pixelated\" href=\"data:image/png;base64,",
             x, y, w, h);
     write_base64(ctx->out, png.data, png.len);
     fputs("\"/>\n", ctx->out);
