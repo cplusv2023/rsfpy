@@ -13,6 +13,13 @@ __doc__ = """
 \033[1mSYNOPSIS\033[0m
     \tMvplviewer.py [--backend client|gtk|x11|auto] [conversion options] [< in0.vpl] in1.vpl ...
 
+\033[1mSTREAMING\033[0m
+    \tcachepipe=y
+    \t    Match xtpen's default pipe behavior. Piped stdin is cached first,
+    \t    then processed before command-line VPL files. With the GTK backend,
+    \t    vpl2svg --stream still emits completed frames as it reads the cache.
+    \t    Use cachepipe=n for direct live stdin streaming.
+
 \033[1mCONVERSION OPTIONS\033[0m
     \tbgcolor=white, --bgcolor white
     \t    Fill the converted SVG canvas. Accepts matplotlib-like short names
@@ -53,7 +60,8 @@ import re
 import sys
 import shlex
 import shutil
-from subprocess import run
+import tempfile
+from subprocess import PIPE, run, Popen
 from textwrap import dedent
 
 from rsfpy.tools import Msvgviewer as svgviewer
@@ -110,6 +118,24 @@ for _prefix in CONVERTER_PREFIXES:
         CONVERTER_OPTION_NAMES.add(_prefix + "family")
 
 CONVERTER_OPTION_FLAGS = {"--" + name for name in CONVERTER_OPTION_NAMES}
+STREAM_STDIN = object()
+
+
+def falsey(value):
+    return str(value).strip().lower() in ("0", "false", "no", "off", "n")
+
+
+def cachepipe_value(items):
+    value = os.environ.get("RSFPY_VPLVIEWER_CACHEPIPE", "y")
+    for item in items:
+        if "=" not in item:
+            continue
+        parsed = _str_match_re([item])
+        key, parsed_value = next(iter(parsed.items()), ("", ""))
+        if key == "cachepipe":
+            value = parsed_value
+
+    return not falsey(value)
 
 
 def strip_split_markers(svg):
@@ -152,29 +178,44 @@ def converter_command():
     )
 
 
-def read_vpl_sources(args, stdin_data):
+def cached_stdin_path(stdin_data, temp_paths):
+    fd, path = tempfile.mkstemp(prefix=".vplstream_", suffix=".vpl")
+    with os.fdopen(fd, "wb") as f:
+        f.write(stdin_data)
+    temp_paths.append(path)
+    return path
+
+
+def read_vpl_sources(args, stdin_data, *, cachepipe=True, temp_paths=None):
     sources = []
-    stdin_used = False
+    temp_paths = temp_paths if temp_paths is not None else []
+
+    if stdin_data is STREAM_STDIN:
+        sources.append(("stdin", None, "stdin", None))
+    elif stdin_data is not None:
+        if cachepipe:
+            path = cached_stdin_path(stdin_data, temp_paths)
+            sources.append(("stdin", None, "stdin", path))
+        else:
+            sources.append(("stdin", stdin_data, "stdin", None))
 
     for item in args:
         if item == "-":
             if stdin_data is None:
                 raise RuntimeError("'-' was specified but stdin is empty")
-            sources.append(("stdin", stdin_data, "stdin"))
-            stdin_used = True
             continue
 
         try:
             with open(item, "rb") as f:
-                data = f.read()
+                if cachepipe:
+                    data = None
+                else:
+                    data = f.read()
         except OSError:
             continue
 
         title = os.path.splitext(os.path.basename(item))[0] or "figure"
-        sources.append((title, data, item))
-
-    if stdin_data is not None and not stdin_used:
-        sources.append(("stdin", stdin_data, "stdin"))
+        sources.append((title, data, item, item))
 
     return sources
 
@@ -185,15 +226,15 @@ def converter_supports_path_arg(cmd):
     return os.path.basename(cmd[0]).lower().startswith("vpl2svg")
 
 
-def convert_one_vpl(cmd, converter_args, title, data, source_path):
+def convert_one_vpl(cmd, converter_args, title, data, source_path, convert_path=None):
     use_path = (
-        source_path != "stdin"
-        and os.path.exists(source_path)
+        convert_path is not None
+        and os.path.exists(convert_path)
         and converter_supports_path_arg(cmd)
     )
 
     result = run(
-        cmd + converter_args + [source_path] if use_path else cmd + converter_args,
+        cmd + converter_args + [convert_path] if use_path else cmd + converter_args,
         input=None if use_path else data,
         stdout=-1,
         stderr=-1,
@@ -218,19 +259,35 @@ def convert_one_vpl(cmd, converter_args, title, data, source_path):
     return svg
 
 
-def build_svg_payload(args, stdin_data, converter_args):
-    sources = read_vpl_sources(args, stdin_data)
+def build_svg_payload(args, stdin_data, converter_args, cachepipe=True):
+    if stdin_data is STREAM_STDIN:
+        raise RuntimeError("streaming stdin is only supported by the GTK streaming backend")
+
+    temp_paths = []
+    sources = read_vpl_sources(args, stdin_data, cachepipe=cachepipe, temp_paths=temp_paths)
     if not sources:
         raise RuntimeError("no VPL input")
 
     cmd = converter_command()
     chunks = []
 
-    for title, data, source_path in sources:
-        svg = convert_one_vpl(cmd, converter_args, title, data, source_path)
-        chunks.append(svgviewer.frame_marker(title, source_path))
-        chunks.append(svg)
-        chunks.append(b"\n")
+    try:
+        for title, data, source_path, convert_path in sources:
+            svg = convert_one_vpl(cmd, converter_args, title, data, source_path, convert_path)
+            if b"<!-- RSFPY_SPLIT" in svg:
+                chunks.append(svg)
+                if not svg.endswith(b"\n"):
+                    chunks.append(b"\n")
+            else:
+                chunks.append(svgviewer.frame_marker(title, source_path))
+                chunks.append(svg)
+                chunks.append(b"\n")
+    finally:
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     if len(sources) == 1:
         return sources[0][0], b"".join(chunks)
@@ -320,6 +377,191 @@ def run_svg_payload_viewer(backend, title, payload):
     return 1
 
 
+def streaming_backend(backend):
+    for name, path in svgviewer.get_backend_order(backend):
+        if name == "CLIENT":
+            return None, None
+        if name == "GTK" and svgviewer.is_executable(path):
+            return name, path
+        return None, None
+    return None, None
+
+
+def append_manifest_line(manifest, svg_path, source_path, label):
+    manifest.write(
+        "%s\t%s\t%s\n"
+        % (
+            svg_path,
+            source_path if source_path else svg_path,
+            label if label else "Frame",
+        )
+    )
+    manifest.flush()
+    try:
+        os.fsync(manifest.fileno())
+    except OSError:
+        pass
+
+
+def write_stream_frames(tempdir, manifest, source_title, source_path, svg, start_index):
+    frames = split_svg_frames(svg)
+    if not frames:
+        frames = [svg]
+
+    count = 0
+    for local_index, frame in enumerate(frames, 1):
+        frame_index = start_index + count
+        svg_path = os.path.join(tempdir, "frame_%06d.svg" % frame_index)
+        label = source_title
+        if len(frames) > 1:
+            label = "%s #%d" % (source_title, local_index)
+
+        with open(svg_path, "wb") as f:
+            f.write(frame)
+
+        append_manifest_line(manifest, svg_path, source_path, label)
+        count += 1
+
+    return count
+
+
+def iter_svg_frames_from_stream(pipe):
+    frame = bytearray()
+    saw_marker = False
+
+    for line in iter(pipe.readline, b""):
+        if line.startswith(b"<!-- RSFPY_SPLIT"):
+            if frame:
+                yield bytes(frame)
+                frame.clear()
+            saw_marker = True
+        frame.extend(line)
+
+    if frame:
+        yield bytes(frame)
+    elif not saw_marker:
+        return
+
+
+def stream_convert_one_vpl_to_manifest(
+    cmd,
+    converter_args,
+    tempdir,
+    manifest,
+    title,
+    data,
+    source_path,
+    convert_path,
+    start_index,
+):
+    if source_path == "stdin" and data is None and convert_path is None:
+        proc = Popen(
+            cmd + ["--stream"] + converter_args,
+            stdin=sys.stdin.buffer,
+            stdout=PIPE,
+            stderr=None,
+        )
+    elif not convert_path or not os.path.exists(convert_path) or not converter_supports_path_arg(cmd):
+        svg = convert_one_vpl(cmd, converter_args, title, data, source_path, convert_path)
+        return write_stream_frames(tempdir, manifest, title, source_path, svg, start_index)
+    else:
+        proc = Popen(
+            cmd + ["--stream"] + converter_args + [convert_path],
+            stdout=PIPE,
+            stderr=None,
+        )
+
+    count = 0
+    try:
+        for frame in iter_svg_frames_from_stream(proc.stdout):
+            if b"<svg" not in frame[:8192]:
+                continue
+            count += write_stream_frames(
+                tempdir,
+                manifest,
+                title,
+                source_path,
+                frame,
+                start_index + count,
+            )
+
+        ret = proc.wait()
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+
+    if ret != 0:
+        raise RuntimeError(
+            "VPL streaming conversion failed for %s with code %s"
+            % (source_path, ret)
+        )
+
+    if count == 0:
+        raise RuntimeError("VPL streaming conversion produced no SVG frames for %s" % source_path)
+
+    return count
+
+
+def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepipe=True):
+    name, path = streaming_backend(backend)
+    if name != "GTK":
+        title, payload = build_svg_payload(args, stdin_data, converter_args, cachepipe=cachepipe)
+        return run_svg_payload_viewer(backend, title, payload)
+
+    tempdir = tempfile.mkdtemp(prefix="rsfpy-vplstream-")
+    manifest_path = os.path.join(tempdir, "frames.manifest")
+    temp_paths = []
+    viewer = None
+    frame_index = 0
+
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as manifest:
+            viewer = Popen(
+                [str(path), "--watch", manifest_path],
+                env=svgviewer.viewer_env_for_backend(name),
+            )
+
+            sources = read_vpl_sources(
+                args,
+                stdin_data,
+                cachepipe=cachepipe,
+                temp_paths=temp_paths,
+            )
+            if not sources:
+                raise RuntimeError("no VPL input")
+
+            cmd = converter_command()
+            for title, data, source_path, convert_path in sources:
+                if viewer.poll() is not None:
+                    return viewer.returncode
+
+                frame_index += stream_convert_one_vpl_to_manifest(
+                    cmd,
+                    converter_args,
+                    tempdir,
+                    manifest,
+                    title,
+                    data,
+                    source_path,
+                    convert_path,
+                    frame_index,
+                )
+
+        return viewer.wait() if viewer else 1
+
+    except Exception:
+        if viewer and viewer.poll() is None:
+            viewer.terminate()
+        raise
+    finally:
+        for temp_path in temp_paths:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        shutil.rmtree(tempdir, ignore_errors=True)
+
+
 def show_help(exit_code=0):
     try:
         run(["less", "-R"], input=DOC.encode())
@@ -381,6 +623,7 @@ def main():
     if help_requested:
         show_help(0)
 
+    cachepipe = cachepipe_value(raw_args)
     args, key_value_converter_args = split_vpl_args(raw_args)
     converter_args = collect_env_converter_args() + key_value_converter_args
     stdin_data = None
@@ -393,13 +636,22 @@ def main():
     ):
         args = [stdname[1]] + args
     elif not sys.stdin.isatty():
-        stdin_data = sys.stdin.buffer.read()
+        name, _ = streaming_backend(backend)
+        if name == "GTK" and not cachepipe:
+            stdin_data = STREAM_STDIN
+        else:
+            stdin_data = sys.stdin.buffer.read()
 
     args = svgviewer.readable_input_args(args)
 
     try:
-        title, payload = build_svg_payload(args, stdin_data, converter_args)
-        ret = run_svg_payload_viewer(backend, title, payload)
+        ret = run_streaming_svg_viewer(
+            backend,
+            args,
+            stdin_data,
+            converter_args,
+            cachepipe=cachepipe,
+        )
     except Exception as exc:
         sys.stderr.write("vplviewer: %s\n" % exc)
         ret = 1

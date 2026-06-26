@@ -202,6 +202,20 @@ def parse_common_cli(argv=None):
             i += 1
             continue
 
+        if item == "--watch":
+            items.append(item)
+            if i + 1 < len(argv):
+                items.append(argv[i + 1])
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if item.startswith("--watch="):
+            items.append(item)
+            i += 1
+            continue
+
         if "=" in item:
             parsed = _str_match_re([item])
             key, value = next(iter(parsed.items()), ("", ""))
@@ -234,8 +248,21 @@ def parse_common_cli(argv=None):
 
 def split_svg_args(items):
     files = []
+    keep_next = False
     for item in items:
+        if keep_next:
+            files.append(item)
+            keep_next = False
+            continue
+
         if item == "-":
+            files.append(item)
+            continue
+        if item == "--watch":
+            files.append(item)
+            keep_next = True
+            continue
+        if item.startswith("--watch="):
             files.append(item)
             continue
         if "=" in item:
@@ -248,8 +275,21 @@ def split_svg_args(items):
 
 def readable_input_args(args):
     files = []
+    keep_next = False
     for item in args:
+        if keep_next:
+            files.append(item)
+            keep_next = False
+            continue
+
         if item == "-":
+            files.append(item)
+            continue
+        if item == "--watch":
+            files.append(item)
+            keep_next = True
+            continue
+        if item.startswith("--watch="):
             files.append(item)
             continue
         try:
@@ -451,8 +491,20 @@ def read_svg_sources(args, stdin_data):
     """
     sources = []
     stdin_used = False
+    skip_next = False
 
     for item in args:
+        if skip_next:
+            skip_next = False
+            continue
+
+        if item == "--watch":
+            skip_next = True
+            continue
+
+        if item.startswith("--watch="):
+            continue
+
         if item == "-":
             if stdin_data is None:
                 raise RuntimeError("'-' was specified but stdin is empty")

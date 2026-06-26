@@ -119,6 +119,9 @@ void sf_init(int argc, char **argv);
 void cairo_set_source_rgba_string(cairo_t *cr, const char *color_str);
 
 gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num);
+gboolean svg_sequence_append_file(SvgSequence *seq, const char *path,
+                                  const char *display_path,
+                                  const char *label);
 void svg_sequence_render_frame(SvgSequence *seq, cairo_t *cr,
                                int win_w, int win_h,
                                double pan_x, double pan_y,

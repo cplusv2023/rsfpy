@@ -127,6 +127,9 @@ typedef struct {
     GtkWidget *toggle_pen;
 
     SvgSequence sequence;
+    gchar *watch_path;
+    gsize watch_offset;
+    guint watch_id;
 
     int canvas_w;
     int canvas_h;
@@ -171,6 +174,8 @@ typedef struct {
 static const char *APP_ID = "org.rsfpy.svgviewer.gtk";
 #define UNDO_LIMIT 64
 #define CLIPBOARD_SVG_WARN_BYTES (2 * 1024 * 1024)
+
+static void update_ui(App *app);
 
 static const char *ICON_PREV =
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
@@ -4068,6 +4073,13 @@ static gboolean load_inputs(App *app, int argc, char **argv)
         if (g_str_has_prefix(argv[i], "--status=")) {
             continue;
         }
+        if (strcmp(argv[i], "--watch") == 0) {
+            if (i + 1 < argc) i++;
+            continue;
+        }
+        if (g_str_has_prefix(argv[i], "--watch=")) {
+            continue;
+        }
         if (strcmp(argv[i], "--backend") == 0) {
             if (i + 1 < argc) i++;
             continue;
@@ -4124,6 +4136,95 @@ static gchar *parse_status_arg(int argc, char **argv)
     return NULL;
 }
 
+static gchar *parse_watch_arg(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--watch") == 0 && i + 1 < argc) {
+            return g_strdup(argv[i + 1]);
+        }
+        if (g_str_has_prefix(argv[i], "--watch=")) {
+            return g_strdup(argv[i] + strlen("--watch="));
+        }
+    }
+
+    return NULL;
+}
+
+static void append_watch_line(App *app, gchar *line)
+{
+    gchar **fields;
+    const gchar *svg_path;
+    const gchar *display_path;
+    const gchar *label;
+    int old_count;
+
+    if (!app || str_empty(line)) return;
+
+    line = g_strstrip(line);
+    if (str_empty(line) || line[0] == '#') return;
+
+    fields = g_strsplit(line, "\t", 3);
+    svg_path = fields && fields[0] ? fields[0] : NULL;
+    display_path = fields && fields[1] ? fields[1] : NULL;
+    label = fields && fields[2] ? fields[2] : NULL;
+
+    if (str_empty(svg_path) || !g_file_test(svg_path, G_FILE_TEST_EXISTS)) {
+        g_strfreev(fields);
+        return;
+    }
+
+    old_count = app->sequence.count;
+    if (svg_sequence_append_file(&app->sequence, svg_path, display_path, label)) {
+        if (old_count == 0) {
+            app->sequence.current_index = 0;
+            g_clear_pointer(&app->load_error, g_free);
+        }
+        if (app->sequence.count > 1) app->sequence.playing = TRUE;
+        update_ui(app);
+        if (app->area) gtk_widget_queue_draw(app->area);
+    }
+
+    g_strfreev(fields);
+}
+
+static gboolean poll_watch_manifest(gpointer user_data)
+{
+    App *app = (App *)user_data;
+    gchar *content = NULL;
+    gsize len = 0;
+    GError *err = NULL;
+    gchar *start;
+    gchar *end;
+
+    if (!app || str_empty(app->watch_path)) return G_SOURCE_REMOVE;
+
+    if (!g_file_get_contents(app->watch_path, &content, &len, &err)) {
+        g_clear_error(&err);
+        return G_SOURCE_CONTINUE;
+    }
+
+    if (len <= app->watch_offset) {
+        g_free(content);
+        return G_SOURCE_CONTINUE;
+    }
+
+    start = content + app->watch_offset;
+    end = content + len;
+
+    while (start < end) {
+        gchar *nl = memchr(start, '\n', (gsize)(end - start));
+        if (!nl) break;
+
+        *nl = '\0';
+        append_watch_line(app, start);
+        app->watch_offset = (gsize)(nl + 1 - content);
+        start = nl + 1;
+    }
+
+    g_free(content);
+    return G_SOURCE_CONTINUE;
+}
+
 static void apply_status_file(App *app, const gchar *path)
 {
     gchar *content = NULL;
@@ -4172,15 +4273,17 @@ static void print_usage(const char *prog)
     fprintf(stderr,
             "Usage:\n"
             "  %s [--status file.status] [--backend gtk] file.svg   # Load from file\n"
+            "  %s --watch frames.manifest            # Append streamed SVG frames\n"
             "  cat file.svg | %s                    # Load from stdin\n"
             "  %s - < file.svg                      # Explicit stdin\n",
-            prog, prog, prog);
+            prog, prog, prog, prog);
 }
 
 int main(int argc, char **argv)
 {
     gboolean has_stdin = !isatty(fileno(stdin));
     gchar *status_path = parse_status_arg(argc, argv);
+    gchar *watch_path = parse_watch_arg(argc, argv);
 
 #ifdef G_OS_WIN32
     setup_windows_bundle_env(argc > 0 ? argv[0] : NULL);
@@ -4212,9 +4315,12 @@ int main(int argc, char **argv)
     app.active_annotation = NULL;
     app.sequence.fps = 12;
     app.sequence.playing = FALSE;
+    app.watch_path = watch_path;
 
     if (!load_inputs(&app, argc, argv)) {
-        if (argc < 2 && !has_stdin) {
+        if (!str_empty(app.watch_path)) {
+            app.load_error = g_strdup("Waiting for streamed SVG frames...");
+        } else if (argc < 2 && !has_stdin) {
             app.load_error = g_strdup("No SVG input. Open a file or pipe SVG data to svgviewer.");
         } else {
             app.load_error = g_strdup("No displayable SVG content. Check the input file or stream.");
@@ -4234,6 +4340,11 @@ int main(int argc, char **argv)
     svg_sequence_set_handle_cache_radius(&app.sequence, 1);
     svg_sequence_set_surface_cache_radius(&app.sequence, SVG_SEQUENCE_DEFAULT_SURFACE_CACHE_RADIUS);
 
+    if (!str_empty(app.watch_path)) {
+        poll_watch_manifest(&app);
+        app.watch_id = g_timeout_add(200, poll_watch_manifest, &app);
+    }
+
     GtkApplication *gtk_app = gtk_application_new(APP_ID, G_APPLICATION_NON_UNIQUE);
     g_signal_connect(gtk_app, "activate", G_CALLBACK(activate), &app);
 
@@ -4241,12 +4352,14 @@ int main(int argc, char **argv)
     int status = g_application_run(G_APPLICATION(gtk_app), 1, gtk_argv);
 
     if (app.tick_id) g_source_remove(app.tick_id);
+    if (app.watch_id) g_source_remove(app.watch_id);
     g_object_unref(gtk_app);
     svg_sequence_free(&app.sequence);
     if (app.annotations) g_ptr_array_free(app.annotations, TRUE);
     if (app.undo_stack) g_ptr_array_free(app.undo_stack, TRUE);
     if (app.redo_stack) g_ptr_array_free(app.redo_stack, TRUE);
     g_free(app.load_error);
+    g_free(app.watch_path);
     g_free(status_path);
 
     (void)status;
