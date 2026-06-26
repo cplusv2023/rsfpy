@@ -196,6 +196,15 @@ static void bb_write(ByteBuf *b, const void *data, size_t n)
     b->len += n;
 }
 
+static void bb_free(ByteBuf *b)
+{
+    if (!b) return;
+    free(b->data);
+    b->data = NULL;
+    b->len = 0;
+    b->cap = 0;
+}
+
 static void bb_u32be(ByteBuf *b, uint32_t v)
 {
     bb_put(b, (unsigned char)((v >> 24) & 255));
@@ -333,6 +342,173 @@ static unsigned char *read_all_file(const char *path, size_t *len)
     if (path) fclose(fp);
     *len = n;
     return buf;
+}
+
+static bool stream_u8(FILE *fp, ByteBuf *out, unsigned char *v)
+{
+    int c = fgetc(fp);
+    if (c == EOF) {
+        if (ferror(fp)) die("read failed");
+        return false;
+    }
+    *v = (unsigned char)c;
+    if (out) bb_put(out, *v);
+    return true;
+}
+
+static bool stream_i16(FILE *fp, ByteBuf *out, int *v)
+{
+    unsigned char lo, hi;
+    uint16_t u;
+    if (!stream_u8(fp, out, &lo) || !stream_u8(fp, out, &hi)) return false;
+    u = (uint16_t)lo | ((uint16_t)hi << 8);
+    *v = (int)(int16_t)u;
+    return true;
+}
+
+static bool stream_cstring(FILE *fp, ByteBuf *out)
+{
+    unsigned char c;
+    do {
+        if (!stream_u8(fp, out, &c)) return false;
+    } while (c != '\0');
+    return true;
+}
+
+static void stream_i16_many(FILE *fp, ByteBuf *out, int n)
+{
+    int i, tmp;
+    for (i = 0; i < n; i++) {
+        if (!stream_i16(fp, out, &tmp)) die("truncated VPL command");
+    }
+}
+
+static void stream_bytes(FILE *fp, ByteBuf *out, int n)
+{
+    int i;
+    unsigned char tmp;
+    for (i = 0; i < n; i++) {
+        if (!stream_u8(fp, out, &tmp)) die("truncated VPL command");
+    }
+}
+
+static void stream_raster_payload(FILE *fp, ByteBuf *out, bool bit,
+                                  int xpix, int ypix)
+{
+    int yrast = 0;
+    while (yrast < ypix) {
+        int rep, pos = 0;
+        if (!stream_i16(fp, out, &rep) || rep <= 0) die("truncated raster payload");
+        while (pos < xpix) {
+            int num_pat, num_byte, bytes;
+            if (!stream_i16(fp, out, &num_pat) ||
+                !stream_i16(fp, out, &num_byte)) die("truncated raster payload");
+            if (num_pat <= 0 || num_byte <= 0) die("invalid raster run");
+            bytes = bit ? ((num_byte + 7) / 8) : num_byte;
+            stream_bytes(fp, out, bytes);
+            pos += num_pat * num_byte;
+        }
+        yrast += rep;
+    }
+}
+
+static bool stream_next_command(FILE *fp, ByteBuf *out, unsigned char *cmd_out)
+{
+    unsigned char cmd, style;
+    int a, b, c, d, n;
+    size_t cmd_offset = out ? out->len : 0;
+
+    if (!stream_u8(fp, out, &cmd)) return false;
+    *cmd_out = cmd;
+
+    switch (cmd) {
+        case VP_SETSTYLE:
+            if (!stream_u8(fp, out, &style)) die("truncated VPL command");
+            break;
+        case VP_MOVE:
+        case VP_DRAW:
+        case VP_ORIGIN:
+        case VP_TXALIGN:
+            stream_i16_many(fp, out, 2);
+            break;
+        case VP_WINDOW:
+        case VP_SET_COLOR_TABLE:
+        case VP_PATLOAD:
+            if (!stream_i16(fp, out, &a) || !stream_i16(fp, out, &b) ||
+                !stream_i16(fp, out, &c) || !stream_i16(fp, out, &d)) {
+                die("truncated VPL command");
+            }
+            if (cmd == VP_PATLOAD) {
+                if (b >= 0) {
+                    stream_i16_many(fp, out, b * c);
+                } else {
+                    stream_i16_many(fp, out, c * 2 * 4);
+                }
+            }
+            break;
+        case VP_PLINE:
+        case VP_AREA:
+            if (!stream_i16(fp, out, &n)) die("truncated VPL command");
+            stream_i16_many(fp, out, n * 2);
+            break;
+        case VP_PMARK:
+            if (!stream_i16(fp, out, &n)) die("truncated VPL command");
+            stream_i16_many(fp, out, 2 + n * 2);
+            break;
+        case VP_OLDAREA:
+            if (!stream_i16(fp, out, &n)) die("truncated VPL command");
+            stream_i16_many(fp, out, 3 + n * 2);
+            break;
+        case VP_TEXT:
+            stream_i16_many(fp, out, 2);
+            if (!stream_cstring(fp, out)) die("truncated VPL command");
+            break;
+        case VP_GTEXT:
+            stream_i16_many(fp, out, 4);
+            if (!stream_cstring(fp, out)) die("truncated VPL command");
+            break;
+        case VP_BYTE_RASTER:
+        case VP_BIT_RASTER: {
+            int orient, offset, x0, y0, x1, y1, xpix, ypix;
+            (void)orient; (void)offset; (void)x0; (void)y0; (void)x1; (void)y1;
+            if (!stream_i16(fp, out, &orient) || !stream_i16(fp, out, &offset) ||
+                !stream_i16(fp, out, &x0) || !stream_i16(fp, out, &y0) ||
+                !stream_i16(fp, out, &x1) || !stream_i16(fp, out, &y1) ||
+                !stream_i16(fp, out, &xpix) || !stream_i16(fp, out, &ypix)) {
+                die("truncated VPL raster header");
+            }
+            stream_raster_payload(fp, out, cmd == VP_BIT_RASTER, xpix, ypix);
+            break;
+        }
+        case VP_FAT:
+        case VP_COLOR:
+        case VP_OVERLAY:
+        case VP_OLDTEXT:
+            stream_i16_many(fp, out, 1);
+            if (cmd == VP_OLDTEXT && !stream_cstring(fp, out)) die("truncated VPL command");
+            break;
+        case VP_SETDASH:
+            if (!stream_i16(fp, out, &n)) die("truncated VPL command");
+            stream_i16_many(fp, out, n * 2);
+            break;
+        case VP_TXFONTPREC:
+            stream_i16_many(fp, out, 3);
+            break;
+        case VP_MESSAGE:
+        case VP_BEGIN_GROUP:
+            if (!stream_cstring(fp, out)) die("truncated VPL command");
+            break;
+        case VP_BREAK:
+        case VP_ERASE:
+        case VP_PURGE:
+        case VP_NOOP:
+        case VP_BACKGROUND:
+        case VP_END_GROUP:
+            break;
+        default:
+            die("invalid VPL command 0x%02x in stream at byte %zu", cmd, cmd_offset);
+    }
+    return true;
 }
 
 static bool r_u8(Reader *r, unsigned char *v)
@@ -1719,6 +1895,7 @@ static void usage(FILE *out)
             "Default output is cropped to the drawn bounding box.\n"
             "\n"
             "Options:\n"
+            "  --stream              Emit each completed frame as soon as VP_ERASE is read\n"
             "  --border INCHES\n"
             "  --bgcolor COLOR\n"
             "  --fontcolor COLOR | --font FAMILY | --fontfamily FAMILY | --fontsz SIZE\n"
@@ -1908,14 +2085,14 @@ static bool emit_svg_frame(const unsigned char *data, size_t len,
     if (width < 1) width = 1;
     if (height < 1) height = 1;
 
-    if (total_frames > 1) write_split_marker(stdout, input, frame_index);
+    if (total_frames != 1) write_split_marker(stdout, input, frame_index);
     fprintf(stdout, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     fprintf(stdout, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%.6g\" height=\"%.6g\" viewBox=\"0 0 %.6g %.6g\">\n",
             width, height, width, height);
     fputs("<metadata source=\"vpl2svg\" input=\"", stdout);
     svg_escape(stdout, input ? input : "stdin");
     fprintf(stdout, "\" frame=\"%d\" frames=\"%d\" bbox_vplot=\"%.6g %.6g %.6g %.6g\"></metadata>\n",
-            frame_index + 1, total_frames,
+            frame_index + 1, total_frames > 0 ? total_frames : 0,
             ctx.bounds.xmin, ctx.bounds.ymin, ctx.bounds.xmax, ctx.bounds.ymax);
     if (ctx.opt.bgcolor.a > 0) {
         fputs("<rect x=\"0\" y=\"0\" width=\"100%\" height=\"100%\" fill=\"", stdout);
@@ -1930,13 +2107,71 @@ static bool emit_svg_frame(const unsigned char *data, size_t len,
         die("failed to parse VPL while emitting SVG");
     }
     fputs("</svg>\n", stdout);
+    fflush(stdout);
     return true;
+}
+
+static int stream_emit_available(ByteBuf *prefix, const char *input,
+                                 ConvertOptions opt, double border_in,
+                                 int *emitted)
+{
+    Reader r;
+    SvgCtx ctx;
+    int frame_count = 0;
+    int made = 0;
+
+    if (!prefix || prefix->len == 0 || !emitted) return 0;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.opt = opt;
+    r.data = prefix->data;
+    r.len = prefix->len;
+    r.pos = 0;
+
+    if (!parse_vpl(&r, &ctx, false, 0, &frame_count, NULL)) {
+        die("failed to parse streamed VPL prefix");
+    }
+
+    while (*emitted < frame_count) {
+        if (emit_svg_frame(prefix->data, prefix->len, input, opt,
+                           *emitted, 0, border_in)) {
+            made++;
+        }
+        (*emitted)++;
+    }
+
+    return made;
+}
+
+static int run_streaming(const char *input, ConvertOptions opt, double border_in)
+{
+    FILE *fp = input ? fopen(input, "rb") : stdin;
+    ByteBuf prefix = {0};
+    unsigned char cmd;
+    int emitted = 0;
+    int made = 0;
+
+    if (!fp) die("cannot open %s: %s", input, strerror(errno));
+
+    while (stream_next_command(fp, &prefix, &cmd)) {
+        if (cmd == VP_ERASE) {
+            made += stream_emit_available(&prefix, input, opt, border_in, &emitted);
+        }
+    }
+
+    if (ferror(fp)) die("read failed");
+    made += stream_emit_available(&prefix, input, opt, border_in, &emitted);
+
+    if (input) fclose(fp);
+    bb_free(&prefix);
+    return made;
 }
 
 int main(int argc, char **argv)
 {
     const char *input = NULL;
     double border_in = 0.1;
+    bool stream = false;
     unsigned char *data;
     size_t len;
     Reader r;
@@ -1951,6 +2186,8 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(stdout);
             return 0;
+        } else if (strcmp(argv[i], "--stream") == 0) {
+            stream = true;
         } else if (strcmp(argv[i], "--border") == 0) {
             if (++i >= argc) die("--border needs a value");
             border_in = atof(argv[i]);
@@ -1970,6 +2207,11 @@ int main(int argc, char **argv)
 
     apply_default_styles(&ctx.opt);
     opt = ctx.opt;
+
+    if (stream) {
+        run_streaming(input, opt, border_in);
+        return 0;
+    }
 
     data = read_all_file(input, &len);
     memset(&ctx, 0, sizeof(ctx));
