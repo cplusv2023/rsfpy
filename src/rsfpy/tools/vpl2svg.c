@@ -1814,8 +1814,9 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
     while (r_u8(r, &cmd)) {
         int a, b, c, d, n, i;
         char *s = NULL;
+        bool frame_active = target_frame < 0 || current_frame == target_frame;
         bool drawable = !in_frame_number_group(&st);
-        bool active = (target_frame < 0 || current_frame == target_frame) && drawable;
+        bool active = frame_active && drawable;
         switch (cmd) {
             case VP_SETSTYLE:
                 if (!r_u8(r, &cmd)) return false;
@@ -2067,6 +2068,8 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     frame_has_content = false;
                 }
                 st.group_depth = 0;
+                st.clip_active = false;
+                st.clip_id = 0;
                 break;
             case VP_PURGE:
             case VP_NOOP:
@@ -2082,9 +2085,11 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 st.clip_ymin = b < d ? b : d;
                 st.clip_ymax = b < d ? d : b;
                 st.clip_active = st.clip_xmax > st.clip_xmin && st.clip_ymax > st.clip_ymin;
-                if (st.clip_active && emit) {
+                if (st.clip_active && emit && frame_active) {
                     st.clip_id = ++ctx->clip_id;
                     emit_clip_def(ctx, &st);
+                } else {
+                    st.clip_id = 0;
                 }
                 break;
             case VP_FAT:
