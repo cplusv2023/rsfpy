@@ -33,14 +33,52 @@ For development:
 pip install -e .
 ```
 
-RSFPY builds and installs its native display tools as part of the normal package workflow.  The viewer/client stack expects GTK, librsvg, Cairo, GLib/GIO, and standard build tools to be available on Unix-like systems.
+RSFPY builds and installs its native display tools as part of the normal package workflow.  If a native viewer dependency is missing, the Python package can still install, but that tool will be skipped unless `RSFPY_REQUIRE_NATIVE=1` is set.  The current default Python install includes `numpy` and `matplotlib`; `lxml` is only needed for `rsfsvgpen`.
+
+### Dependency Groups
+
+| Feature group | Python packages | Native build/runtime dependencies | Notes |
+| --- | --- | --- | --- |
+| Basic Python API | `numpy`, `matplotlib` in the current package install | C compiler for `rsfpy.plot.rsfpy_utils` | RSF read/write helpers and array utilities; plotting helpers are currently imported by `Rsfarray`. |
+| Plotting commands | `numpy`, `matplotlib` | none beyond Python build basics | Provides `rsfgrey`, `rsfgrey3`, `rsfgraph`, and `rsfwiggle`. |
+| Madagascar patch workflow | `numpy`, `matplotlib` | Madagascar / `m8r` available on `PATH` | Provides `rsfpy.m8r`, patched `Plot` / `Result`, and `svgPlot` / `svgResult`. |
+| `svgviewer` X11 backend | same as above | X11, Cairo, librsvg, GLib | Legacy/lightweight SVG viewer backend. On macOS, XQuartz is needed to display X11 windows. |
+| GTK-based `svgviewer` | same as above | GTK 4, Cairo, librsvg, GLib/GIO | Preferred local SVG viewer backend. macOS also builds an Objective-C clipboard helper using AppKit/Foundation. |
+| `rsfclient` | same as above | GTK 4, GLib/GIO, OpenSSH client | GUI SSH reverse-tunnel receiver for remote display. |
+| `vpl2svg` / `vplviewer` | same as above | C compiler, math library (`libm`) | `vpl2svg` itself is standalone C; `vplviewer` then hands converted SVG to `svgviewer`. |
+
+Useful build switches:
+
+```bash
+RSFPY_BUILD_NATIVE=0 pip install -e .      # install Python pieces only
+RSFPY_REQUIRE_NATIVE=1 pip install -e .    # fail if required native tools do not build
+```
 
 ### macOS
+
+Minimal Python + plotting + `vpl2svg` build tools:
+
+```bash
+xcode-select --install
+brew install pkgconf
+pip install -e .
+```
+
+Basic plotting plus X11 `svgviewer`:
+
+```bash
+brew install pkgconf cairo glib librsvg libx11
+pip install -e .
+```
+
+GTK `svgviewer` and `rsfclient`:
 
 ```bash
 brew install pkgconf gtk4 librsvg cairo glib libx11
 pip install -e .
 ```
+
+For the X11 backend, install and start XQuartz separately, then make sure `DISPLAY` is valid.
 
 On Apple Silicon, make sure Homebrew's `pkg-config` files are visible:
 
@@ -51,6 +89,26 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfi
 
 ### Ubuntu / Debian
 
+Minimal Python + plotting + `vpl2svg` build tools:
+
+```bash
+sudo apt update
+sudo apt install build-essential pkg-config
+pip install -e .
+```
+
+Basic plotting plus X11 `svgviewer`:
+
+```bash
+sudo apt update
+sudo apt install build-essential pkg-config \
+    libx11-dev libcairo2-dev librsvg2-dev libglib2.0-dev
+
+pip install -e .
+```
+
+GTK `svgviewer` and `rsfclient`:
+
 ```bash
 sudo apt update
 sudo apt install build-essential pkg-config \
@@ -58,6 +116,8 @@ sudo apt install build-essential pkg-config \
 
 pip install -e .
 ```
+
+If you only need GTK and not the X11 fallback, `libx11-dev` can be omitted.
 
 ### Windows
 
