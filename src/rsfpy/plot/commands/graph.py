@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib.ticker import LogLocator
 
 from rsfpy import Rsfarray
+from rsfpy.plot.style import normalize_fontweight
 from rsfpy.version import __SVG_SPLITTER
 from .common import (
     PlotCommandContext, add_overlays, bool_param, configure_matplotlib,
@@ -25,23 +26,61 @@ def _cycle(value, count, default):
     return values[:count]
 
 
+def _split_values(value):
+    if value in (None, ""):
+        return []
+    return [item for item in re.split(r"[ ,;]+", str(value).strip()) if item]
+
+
+def _legend_labels(params, data, count):
+    if not bool_param(params, "legend", False):
+        return None
+
+    labels = None
+    raw = params.get("legends")
+    if raw not in (None, ""):
+        labels = _split_values(raw)
+        if len(labels) != count:
+            warning("Warning: number of legends %d != number of traces %d, ignore legends."
+                    % (len(labels), count))
+            labels = None
+
+    if labels is None and count > 1:
+        axis2 = np.asarray(data.axis2).reshape(-1)
+        axis_label = data.label2 or "Trace"
+        labels = ["%s=%s" % (axis_label, axis2[index]) for index in range(count)]
+
+    return labels
+
+
 def _splitter(label):
     return __SVG_SPLITTER[:-3] + 'framelabel="%s"' % label + __SVG_SPLITTER[-3:]
 
 
 def _render(context, data):
     params = context.params
+    if "wherexlabel" not in params:
+        params["wherexlabel"] = "bottom"
+    if "wherextick" not in params:
+        params["wherextick"] = params.get("wherexlabel", "bottom")
+
     figure, axes, dpi = create_figure(context)
     count = data.n2
     colors = _cycle(params.get("lcolors", params.get("lcolor")), count,
                     ["k", "r", "g", "b", "c", "m", "y"])
-    styles = _cycle(params.get("lstyles", params.get("lstyle", params.get("linestyle"))), count,
+    styles = _cycle(params.get("lstyles", params.get("linestyles",
+                    params.get("lstyle", params.get("linestyle")))), count,
                     ["-", "--", "-.", ":"])
     stem = bool_param(params, "stem", False)
-    marker = params.get("markers", params.get("marker", params.get("symbols", params.get("symbol"))))
+    marker = params.get("markers", params.get("symbols", params.get("marker", params.get("symbol"))))
     markers = _cycle(marker, count, [".", ",", "o", "*", "s", "p", "x", "d", "v", "^", "<", ">"] if stem else ["none"])
     width = float_param(params, "plotfat", context.frame_style.width or 1.0)
-    size = float_param(params, "markersize", float_param(params, "markersz", context.font_style.fontsize or 12.0))
+    size = float_param(params, "markersize",
+                       float_param(params, "markersz",
+                                   float_param(params, "symbolsize",
+                                               float_param(params, "symbolsz",
+                                                           context.font_style.fontsize or 12.0))))
+    labels = _legend_labels(params, data, count)
     transp = bool_param(params, "transp", False)
     for index in range(count):
         values = np.asarray(data[:, index]).reshape(-1)
@@ -54,12 +93,14 @@ def _render(context, data):
         if stem:
             container = axes.stem(x, y, linefmt=colors[index] + "-",
                                   markerfmt=colors[index] + markers[index],
-                                  basefmt=(context.frame_style.color or "k") + styles[index])
+                                  basefmt=(context.frame_style.color or "k") + styles[index],
+                                  label=labels[index] if labels else None)
             container.markerline.set_markersize(size)
             container.stemlines.set_linewidth(width)
         else:
             axes.plot(x, y, color=colors[index], linewidth=width, linestyle=styles[index],
-                      marker=markers[index], markersize=size)
+                      marker=markers[index], markersize=size,
+                      label=labels[index] if labels else None)
     if transp:
         default1, default2 = axes.get_ylim(), axes.get_xlim()
     else:
@@ -88,6 +129,17 @@ def _render(context, data):
         axes.set_ylim(max2, min2) if bool_param(params, "yreverse", False) else axes.set_ylim(min2, max2)
         axes.set_xlabel(data.label_unit(0))
         axes.set_ylabel(data.label_unit(1))
+    if labels:
+        legend_box = bool_param(params, "legendbox", False)
+        legend = axes.legend(loc=params.get("wherelegend", "best"),
+                             fontsize=float_param(params, "legendsize", context.font_style.fontsize or 12.0),
+                             frameon=legend_box,
+                             ncol=max(1, int(float_param(params, "legendncol", 1))))
+        legend_weight = normalize_fontweight(params.get("legendfat", context.font_style.fontweight or "normal"))
+        for text in legend.get_texts():
+            text.set_fontweight(legend_weight)
+        if legend_box:
+            legend.get_frame().set_alpha(float_param(params, "legendalpha", 0.8))
     decorate_axes(context, axes, title=params.get("title", data.header.get("title", "")),
                   format1=params.get("format1"), format2=params.get("format2"),
                   ntic1=float_param(params, "ntic1", 5), ntic2=float_param(params, "ntic2", 5))

@@ -15,7 +15,7 @@ from rsfpy.plot.movie import MovieFrame
 from rsfpy.plot.movie.grey3 import Grey3MovieUpdater
 from rsfpy.plot.display import estimate_gain, make_colormap
 from .common import (
-    PlotCommandContext, bool_param, configure_matplotlib, create_figure,
+    PlotCommandContext, add_overlays, bool_param, configure_matplotlib, create_figure,
     error, float_param, save_figure, warning, show_documentation,
     wants_documentation,
 )
@@ -30,7 +30,11 @@ def _bar_data(params, data, frame3, scalebar):
         error("Error reading bar= when scalebar=y, no bar file supplied.")
     try:
         values = np.asarray(Rsfarray(path).window(n3=1, f3=frame3)).reshape(-1)
-        return values, values[0], values[1]
+        if values.size < 8:
+            error("Error reading bar= when scalebar=y, bar file is too short.")
+        minval, maxval = np.frombuffer(values[:8].astype(np.uint8, copy=False).tobytes(),
+                                       dtype=np.float32)[:2]
+        return values, float(minval), float(maxval)
     except Exception as exc:
         error("Error reading bar= when scalebar=y, %s" % exc)
 
@@ -59,7 +63,7 @@ def _gain_reference(data, params, movie, frame1, frame2, frame3):
     return data, False
 
 
-def _decorate(context, gattr, params, *, format1, format2, format3, ntic1, ntic2, ntic3):
+def _decorate(context, gattr, params, *, title_text, format1, format2, format3, ntic1, ntic2, ntic3):
     frame = context.frame_style
     axis = context.axis_style
     font = context.font_style
@@ -69,7 +73,7 @@ def _decorate(context, gattr, params, *, format1, format2, format3, ntic1, ntic2
     width = axis.width if axis.width is not None else (frame.width or 1.0)
     ticksize = float_param(params, "ticksz", font.fontsize or 12.0)
     tickfat = normalize_fontweight(params.get("tickfat", params.get("tickweight", font.fontweight or "normal")))
-    gattr.set_title(params.get("title", ""), fontsize=title.fontsize or font.fontsize or 12.0,
+    gattr.set_title(title_text, fontsize=title.fontsize or font.fontsize or 12.0,
                     fontweight=normalize_fontweight(title.fontweight or font.fontweight or "normal"), color=title.color or color)
     gattr.set_lines(color=color, width=width)
     gattr.set_spines(color=color, width=width)
@@ -135,19 +139,22 @@ def main(argv=None):
                          allpos=bool_param(params, "allpos", False),
                          gpow=float_param(params, "gpow", 1.0),
                          polarity=bool_param(params, "polarity", False))
+    title_text = params.get("title", data.header.get("title", ""))
     gattr = data.grey3(ax=axes, frame1=frame1, frame2=frame2, frame3=frame3,
                        point1=float_param(params, "point1", 0.8), point2=float_param(params, "point2", 0.4),
                        colorbar=scalebar, cmap=cmap, clip=gain.clip,
                        pclip=None, bias=gain.bias,
-                       allpos=bool_param(params, "allpos", False), title=params.get("title", data.header.get("title", "")),
+                       allpos=bool_param(params, "allpos", False), title=title_text,
                        n3tic=float_param(params, "ntic3", None), ntic1=float_param(params, "ntic1", 5),
                        ntic2=float_param(params, "ntic2", 5), format1=params.get("format1"),
                        format2=params.get("format2"), format3=params.get("format3"),
                        flat=bool_param(params, "flat", True),
                        gain=gain, max_pixels=float_param(params, "maxpixels", None), show=False)
-    _decorate(context, gattr, params, format1=params.get("format1"), format2=params.get("format2"),
+    _decorate(context, gattr, params, title_text=title_text,
+              format1=params.get("format1"), format2=params.get("format2"),
               format3=params.get("format3"), ntic1=float_param(params, "ntic1", 5),
               ntic2=float_param(params, "ntic2", 5), ntic3=float_param(params, "ntic3", None))
+    add_overlays(context, gattr.main_ax or axes)
     bar = _bar_data(params, data, frame3, scalebar)
     if scalebar and gattr.cax is not None:
         if bar is not None:
@@ -160,10 +167,23 @@ def main(argv=None):
             gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(params["formatbar"]) if params.get("formatbar") else ScalarFormatter())
         elif params.get("formatbar"):
             gattr.cax.yaxis.set_major_formatter(FormatStrFormatter(params["formatbar"]))
+        gattr.cax.yaxis.set_major_locator(MaxNLocator(nbins=float_param(params, "nticbar", 5)))
         if params.get("barlabel"):
-            gattr.cax.set_ylabel(params["barlabel"], fontsize=float_param(params, "barlabelsz", context.label_style.fontsize),
+            barunit = params.get("barunit", params.get("unitbar"))
+            barlabel = params["barlabel"] if barunit is None else "%s (%s)" % (params["barlabel"], barunit)
+            gattr.cax.set_ylabel(barlabel, fontsize=float_param(params, "barlabelsz", context.label_style.fontsize),
                                  fontweight=normalize_fontweight(params.get("barlabelfat", context.label_style.fontweight)),
                                  color=context.axis_style.color or context.frame_style.color or "k")
+        tickfat = normalize_fontweight(params.get("tickfat", params.get("tickweight", context.font_style.fontweight or "normal")))
+        ticksize = float_param(params, "ticksz", context.font_style.fontsize or 12.0)
+        axis_color = context.axis_style.color or context.frame_style.color or "k"
+        axis_width = context.axis_style.width if context.axis_style.width is not None else (context.frame_style.width or 1.0)
+        gattr.cax.tick_params(axis="both", which="major", width=axis_width, colors=axis_color, labelsize=ticksize)
+        for tick in gattr.cax.get_yticklabels():
+            tick.set_fontweight(tickfat)
+        for spine in gattr.cax.spines.values():
+            spine.set_edgecolor(axis_color)
+            spine.set_linewidth(axis_width)
     plt.tight_layout()
     movie = movie_request
     if movie not in (1, 2, 3) or context.output_format.lower() != "svg":

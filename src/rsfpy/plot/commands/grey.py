@@ -37,7 +37,11 @@ def _bar_data(params, data, scalebar):
         error("Error reading bar= when scalebar=y, no bar file supplied.")
     try:
         values = np.asarray(Rsfarray(path).window(n3=1)).reshape(-1)
-        return values, values[0], values[1]
+        if values.size < 8:
+            error("Error reading bar= when scalebar=y, bar file is too short.")
+        minval, maxval = np.frombuffer(values[:8].astype(np.uint8, copy=False).tobytes(),
+                                       dtype=np.float32)[:2]
+        return values, float(minval), float(maxval)
     except Exception as exc:
         error("Error reading bar= when scalebar=y, %s" % exc)
 
