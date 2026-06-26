@@ -128,6 +128,9 @@ typedef struct {
     Color colors[32768];
     int group_depth;
     char groups[32][64];
+    bool clip_active;
+    double clip_xmin, clip_xmax, clip_ymin, clip_ymax;
+    int clip_id;
 } VplState;
 
 typedef struct {
@@ -406,6 +409,100 @@ static double sx(SvgCtx *ctx, double x)
 static double sy(SvgCtx *ctx, double y)
 {
     return u_to_px(ctx->bounds.ymax - y + ctx->pad);
+}
+
+static bool point_in_clip(VplState *st, double x, double y)
+{
+    if (!st->clip_active) return true;
+    return x >= st->clip_xmin && x <= st->clip_xmax &&
+           y >= st->clip_ymin && y <= st->clip_ymax;
+}
+
+static void bounds_add_clipped(Bounds *b, VplState *st, double x, double y)
+{
+    if (!point_in_clip(st, x, y)) return;
+    bounds_add(b, x, y);
+}
+
+static int clip_outcode(VplState *st, double x, double y)
+{
+    int code = 0;
+    if (x < st->clip_xmin) code |= 1;
+    else if (x > st->clip_xmax) code |= 2;
+    if (y < st->clip_ymin) code |= 4;
+    else if (y > st->clip_ymax) code |= 8;
+    return code;
+}
+
+static bool clip_line_to_window(VplState *st,
+                                double *x0, double *y0,
+                                double *x1, double *y1)
+{
+    int c0, c1;
+
+    if (!st->clip_active) return true;
+
+    c0 = clip_outcode(st, *x0, *y0);
+    c1 = clip_outcode(st, *x1, *y1);
+
+    while (true) {
+        double x = 0.0, y = 0.0;
+        int c;
+
+        if (!(c0 | c1)) return true;
+        if (c0 & c1) return false;
+
+        c = c0 ? c0 : c1;
+        if (c & 8) {
+            if (*y1 == *y0) return false;
+            x = *x0 + (*x1 - *x0) * (st->clip_ymax - *y0) / (*y1 - *y0);
+            y = st->clip_ymax;
+        } else if (c & 4) {
+            if (*y1 == *y0) return false;
+            x = *x0 + (*x1 - *x0) * (st->clip_ymin - *y0) / (*y1 - *y0);
+            y = st->clip_ymin;
+        } else if (c & 2) {
+            if (*x1 == *x0) return false;
+            y = *y0 + (*y1 - *y0) * (st->clip_xmax - *x0) / (*x1 - *x0);
+            x = st->clip_xmax;
+        } else if (c & 1) {
+            if (*x1 == *x0) return false;
+            y = *y0 + (*y1 - *y0) * (st->clip_xmin - *x0) / (*x1 - *x0);
+            x = st->clip_xmin;
+        }
+
+        if (c == c0) {
+            *x0 = x;
+            *y0 = y;
+            c0 = clip_outcode(st, *x0, *y0);
+        } else {
+            *x1 = x;
+            *y1 = y;
+            c1 = clip_outcode(st, *x1, *y1);
+        }
+    }
+}
+
+static void emit_clip_attr(SvgCtx *ctx, VplState *st)
+{
+    (void)ctx;
+    if (st->clip_active && st->clip_id > 0) {
+        fprintf(ctx->out, " clip-path=\"url(#vplclip%d)\"", st->clip_id);
+    }
+}
+
+static void emit_clip_def(SvgCtx *ctx, VplState *st)
+{
+    double x, y, w, h;
+    if (!ctx || !ctx->out || !st->clip_active || st->clip_id <= 0) return;
+    x = sx(ctx, st->clip_xmin);
+    y = sy(ctx, st->clip_ymax);
+    w = u_to_px(st->clip_xmax - st->clip_xmin);
+    h = u_to_px(st->clip_ymax - st->clip_ymin);
+    if (w <= 0.0 || h <= 0.0) return;
+    fprintf(ctx->out,
+            "<defs><clipPath id=\"vplclip%d\"><rect x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\"/></clipPath></defs>\n",
+            st->clip_id, x, y, w, h);
 }
 
 static void svg_escape(FILE *out, const char *s)
@@ -932,6 +1029,7 @@ static void emit_line(SvgCtx *ctx, VplState *st, double x1, double y1,
             effective_stroke_width(ctx, st));
     svg_opacity(ctx->out, c, "stroke-opacity");
     svg_dash_attrs(ctx->out, st);
+    emit_clip_attr(ctx, st);
     fputs("/>\n", ctx->out);
 }
 
@@ -939,6 +1037,7 @@ static void bbox_line(SvgCtx *ctx, VplState *st, double x1, double y1,
                       double x2, double y2)
 {
     double pad = px_to_u(effective_stroke_width(ctx, st));
+    if (!clip_line_to_window(st, &x1, &y1, &x2, &y2)) return;
     bounds_add_fat(&ctx->bounds, x1, y1, (int)ceil(pad));
     bounds_add_fat(&ctx->bounds, x2, y2, (int)ceil(pad));
 }
@@ -982,15 +1081,19 @@ static void emit_polygon(SvgCtx *ctx, VplState *st, double *pts, int npts,
     } else {
         fputs("stroke=\"none\"", ctx->out);
     }
+    emit_clip_attr(ctx, st);
     fputs("/>\n", ctx->out);
 }
 
 static void bbox_polygon(SvgCtx *ctx, VplState *st, double *pts, int npts)
 {
     int i;
-    (void)st;
     for (i = 0; i < npts; i++) {
-        bounds_add(&ctx->bounds, pts[2 * i], pts[2 * i + 1]);
+        bounds_add_clipped(&ctx->bounds, st, pts[2 * i], pts[2 * i + 1]);
+    }
+    if (st->clip_active && npts > 0) {
+        bounds_add(&ctx->bounds, st->clip_xmin, st->clip_ymin);
+        bounds_add(&ctx->bounds, st->clip_xmax, st->clip_ymax);
     }
 }
 
@@ -1153,6 +1256,7 @@ static void emit_text_generic(SvgCtx *ctx, VplState *st, const char *raw,
     fprintf(ctx->out, "\" font-size=\"%.6g\" text-anchor=\"%s\" font-weight=\"%d\"",
             font_px, text_anchor(st), weight);
     svg_opacity(ctx->out, c, "fill-opacity");
+    emit_clip_attr(ctx, st);
     if (fabs(angle) > 0.0001) {
         fprintf(ctx->out, " transform=\"rotate(%.6g %.6g %.6g)\"", -angle, px, py);
     }
@@ -1160,6 +1264,151 @@ static void emit_text_generic(SvgCtx *ctx, VplState *st, const char *raw,
     svg_escape(ctx->out, plain);
     fputs("</text>\n", ctx->out);
     free(plain);
+}
+
+static bool is_symbol_text(VplState *st, const char *raw)
+{
+    return raw && raw[0] && raw[1] == '\0' &&
+           (st->tx_halign == TH_SYMBOL || st->tx_valign == TV_SYMBOL);
+}
+
+static double symbol_size_units(double pathx, double pathy,
+                                  double upx, double upy)
+{
+    double h = hypot(upx, upy);
+    if (h <= 0.0) h = hypot(pathx, pathy);
+    if (h <= 0.0) h = RPERIN / TXPERIN;
+    h *= 0.42;
+    if (h < px_to_u(1.0)) h = px_to_u(1.0);
+    return h;
+}
+
+static void emit_symbol_marker(SvgCtx *ctx, VplState *st, const char *raw,
+                               double x, double y,
+                               double pathx, double pathy,
+                               double upx, double upy)
+{
+    Color c = effective_stroke_color(ctx, st);
+    double s = symbol_size_units(pathx, pathy, upx, upy);
+    double r = s * 0.5;
+    double px = sx(ctx, x);
+    double py = sy(ctx, y);
+    int ch = raw && raw[0] ? (unsigned char)raw[0] : '.';
+    if (!point_in_clip(st, x, y)) return;
+
+    switch (ch) {
+        case '.':
+        case ',':
+            fprintf(ctx->out, "<circle cx=\"%.6g\" cy=\"%.6g\" r=\"%.6g\" fill=\"",
+                    px, py, u_to_px(r * 0.65));
+            svg_color(ctx->out, c);
+            fputc('"', ctx->out);
+            svg_opacity(ctx->out, c, "fill-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case 'o':
+        case 'O':
+        case '0':
+            fprintf(ctx->out, "<circle cx=\"%.6g\" cy=\"%.6g\" r=\"%.6g\" fill=\"none\" stroke=\"",
+                    px, py, u_to_px(r));
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case '+':
+            fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g M %.6g %.6g L %.6g %.6g\" fill=\"none\" stroke=\"",
+                    sx(ctx, x - r), py, sx(ctx, x + r), py,
+                    px, sy(ctx, y - r), px, sy(ctx, y + r));
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linecap=\"round\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case 'x':
+        case 'X':
+            fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g M %.6g %.6g L %.6g %.6g\" fill=\"none\" stroke=\"",
+                    sx(ctx, x - r), sy(ctx, y - r), sx(ctx, x + r), sy(ctx, y + r),
+                    sx(ctx, x - r), sy(ctx, y + r), sx(ctx, x + r), sy(ctx, y - r));
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linecap=\"round\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case '*':
+            fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g M %.6g %.6g L %.6g %.6g M %.6g %.6g L %.6g %.6g M %.6g %.6g L %.6g %.6g\" fill=\"none\" stroke=\"",
+                    sx(ctx, x - r), py, sx(ctx, x + r), py,
+                    px, sy(ctx, y - r), px, sy(ctx, y + r),
+                    sx(ctx, x - 0.707 * r), sy(ctx, y - 0.707 * r),
+                    sx(ctx, x + 0.707 * r), sy(ctx, y + 0.707 * r),
+                    sx(ctx, x - 0.707 * r), sy(ctx, y + 0.707 * r),
+                    sx(ctx, x + 0.707 * r), sy(ctx, y - 0.707 * r));
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linecap=\"round\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case 's':
+        case 'S':
+            fprintf(ctx->out, "<rect x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" fill=\"none\" stroke=\"",
+                    sx(ctx, x - r), sy(ctx, y + r), u_to_px(2.0 * r), u_to_px(2.0 * r));
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case '^':
+        case 'v':
+        case 'V':
+            if (ch == '^') {
+                fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g L %.6g %.6g Z\" fill=\"none\" stroke=\"",
+                        px, sy(ctx, y + r), sx(ctx, x - r), sy(ctx, y - r), sx(ctx, x + r), sy(ctx, y - r));
+            } else {
+                fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g L %.6g %.6g Z\" fill=\"none\" stroke=\"",
+                        px, sy(ctx, y - r), sx(ctx, x - r), sy(ctx, y + r), sx(ctx, x + r), sy(ctx, y + r));
+            }
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linejoin=\"round\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        case 'd':
+        case 'D':
+            fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g L %.6g %.6g L %.6g %.6g Z\" fill=\"none\" stroke=\"",
+                    px, sy(ctx, y + r), sx(ctx, x + r), py, px, sy(ctx, y - r), sx(ctx, x - r), py);
+            svg_color(ctx->out, c);
+            fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linejoin=\"round\"", effective_stroke_width(ctx, st));
+            svg_opacity(ctx->out, c, "stroke-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+        default:
+            fprintf(ctx->out, "<circle cx=\"%.6g\" cy=\"%.6g\" r=\"%.6g\" fill=\"",
+                    px, py, u_to_px(r * 0.65));
+            svg_color(ctx->out, c);
+            fputc('"', ctx->out);
+            svg_opacity(ctx->out, c, "fill-opacity");
+            emit_clip_attr(ctx, st);
+            fputs("/>\n", ctx->out);
+            break;
+    }
+}
+
+static void bbox_symbol_marker(SvgCtx *ctx, VplState *st, double x, double y,
+                               double pathx, double pathy,
+                               double upx, double upy)
+{
+    double r = symbol_size_units(pathx, pathy, upx, upy) * 0.5;
+    if (!point_in_clip(st, x, y)) return;
+    bounds_add(&ctx->bounds, x - r, y - r);
+    bounds_add(&ctx->bounds, x + r, y + r);
 }
 
 static void text_vectors_from_size(int size, int orient,
@@ -1349,7 +1598,9 @@ static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
     fprintf(ctx->out, "<image x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" preserveAspectRatio=\"none\" image-rendering=\"pixelated\" href=\"data:image/png;base64,",
             x, y, w, h);
     write_base64(ctx->out, png.data, png.len);
-    fputs("\"/>\n", ctx->out);
+    fputc('"', ctx->out);
+    emit_clip_attr(ctx, st);
+    fputs("/>\n", ctx->out);
     free(png.data);
 }
 
@@ -1454,14 +1705,17 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) {
+                        if (!point_in_clip(&st, x, y)) continue;
                         Color col = effective_stroke_color(ctx, &st);
                         fprintf(ctx->out, "<circle cx=\"%.6g\" cy=\"%.6g\" r=\"%.6g\" fill=\"",
                                 sx(ctx, x), sy(ctx, y), u_to_px(b > 0 ? b : 4));
                         svg_color(ctx->out, col);
                         fputc('"', ctx->out);
                         svg_opacity(ctx->out, col, "fill-opacity");
+                        emit_clip_attr(ctx, &st);
                         fputs("/>\n", ctx->out);
                         } else {
+                        if (!point_in_clip(&st, x, y)) continue;
                         bounds_add_fat(&ctx->bounds, x, y, b > 0 ? b : 4);
                         }
                     }
@@ -1478,8 +1732,13 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     }
                     if (active) {
                         if (saw_content) *saw_content = true;
-                        if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
-                        else text_bbox_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                        if (is_symbol_text(&st, s)) {
+                            if (emit) emit_symbol_marker(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                            else bbox_symbol_marker(ctx, &st, st.x, st.y, pathx, pathy, upx, upy);
+                        } else {
+                            if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                            else text_bbox_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                        }
                     }
                 }
                 free(s);
@@ -1494,6 +1753,18 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 }
                 if (active) {
                     if (saw_content) *saw_content = true;
+                    if (is_symbol_text(&st, s)) {
+                    if (emit) emit_symbol_marker(ctx, &st, s, st.x, st.y,
+                                                 (double)pathx / TEXTVECSCALE,
+                                                 (double)pathy / TEXTVECSCALE,
+                                                 (double)upx / TEXTVECSCALE,
+                                                 (double)upy / TEXTVECSCALE);
+                    else bbox_symbol_marker(ctx, &st, st.x, st.y,
+                                            (double)pathx / TEXTVECSCALE,
+                                            (double)pathy / TEXTVECSCALE,
+                                            (double)upx / TEXTVECSCALE,
+                                            (double)upy / TEXTVECSCALE);
+                    } else {
                     if (emit) {
                     emit_text_generic(ctx, &st, s, st.x, st.y,
                                       (double)pathx / TEXTVECSCALE,
@@ -1506,6 +1777,7 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                                       (double)pathy / TEXTVECSCALE,
                                       (double)upx / TEXTVECSCALE,
                                       (double)upy / TEXTVECSCALE);
+                    }
                     }
                 }
                 free(s);
@@ -1586,8 +1858,23 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     emit_raster_image(ctx, &st, r, bit, offset, x0, y0, x1, y1, xpix, ypix, orient);
                     } else {
                     if (!skip_raster_payload(r, bit, xpix, ypix)) return false;
-                    bounds_add(&ctx->bounds, x0, y0);
-                    bounds_add(&ctx->bounds, x1, y1);
+                    if (st.clip_active) {
+                        double xmin = x0 < x1 ? x0 : x1;
+                        double xmax = x0 < x1 ? x1 : x0;
+                        double ymin = y0 < y1 ? y0 : y1;
+                        double ymax = y0 < y1 ? y1 : y0;
+                        if (xmin < st.clip_xmin) xmin = st.clip_xmin;
+                        if (xmax > st.clip_xmax) xmax = st.clip_xmax;
+                        if (ymin < st.clip_ymin) ymin = st.clip_ymin;
+                        if (ymax > st.clip_ymax) ymax = st.clip_ymax;
+                        if (xmax >= xmin && ymax >= ymin) {
+                            bounds_add(&ctx->bounds, xmin, ymin);
+                            bounds_add(&ctx->bounds, xmax, ymax);
+                        }
+                    } else {
+                        bounds_add(&ctx->bounds, x0, y0);
+                        bounds_add(&ctx->bounds, x1, y1);
+                    }
                     }
                 } else {
                     if (!skip_raster_payload(r, bit, xpix, ypix)) return false;
@@ -1614,6 +1901,15 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 break;
             case VP_WINDOW:
                 if (!r_i16(r, &a) || !r_i16(r, &b) || !r_i16(r, &c) || !r_i16(r, &d)) return false;
+                st.clip_xmin = a < c ? a : c;
+                st.clip_xmax = a < c ? c : a;
+                st.clip_ymin = b < d ? b : d;
+                st.clip_ymax = b < d ? d : b;
+                st.clip_active = st.clip_xmax > st.clip_xmin && st.clip_ymax > st.clip_ymin;
+                if (st.clip_active && emit) {
+                    st.clip_id = ++ctx->clip_id;
+                    emit_clip_def(ctx, &st);
+                }
                 break;
             case VP_FAT:
                 if (!r_i16(r, &a)) return false;
@@ -1694,8 +1990,13 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     }
                     if (active) {
                         if (saw_content) *saw_content = true;
-                        if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
-                        else text_bbox_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                        if (is_symbol_text(&st, s)) {
+                            if (emit) emit_symbol_marker(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                            else bbox_symbol_marker(ctx, &st, st.x, st.y, pathx, pathy, upx, upy);
+                        } else {
+                            if (emit) emit_text_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                            else text_bbox_generic(ctx, &st, s, st.x, st.y, pathx, pathy, upx, upy);
+                        }
                     }
                 }
                 free(s);
