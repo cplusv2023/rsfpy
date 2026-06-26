@@ -348,7 +348,7 @@ static gboolean pen_tool_is_partial_eraser(App *app);
 static void on_export_clicked(GtkButton *button, gpointer user_data);
 static void on_copy_clicked(GtkButton *button, gpointer user_data);
 static void on_quit_clicked(GtkButton *button, gpointer user_data);
-static gchar *build_clipboard_svg(App *app, gsize *out_len, GError **err);
+static gchar *build_current_view_svg(App *app, gsize *out_len, GError **err);
 
 static gint64 now_ms(void)
 {
@@ -2628,7 +2628,7 @@ static gboolean export_current_view(App *app, const gchar *path, GError **err)
         gsize svg_len = 0;
         gboolean ok;
 
-        svg = build_clipboard_svg(app, &svg_len, err);
+        svg = build_current_view_svg(app, &svg_len, err);
         if (!svg) return FALSE;
 
         ok = g_file_set_contents(path, svg, (gssize)svg_len, err);
@@ -2933,12 +2933,130 @@ static void append_annotations_as_svg(App *app, GString *s)
     g_string_append(s, "</g>\n");
 }
 
-static gchar *build_clipboard_svg(App *app, gsize *out_len, GError **err)
+static const gchar *find_svg_tag_end(const gchar *tag)
+{
+    gboolean in_quote = FALSE;
+    gchar quote = '\0';
+
+    if (!tag) return NULL;
+    for (const gchar *p = tag; *p; p++) {
+        if (in_quote) {
+            if (*p == quote) in_quote = FALSE;
+        } else if (*p == '"' || *p == '\'') {
+            in_quote = TRUE;
+            quote = *p;
+        } else if (*p == '>') {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static gboolean attr_name_matches_at(const gchar *p,
+                                     const gchar *end,
+                                     const gchar *name)
+{
+    gsize n;
+    if (!p || !end || !name) return FALSE;
+    n = strlen(name);
+    if ((gsize)(end - p) < n || strncmp(p, name, n) != 0) return FALSE;
+    return p + n < end && p[n] == '=';
+}
+
+static void append_tag_without_attr(GString *out,
+                                    const gchar *tag_start,
+                                    const gchar *tag_end,
+                                    const gchar *attr_name)
+{
+    const gchar *p = tag_start;
+    gsize attr_len;
+
+    if (!out || !tag_start || !tag_end || tag_end < tag_start || !attr_name) return;
+    attr_len = strlen(attr_name);
+
+    while (p < tag_end) {
+        const gchar *hit = g_strstr_len(p, (gssize)(tag_end - p), attr_name);
+        const gchar *attr_start;
+        const gchar *attr_end;
+
+        if (!hit) break;
+        if (hit > tag_start && !g_ascii_isspace((guchar)hit[-1])) {
+            p = hit + attr_len;
+            continue;
+        }
+        if (!attr_name_matches_at(hit, tag_end, attr_name)) {
+            p = hit + attr_len;
+            continue;
+        }
+
+        attr_start = hit;
+        while (attr_start > tag_start && g_ascii_isspace((guchar)attr_start[-1])) attr_start--;
+        attr_end = hit + attr_len + 1;
+        if (attr_end < tag_end && (*attr_end == '"' || *attr_end == '\'')) {
+            gchar quote = *attr_end++;
+            while (attr_end < tag_end && *attr_end != quote) attr_end++;
+            if (attr_end < tag_end) attr_end++;
+        } else {
+            while (attr_end < tag_end &&
+                   !g_ascii_isspace((guchar)*attr_end) &&
+                   *attr_end != '>') {
+                attr_end++;
+            }
+        }
+
+        g_string_append_len(out, p, (gssize)(attr_start - p));
+        p = attr_end;
+    }
+    g_string_append_len(out, p, (gssize)(tag_end - p));
+}
+
+static gchar *sanitize_svg_for_office_image_clip(const gchar *svg)
+{
+    GString *out;
+    const gchar *p;
+
+    if (!svg) return NULL;
+    out = g_string_new(NULL);
+    p = svg;
+
+    while (*p) {
+        if (g_str_has_prefix(p, "<image")) {
+            const gchar *tag_end = find_svg_tag_end(p);
+            if (!tag_end) break;
+            append_tag_without_attr(out, p, tag_end + 1, "clip-path");
+            p = tag_end + 1;
+        } else if (g_str_has_prefix(p, "<g")) {
+            const gchar *tag_end = find_svg_tag_end(p);
+            const gchar *group_end;
+            const gchar *image_in_group;
+
+            if (!tag_end) break;
+            group_end = g_strstr_len(tag_end + 1, -1, "</g>");
+            image_in_group = group_end
+                ? g_strstr_len(tag_end + 1, (gssize)(group_end - tag_end - 1), "<image")
+                : NULL;
+
+            if (image_in_group) {
+                append_tag_without_attr(out, p, tag_end + 1, "clip-path");
+            } else {
+                g_string_append_len(out, p, (gssize)(tag_end + 1 - p));
+            }
+            p = tag_end + 1;
+        } else {
+            g_string_append_c(out, *p++);
+        }
+    }
+
+    if (*p) g_string_append(out, p);
+    return g_string_free(out, FALSE);
+}
+
+static gchar *build_current_view_svg(App *app, gsize *out_len, GError **err)
 {
     gchar *src = NULL;
     gsize src_len = 0;
     gchar *close_tag;
-    gchar *inner;
+    gchar *sanitized;
     GString *overlay;
     GString *merged;
     double doc_x, doc_y, doc_w, doc_h;
@@ -2964,21 +3082,37 @@ static gchar *build_clipboard_svg(App *app, gsize *out_len, GError **err)
     g_string_free(overlay, TRUE);
     g_free(src);
 
+    sanitized = sanitize_svg_for_office_image_clip(merged->str);
+    if (sanitized) {
+        g_string_free(merged, TRUE);
+        merged = g_string_new(sanitized);
+        g_free(sanitized);
+    }
+
     if (current_visible_doc_rect(app, &doc_x, &doc_y, &doc_w, &doc_h, &pixel_w, &pixel_h)) {
         const gchar *svg_start = g_strstr_len(merged->str, (gssize)merged->len, "<svg");
-        GString *cropped = g_string_new(NULL);
-        inner = svg_start ? g_strdup(svg_start) : g_string_free(merged, FALSE);
+        const gchar *open_end = find_svg_tag_end(svg_start);
+        const gchar *svg_close = g_strrstr(merged->str, "</svg");
 
-        g_string_append_printf(cropped,
-                               "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"%.12g %.12g %.12g %.12g\">\n",
-                               pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
-        g_string_append(cropped, inner);
-        g_string_append(cropped, "\n</svg>\n");
-        g_free(inner);
+        if (svg_start && open_end && svg_close && svg_close > open_end) {
+            const gchar *content_start = open_end + 1;
+            gsize content_len = (gsize)(svg_close - content_start);
+            GString *cropped = g_string_new(NULL);
 
-        if (svg_start) g_string_free(merged, TRUE);
-        if (out_len) *out_len = cropped->len;
-        return g_string_free(cropped, FALSE);
+            g_string_append_printf(cropped,
+                                   "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                                   "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                                   "width=\"%d\" height=\"%d\" "
+                                   "viewBox=\"%.12g %.12g %.12g %.12g\" "
+                                   "style=\"overflow:hidden\">\n",
+                                   pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
+            g_string_append_len(cropped, content_start, content_len);
+            g_string_append(cropped, "\n</svg>\n");
+
+            g_string_free(merged, TRUE);
+            if (out_len) *out_len = cropped->len;
+            return g_string_free(cropped, FALSE);
+        }
     }
 
     if (out_len) *out_len = merged->len;
@@ -3310,7 +3444,7 @@ static void copy_current_view_to_clipboard(App *app)
 
     if (!app) return;
 
-    svg = build_clipboard_svg(app, &svg_len, &err);
+    svg = build_current_view_svg(app, &svg_len, &err);
     if (err) {
         g_error_free(err);
         err = NULL;
@@ -3359,7 +3493,7 @@ static void copy_current_view_to_clipboard(App *app)
 
     if (!app) return;
 
-    svg = build_clipboard_svg(app, &svg_len, &err);
+    svg = build_current_view_svg(app, &svg_len, &err);
     if (err) {
         g_error_free(err);
         err = NULL;
@@ -3405,7 +3539,7 @@ static void copy_current_view_to_clipboard(App *app)
         return;
     }
 
-    svg = build_clipboard_svg(app, &svg_len, &err);
+    svg = build_current_view_svg(app, &svg_len, &err);
     if (svg && svg_len <= CLIPBOARD_SVG_WARN_BYTES) {
         gdk_clipboard_set_text(clipboard, svg);
         gtk_label_set_text(GTK_LABEL(app->status_label),
