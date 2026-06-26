@@ -137,7 +137,7 @@ try:
                 self.Command(target + '.flip', target2,
                              '%s $SOURCE %s' % (self.sfpen, locked))
             else:
-                self.Command(target + '.flip', target2, '%s $SOURCE' % viewer)
+                self.Command(target + '.flip', target2, '%s $SOURCE %s' % (viewer, locked))
 
         test = self.Test('.test_' + target, target2,
                          figdir=self.figs, bindir=self.bindir)
