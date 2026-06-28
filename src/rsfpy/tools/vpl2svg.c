@@ -114,6 +114,19 @@ typedef struct {
 } ConvertOptions;
 
 typedef struct {
+    bool active;
+    Color color;
+    double width;
+    bool dash_on;
+    int dash_count;
+    double dashes[20];
+    bool clip_active;
+    int clip_id;
+    double last_x;
+    double last_y;
+} LinePath;
+
+typedef struct {
     int current_color;
     int fat;
     int tx_font;
@@ -144,6 +157,7 @@ typedef struct {
     bool warned_raster;
     bool warned_pat;
     ConvertOptions opt;
+    LinePath line_path;
 } SvgCtx;
 
 typedef struct {
@@ -1199,32 +1213,87 @@ static const char *effective_font_family(SvgCtx *ctx, VplState *st)
     return font_family_alias("1");
 }
 
-static void svg_dash_attrs(FILE *out, VplState *st)
+static void svg_dash_values_attrs(FILE *out, bool dash_on, int dash_count, const double *dashes)
 {
     int i;
-    if (!st->dash_on || st->dash_count <= 0) return;
+    if (!dash_on || dash_count <= 0) return;
     fputs(" stroke-dasharray=\"", out);
-    for (i = 0; i < st->dash_count * 2; i++) {
+    for (i = 0; i < dash_count * 2; i++) {
         if (i) fputc(' ', out);
-        fprintf(out, "%.3g", u_to_px(st->dashes[i]));
+        fprintf(out, "%.3g", u_to_px(dashes[i]));
     }
     fputc('"', out);
+}
+
+static bool same_color(Color a, Color b)
+{
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a && a.set == b.set;
+}
+
+static bool same_line_style(LinePath *path, Color color, double width,
+                            VplState *st)
+{
+    int i;
+    if (!path->active) return false;
+    if (!same_color(path->color, color)) return false;
+    if (path->width != width) return false;
+    if (path->dash_on != st->dash_on || path->dash_count != st->dash_count) return false;
+    for (i = 0; i < st->dash_count * 2; i++) {
+        if (path->dashes[i] != st->dashes[i]) return false;
+    }
+    if (path->clip_active != st->clip_active) return false;
+    if (path->clip_id != (st->clip_active ? st->clip_id : 0)) return false;
+    return true;
+}
+
+static void flush_line_path(SvgCtx *ctx)
+{
+    LinePath *path = &ctx->line_path;
+    if (!path->active) return;
+    fputs("\" fill=\"none\" stroke=\"", ctx->out);
+    svg_color(ctx->out, path->color);
+    fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linecap=\"butt\" stroke-linejoin=\"round\"",
+            path->width);
+    svg_opacity(ctx->out, path->color, "stroke-opacity");
+    svg_dash_values_attrs(ctx->out, path->dash_on, path->dash_count, path->dashes);
+    if (path->clip_active && path->clip_id > 0) {
+        fprintf(ctx->out, " clip-path=\"url(#vplclip%d)\"", path->clip_id);
+    }
+    fputs("/>\n", ctx->out);
+    memset(path, 0, sizeof(*path));
 }
 
 static void emit_line(SvgCtx *ctx, VplState *st, double x1, double y1,
                       double x2, double y2)
 {
     Color c = effective_stroke_color(ctx, st);
+    double width = effective_stroke_width(ctx, st);
+    double sx1 = sx(ctx, x1), sy1 = sy(ctx, y1);
+    double sx2 = sx(ctx, x2), sy2 = sy(ctx, y2);
+    LinePath *path = &ctx->line_path;
     if (st->fat < 0) return;
-    fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g\" fill=\"none\" stroke=\"",
-            sx(ctx, x1), sy(ctx, y1), sx(ctx, x2), sy(ctx, y2));
-    svg_color(ctx->out, c);
-    fprintf(ctx->out, "\" stroke-width=\"%.6g\" stroke-linecap=\"butt\" stroke-linejoin=\"round\"",
-            effective_stroke_width(ctx, st));
-    svg_opacity(ctx->out, c, "stroke-opacity");
-    svg_dash_attrs(ctx->out, st);
-    emit_clip_attr(ctx, st);
-    fputs("/>\n", ctx->out);
+    if (!same_line_style(path, c, width, st)) {
+        flush_line_path(ctx);
+    }
+    if (!path->active) {
+        int i;
+        path->active = true;
+        path->color = c;
+        path->width = width;
+        path->dash_on = st->dash_on;
+        path->dash_count = st->dash_count;
+        for (i = 0; i < st->dash_count * 2; i++) path->dashes[i] = st->dashes[i];
+        path->clip_active = st->clip_active;
+        path->clip_id = st->clip_active ? st->clip_id : 0;
+        fprintf(ctx->out, "<path d=\"M %.6g %.6g L %.6g %.6g",
+                sx1, sy1, sx2, sy2);
+    } else if (path->last_x == sx1 && path->last_y == sy1) {
+        fprintf(ctx->out, " L %.6g %.6g", sx2, sy2);
+    } else {
+        fprintf(ctx->out, " M %.6g %.6g L %.6g %.6g", sx1, sy1, sx2, sy2);
+    }
+    path->last_x = sx2;
+    path->last_y = sy2;
 }
 
 static void bbox_line(SvgCtx *ctx, VplState *st, double x1, double y1,
@@ -1249,6 +1318,7 @@ static void emit_polygon(SvgCtx *ctx, VplState *st, double *pts, int npts,
 {
     int i;
     Color c = effective_stroke_color(ctx, st);
+    flush_line_path(ctx);
     if (npts <= 0) return;
     if (is_corner_cleanup_fill(st, npts, fill, stroke)) c = ctx->opt.bgcolor;
     fputs("<path d=\"", ctx->out);
@@ -1435,6 +1505,7 @@ static void emit_text_generic(SvgCtx *ctx, VplState *st, const char *raw,
     const char *family = effective_font_family(ctx, st);
     double font_units, font_px, angle, dy;
     int weight = effective_text_weight(ctx, st);
+    flush_line_path(ctx);
     normalize_text_vectors(ctx, st, &pathx, &pathy, &upx, &upy);
     font_units = hypot(upx, upy);
     if (font_units <= 0.0) font_units = RPERIN / TXPERIN;
@@ -1489,6 +1560,7 @@ static void emit_symbol_marker(SvgCtx *ctx, VplState *st, const char *raw,
     double py = sy(ctx, y);
     int ch = raw && raw[0] ? (unsigned char)raw[0] : '.';
     if (!point_in_clip(st, x, y)) return;
+    flush_line_path(ctx);
 
     switch (ch) {
         case '.':
@@ -1779,6 +1851,7 @@ static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
     double w = fabs(u_to_px(x1 - x0));
     double h = fabs(u_to_px(y1 - y0));
 
+    flush_line_path(ctx);
     if (!decode_raster_rgba(r, st, bit, offset, xpix, ypix, &rgba)) {
         die("failed to decode raster payload");
     }
@@ -1900,6 +1973,7 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                     if (active) {
                         if (saw_content) *saw_content = true;
                         if (emit) {
+                        flush_line_path(ctx);
                         if (!point_in_clip(&st, x, y)) continue;
                         Color col = effective_stroke_color(ctx, &st);
                         fprintf(ctx->out, "<circle cx=\"%.6g\" cy=\"%.6g\" r=\"%.6g\" fill=\"",
@@ -2078,9 +2152,11 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 break;
             }
             case VP_BREAK:
+                if (emit) flush_line_path(ctx);
                 st.group_depth = 0;
                 break;
             case VP_ERASE:
+                if (emit) flush_line_path(ctx);
                 if (frame_has_content) {
                     current_frame++;
                     frame_has_content = false;
@@ -2104,6 +2180,7 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 st.clip_ymax = b < d ? d : b;
                 st.clip_active = st.clip_xmax > st.clip_xmin && st.clip_ymax > st.clip_ymin;
                 if (st.clip_active && emit && frame_active) {
+                    flush_line_path(ctx);
                     st.clip_id = ++ctx->clip_id;
                     emit_clip_def(ctx, &st);
                 } else {
@@ -2167,13 +2244,16 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
             case VP_BEGIN_GROUP:
                 if (!r_cstring(r, &s)) return false;
                 if (cmd == VP_BEGIN_GROUP) {
+                    if (emit) flush_line_path(ctx);
                     group_push(&st, s);
                 } else if (emit && s && *s) {
+                    flush_line_path(ctx);
                     fprintf(stderr, "%s\n", s);
                 }
                 free(s);
                 break;
             case VP_END_GROUP:
+                if (emit) flush_line_path(ctx);
                 group_pop(&st);
                 break;
             case VP_OLDTEXT:
@@ -2204,6 +2284,7 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
                 die("invalid VPL command 0x%02x at byte %zu", cmd, r->pos - 1);
         }
     }
+    if (emit) flush_line_path(ctx);
     if (frame_count_out) {
         *frame_count_out = any_content ? current_frame + (frame_has_content ? 1 : 0) : 1;
     }
