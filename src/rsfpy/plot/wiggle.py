@@ -371,7 +371,7 @@ def wiggle(
         if label2 is None and hasattr(data_obj, "label_unit"):
             label2 = data_obj.label_unit(axis=1)
 
-    arr = np.squeeze(_as_plain_array(data_obj))
+    arr = _as_plain_array(data_obj)
     if arr.ndim < 2:
         raise ValueError("Input data must be at least 2D.")
     if arr.ndim > 2:

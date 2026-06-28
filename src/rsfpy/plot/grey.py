@@ -63,7 +63,6 @@ def grey(
     plt.Axes
         The axes object with the image plot.
     """
-    data = np.squeeze(data)
     if data.ndim < 2:
         raise ValueError("Input data must be at least 2D.")
     elif data.ndim > 2:

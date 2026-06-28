@@ -88,6 +88,7 @@ typedef struct {
 typedef struct {
     Color color;
     bool color_set;
+    bool color_default;
     bool size_set;
     double size;
     bool fat_set;
@@ -1049,6 +1050,11 @@ static bool in_frame_number_group(VplState *st)
     return group_has(st, "frame number");
 }
 
+static bool in_cube_indicator_group(VplState *st)
+{
+    return group_has(st, "colored lines");
+}
+
 static bool in_label_group(VplState *st)
 {
     return group_has(st, "axis") ||
@@ -1059,6 +1065,13 @@ static bool in_label_group(VplState *st)
 static bool style_color(const Style *style, Color *out)
 {
     if (!style->color_set) return false;
+    *out = style->color;
+    return true;
+}
+
+static bool style_explicit_color(const Style *style, Color *out)
+{
+    if (!style->color_set || style->color_default) return false;
     *out = style->color;
     return true;
 }
@@ -1079,7 +1092,10 @@ static bool style_stroke_width_px(const Style *style, double *out)
 static Color effective_stroke_color(SvgCtx *ctx, VplState *st)
 {
     Color c;
-    if (in_grid_group(st)) {
+    if (in_cube_indicator_group(st)) {
+        if (style_explicit_color(&ctx->opt.axis_style, &c) ||
+            style_explicit_color(&ctx->opt.frame_style, &c)) return c;
+    } else if (in_grid_group(st)) {
         if (style_color(&ctx->opt.grid_style, &c) ||
             style_color(&ctx->opt.frame_style, &c)) return c;
     } else if (in_axis_group(st)) {
@@ -2242,10 +2258,12 @@ static void style_set_color_arg(Style *style, const char *name, const char *valu
     if (parse_color_spec(value, &c)) {
         style->color = c;
         style->color_set = true;
+        style->color_default = false;
         return;
     }
     style->color = default_palette_color(parse_int_arg(name, value));
     style->color_set = true;
+    style->color_default = false;
 }
 
 static Style *style_for_option(ConvertOptions *opt, const char *name, const char **prefix_out)
@@ -2330,10 +2348,12 @@ static void apply_default_styles(ConvertOptions *opt)
     if (!opt->frame_style.color_set) {
         opt->frame_style.color = inv;
         opt->frame_style.color_set = true;
+        opt->frame_style.color_default = true;
     }
     if (!opt->font_style.color_set) {
         opt->font_style.color = inv;
         opt->font_style.color_set = true;
+        opt->font_style.color_default = true;
     }
 }
 
