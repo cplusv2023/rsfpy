@@ -28,6 +28,8 @@ __doc__ = """
     \tfont=, fontfamily=, fontsz=, fontcolor=, fontfat=/fontweight=
     \t    Global text defaults. More specific title*/label*/barlabel*/
     \t    scalebar* options override these values.
+    \t    font/fontfamily aliases: 1=default sans stack, 2=serif stack,
+    \t    3=monospace stack.
 
     \tframecolor=, framefat=/framewidth=
     \t    Global frame/axis/grid defaults.
