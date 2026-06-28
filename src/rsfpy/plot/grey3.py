@@ -156,6 +156,14 @@ class Grey3Attributes:
                 setter(font_kwargs[key])
 
 
+def _slice_as_2d(slice_data, shape):
+    """Preserve singleton business axes when Rsfdata.window collapses them."""
+
+    if slice_data.ndim == 2:
+        return slice_data
+    return slice_data.reshape(shape)
+
+
 def grey3flat(
     data: Union[np.ndarray, "Rsfarray"],
     *,
@@ -181,7 +189,6 @@ def grey3flat(
     """
     gattr = Grey3Attributes()
 
-    data = np.squeeze(data)
     if data.ndim < 3:
         raise ValueError(f"Input data must be at least 3D, got shape {data.shape}")
     elif data.ndim > 3:
@@ -226,6 +233,9 @@ def grey3flat(
         slice1 = data[:, :, frame3]  # n1-n2
         slice2 = data[:, frame2, :]  # n1-n3
         slice3 = data[frame1, :, :]  # n2-n3
+    slice1 = _slice_as_2d(slice1, (ny, nx))
+    slice2 = _slice_as_2d(slice2, (ny, nz))
+    slice3 = _slice_as_2d(slice3, (nx, nz))
 
     allslice = np.concatenate([slice1.ravel(), slice2.ravel(), slice3.ravel()])
     if bias is None:
@@ -448,7 +458,6 @@ def grey3cube(
 ) -> plt.Figure:
    
     gattr = Grey3Attributes()
-    data = np.squeeze(data)
     if data.ndim < 3:
         raise ValueError(f"Input data must be at least 3D, got shape {data.shape}")
     elif data.ndim > 3:
@@ -493,6 +502,9 @@ def grey3cube(
         slice1 = data[:, :, frame3]  # n1-n2
         slice2 = data[:, frame2, :]  # n1-n3
         slice3 = data[frame1, :, :]  # n2-n3
+    slice1 = _slice_as_2d(slice1, (ny, nx))
+    slice2 = _slice_as_2d(slice2, (ny, nz))
+    slice3 = _slice_as_2d(slice3, (nx, nz))
     allslice = np.concatenate([slice1.ravel(), slice2.ravel(), slice3.ravel()])
     if bias is None:
         bias = 0

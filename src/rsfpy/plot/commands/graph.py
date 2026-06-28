@@ -58,6 +58,10 @@ def _splitter(label):
 
 
 def _render(context, data):
+    if data.ndim < 2:
+        data = data.reshape((data.n1, 1))
+    elif data.ndim > 2:
+        data = data.reshape((data.n1, data.n2, -1))[:, :, 0]
     params = context.params
     if "wherexlabel" not in params:
         params["wherexlabel"] = "bottom"
