@@ -15,6 +15,9 @@ __doc__ = """
     \tNon key=value arguments are input files, except that a following .svg
     \targument is used as the output path for the previous input.
 
+    \tfont/fontfamily aliases: 1=default sans stack, 2=serif stack,
+    \t3=monospace stack.
+
     \tstandard=n
     \t    Default. Preserve rsfpy's custom multi-frame SVG sequence markers.
 

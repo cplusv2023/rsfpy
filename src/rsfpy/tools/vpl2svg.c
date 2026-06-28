@@ -98,7 +98,7 @@ typedef struct {
     bool width_set;
     double width;
     bool family_set;
-    char family[128];
+    char family[512];
 } Style;
 
 typedef struct {
@@ -151,6 +151,8 @@ typedef struct {
     size_t len;
     size_t cap;
 } ByteBuf;
+
+static const char *font_family_alias(const char *value);
 
 static void die(const char *fmt, ...)
 {
@@ -1018,7 +1020,7 @@ static const char *effective_font_family(SvgCtx *ctx, VplState *st)
     const Style *specific = specific_text_style(ctx, st);
     if (specific && specific->family_set) return specific->family;
     if (ctx->opt.font_style.family_set) return ctx->opt.font_style.family;
-    return "serif";
+    return font_family_alias("1");
 }
 
 static void svg_dash_attrs(FILE *out, VplState *st)
@@ -2039,6 +2041,7 @@ static void usage(FILE *out)
             "  --border INCHES\n"
             "  --bgcolor COLOR\n"
             "  --fontcolor COLOR | --font FAMILY | --fontfamily FAMILY | --fontsz SIZE\n"
+            "      font/fontfamily aliases: 1=default sans, 2=serif, 3=monospace\n"
             "  --framecolor COLOR | --framefat N | --framewidth PX\n"
             "  --axiscolor COLOR | --axisfat N | --axiswidth PX\n"
             "  --gridcolor COLOR | --gridfat N | --gridwidth PX\n"
@@ -2064,9 +2067,31 @@ static double parse_double_arg(const char *name, const char *value)
     return v;
 }
 
+static const char *font_family_alias(const char *value)
+{
+    if (!value) return NULL;
+    if (streq_ci(value, "1") || streq_ci(value, "default") || streq_ci(value, "sans")) {
+        return "'Arial','Helvetica','Liberation Sans','DejaVu Sans',"
+               "'Noto Sans CJK SC','Source Han Sans SC','PingFang SC',"
+               "'Hiragino Sans GB','Microsoft YaHei','SimHei',"
+               "'WenQuanYi Micro Hei',sans-serif";
+    }
+    if (streq_ci(value, "2") || streq_ci(value, "serif")) {
+        return "'Times New Roman','Times','Nimbus Roman','Liberation Serif',"
+               "'DejaVu Serif','Noto Serif CJK SC','Source Han Serif SC',"
+               "'Songti SC','SimSun',serif";
+    }
+    if (streq_ci(value, "3") || streq_ci(value, "mono") || streq_ci(value, "monospace")) {
+        return "'Menlo','Consolas','Liberation Mono','DejaVu Sans Mono',"
+               "'Noto Sans Mono CJK SC','Source Han Mono SC',"
+               "'Microsoft YaHei Mono','SimHei',monospace";
+    }
+    return value;
+}
+
 static void style_set_family(Style *style, const char *value)
 {
-    snprintf(style->family, sizeof(style->family), "%s", value);
+    snprintf(style->family, sizeof(style->family), "%s", font_family_alias(value));
     style->family_set = true;
 }
 
