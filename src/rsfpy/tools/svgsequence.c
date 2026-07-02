@@ -299,6 +299,26 @@ static void add_file_frame(SvgSequence *seq, const char *path, const char *label
     f->data_len = 0;
 }
 
+gboolean svg_sequence_append_file(SvgSequence *seq, const char *path,
+                                  const char *display_path,
+                                  const char *label)
+{
+    SvgFrame *f;
+
+    if (!seq || !path || !*path) return FALSE;
+
+    f = svg_sequence_append_frame(seq);
+    if (!f) return FALSE;
+
+    f->path = g_strdup(display_path && *display_path ? display_path : path);
+    f->framelabel = g_strdup(label && *label ? label : "Stream frame");
+    f->source_path = g_strdup(path);
+    f->use_range = FALSE;
+    f->data_offset = 0;
+    f->data_len = 0;
+    return TRUE;
+}
+
 static void add_range_frame_full(SvgSequence *seq,
                                  const char *source_path,
                                  const char *display_path,
