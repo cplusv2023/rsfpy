@@ -108,7 +108,9 @@ typedef struct {
     GtkWidget *color_area_blue;
     GtkWidget *color_area_custom;
     GtkWidget *area;
+    GtkWidget *status_box;
     GtkWidget *status_label;
+    GtkWidget *status_progress;
     gchar *load_error;
 
     GtkWidget *btn_prev;
@@ -161,6 +163,8 @@ typedef struct {
     ColorSlot color_slot;
     gboolean updating_ui;
     gboolean updating_width_ui;
+    gboolean busy;
+    guint busy_pulse_id;
 
     GPtrArray *annotations;
     GPtrArray *undo_stack;
@@ -353,6 +357,7 @@ static gboolean pen_tool_is_partial_eraser(App *app);
 static void on_export_clicked(GtkButton *button, gpointer user_data);
 static void on_copy_clicked(GtkButton *button, gpointer user_data);
 static void on_quit_clicked(GtkButton *button, gpointer user_data);
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
 static gchar *build_current_view_svg(App *app, gsize *out_len, GError **err);
 
 static gint64 now_ms(void)
@@ -839,22 +844,35 @@ static void update_ui(App *app)
     if (!app) return;
 
     gboolean multi = (app->sequence.count > 1);
+    gboolean ready = !app->busy;
 
-    if (app->btn_prev)   gtk_widget_set_sensitive(app->btn_prev,   multi);
-    if (app->btn_next)   gtk_widget_set_sensitive(app->btn_next,   multi);
-    if (app->btn_run)    gtk_widget_set_sensitive(app->btn_run,    multi && !app->sequence.playing);
-    if (app->btn_pause)  gtk_widget_set_sensitive(app->btn_pause,  multi && app->sequence.playing);
-    if (app->btn_slower) gtk_widget_set_sensitive(app->btn_slower, multi && app->sequence.fps > MIN_FPS);
-    if (app->btn_faster) gtk_widget_set_sensitive(app->btn_faster, multi && app->sequence.fps < MAX_FPS);
-    if (app->btn_export) gtk_widget_set_sensitive(app->btn_export, current_frame(app) != NULL);
-    if (app->btn_copy)   gtk_widget_set_sensitive(app->btn_copy,   current_frame(app) != NULL);
+    if (app->btn_prev)   gtk_widget_set_sensitive(app->btn_prev,   ready && multi);
+    if (app->btn_next)   gtk_widget_set_sensitive(app->btn_next,   ready && multi);
+    if (app->btn_run)    gtk_widget_set_sensitive(app->btn_run,    ready && multi && !app->sequence.playing);
+    if (app->btn_pause)  gtk_widget_set_sensitive(app->btn_pause,  ready && multi && app->sequence.playing);
+    if (app->btn_slower) gtk_widget_set_sensitive(app->btn_slower, ready && multi && app->sequence.fps > MIN_FPS);
+    if (app->btn_faster) gtk_widget_set_sensitive(app->btn_faster, ready && multi && app->sequence.fps < MAX_FPS);
+    if (app->btn_export) gtk_widget_set_sensitive(app->btn_export, ready && current_frame(app) != NULL);
+    if (app->btn_copy)   gtk_widget_set_sensitive(app->btn_copy,   ready && current_frame(app) != NULL);
 
     if (app->btn_reset) {
         gboolean changed = (app->zoom_scale != 1.0 || app->pan_x != 0.0 || app->pan_y != 0.0);
-        gtk_widget_set_sensitive(app->btn_reset, changed);
+        gtk_widget_set_sensitive(app->btn_reset, ready && changed);
     }
-    if (app->btn_undo) gtk_widget_set_sensitive(app->btn_undo, app->undo_stack && app->undo_stack->len > 0);
-    if (app->btn_redo) gtk_widget_set_sensitive(app->btn_redo, app->redo_stack && app->redo_stack->len > 0);
+    if (app->btn_undo) gtk_widget_set_sensitive(app->btn_undo, ready && app->undo_stack && app->undo_stack->len > 0);
+    if (app->btn_redo) gtk_widget_set_sensitive(app->btn_redo, ready && app->redo_stack && app->redo_stack->len > 0);
+    if (app->pen_clear_button) gtk_widget_set_sensitive(app->pen_clear_button, ready);
+    if (app->pen_tool_dropdown) gtk_widget_set_sensitive(app->pen_tool_dropdown, ready);
+    if (app->pen_width_scale) gtk_widget_set_sensitive(app->pen_width_scale, ready);
+    if (app->color_btn_red) gtk_widget_set_sensitive(app->color_btn_red, ready);
+    if (app->color_btn_green) gtk_widget_set_sensitive(app->color_btn_green, ready);
+    if (app->color_btn_blue) gtk_widget_set_sensitive(app->color_btn_blue, ready);
+    if (app->color_btn_custom) gtk_widget_set_sensitive(app->color_btn_custom, ready);
+    if (app->toggle_pan) gtk_widget_set_sensitive(app->toggle_pan, ready);
+    if (app->toggle_zoom) gtk_widget_set_sensitive(app->toggle_zoom, ready);
+    if (app->toggle_stretch) gtk_widget_set_sensitive(app->toggle_stretch, ready);
+    if (app->toggle_pen) gtk_widget_set_sensitive(app->toggle_pen, ready);
+    if (app->area) gtk_widget_set_sensitive(app->area, ready);
 
     app->updating_ui = TRUE;
     if (app->toggle_pan) {
@@ -882,7 +900,7 @@ static void update_ui(App *app)
     queue_pen_color_areas(app);
     queue_pen_width_preview(app);
 
-    if (app->status_label) {
+    if (!app->busy && app->status_label) {
         char status[1024];
         const char *path = "N/A";
         const char *frame_label = NULL;
@@ -940,6 +958,47 @@ static void update_ui(App *app)
 
         g_free(color_text);
         gtk_label_set_text(GTK_LABEL(app->status_label), status);
+    }
+}
+
+static gboolean busy_progress_pulse(gpointer user_data)
+{
+    App *app = user_data;
+    if (!app || !app->busy || !app->status_progress) return G_SOURCE_REMOVE;
+    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(app->status_progress));
+    return G_SOURCE_CONTINUE;
+}
+
+static void set_busy(App *app, gboolean busy, const char *message)
+{
+    if (!app) return;
+
+    app->busy = busy;
+
+    if (busy) {
+        app->sequence.playing = FALSE;
+        if (app->status_progress) {
+            gtk_widget_set_visible(app->status_progress, TRUE);
+            gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->status_progress), 0.0);
+            gtk_progress_bar_pulse(GTK_PROGRESS_BAR(app->status_progress));
+        }
+        if (app->busy_pulse_id == 0) {
+            app->busy_pulse_id = g_timeout_add(120, busy_progress_pulse, app);
+        }
+    } else {
+        if (app->busy_pulse_id != 0) {
+            g_source_remove(app->busy_pulse_id);
+            app->busy_pulse_id = 0;
+        }
+        if (app->status_progress) {
+            gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->status_progress), 0.0);
+            gtk_widget_set_visible(app->status_progress, FALSE);
+        }
+    }
+
+    update_ui(app);
+    if (message && app->status_label) {
+        gtk_label_set_text(GTK_LABEL(app->status_label), message);
     }
 }
 
@@ -2701,6 +2760,86 @@ typedef struct {
     GtkFileChooserNative *dialog;
 } ExportDialogState;
 
+typedef struct {
+    App *app;
+    gchar *path;
+} ExportJob;
+
+static void export_job_free(ExportJob *job)
+{
+    if (!job) return;
+    g_free(job->path);
+    g_free(job);
+}
+
+static void export_task_thread(GTask *task,
+                               gpointer source_object,
+                               gpointer task_data,
+                               GCancellable *cancellable)
+{
+    (void)source_object;
+    (void)cancellable;
+    ExportJob *job = task_data;
+    GError *err = NULL;
+
+    if (job && job->app && export_current_view(job->app, job->path, &err)) {
+        g_task_return_boolean(task, TRUE);
+    } else {
+        if (!err) {
+            g_set_error(&err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "export failed");
+        }
+        g_task_return_error(task, err);
+    }
+}
+
+static void on_export_task_done(GObject *source_object,
+                                GAsyncResult *result,
+                                gpointer user_data)
+{
+    (void)source_object;
+    (void)user_data;
+    GTask *task = G_TASK(result);
+    ExportJob *job = g_task_get_task_data(task);
+    GError *err = NULL;
+
+    if (g_task_propagate_boolean(task, &err)) {
+        gchar *msg = g_strdup_printf("Exported view: %s",
+                                     job && job->path ? job->path : "");
+        set_busy(job ? job->app : NULL, FALSE, msg);
+        g_free(msg);
+    } else {
+        gchar *msg = g_strdup_printf("Export failed: %s",
+                                     err ? err->message : "unknown error");
+        set_busy(job ? job->app : NULL, FALSE, msg);
+        g_printerr("%s\n", msg);
+        g_free(msg);
+        if (err) g_error_free(err);
+    }
+}
+
+static void start_export_task(App *app, const gchar *path)
+{
+    ExportJob *job;
+    GTask *task;
+    gchar *msg;
+
+    if (!app || !path || !*path || app->busy) return;
+
+    job = g_new0(ExportJob, 1);
+    job->app = app;
+    job->path = g_strdup(path);
+
+    msg = g_strdup_printf("Exporting view: %s", path);
+    set_busy(app, TRUE, msg);
+    g_free(msg);
+
+    task = g_task_new(NULL, NULL, on_export_task_done, NULL);
+    g_task_set_task_data(task, job, (GDestroyNotify)export_job_free);
+    g_task_run_in_thread(task, export_task_thread);
+    g_object_unref(task);
+}
+
 static void on_export_dialog_response(GtkNativeDialog *dialog,
                                       int response,
                                       gpointer user_data)
@@ -2713,21 +2852,14 @@ static void on_export_dialog_response(GtkNativeDialog *dialog,
         GtkFileFilter *filter = gtk_file_chooser_get_filter(GTK_FILE_CHOOSER(dialog));
         const gchar *ext = filter ? g_object_get_data(G_OBJECT(filter), "rsfpy-ext") : NULL;
         gchar *path = normalize_export_path_for_extension(raw_path, ext);
-        GError *err = NULL;
 
-        if (path && export_current_view(st->app, path, &err)) {
-            gchar *msg = g_strdup_printf("Exported view: %s", path);
-            gtk_label_set_text(GTK_LABEL(st->app->status_label), msg);
-            g_free(msg);
-        } else {
-            gchar *msg = g_strdup_printf("Export failed: %s",
-                                         err ? err->message : "unknown error");
-            gtk_label_set_text(GTK_LABEL(st->app->status_label), msg);
-            g_printerr("%s\n", msg);
-            g_free(msg);
+        if (path && !st->app->busy) {
+            start_export_task(st->app, path);
+        } else if (st->app->status_label) {
+            gtk_label_set_text(GTK_LABEL(st->app->status_label),
+                               "Export is already running.");
         }
 
-        if (err) g_error_free(err);
         g_free(path);
         g_free(raw_path);
         if (file) g_object_unref(file);
@@ -2747,6 +2879,13 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     GtkFileChooserNative *dialog;
 
     if (!app || !app->window) return;
+    if (app->busy) {
+        if (app->status_label) {
+            gtk_label_set_text(GTK_LABEL(app->status_label),
+                               "Export is already running.");
+        }
+        return;
+    }
 
     dialog = gtk_file_chooser_native_new("Export Current View",
                                          GTK_WINDOW(app->window),
@@ -3590,6 +3729,20 @@ static void on_quit_clicked(GtkButton *button, gpointer user_data)
     if (app && app->window) gtk_window_close(GTK_WINDOW(app->window));
 }
 
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data)
+{
+    (void)window;
+    App *app = user_data;
+    if (app && app->busy) {
+        if (app->status_label) {
+            gtk_label_set_text(GTK_LABEL(app->status_label),
+                               "Export is still running; please wait.");
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static void on_draw(GtkDrawingArea *area,
                     cairo_t *cr,
                     int width,
@@ -4100,6 +4253,8 @@ static void activate(GtkApplication *gtk_app, gpointer user_data)
     app->window = gtk_application_window_new(gtk_app);
     gtk_window_set_title(GTK_WINDOW(app->window), WINDOW_TITLE);
     gtk_window_set_default_size(GTK_WINDOW(app->window), DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    g_signal_connect(app->window, "close-request",
+                     G_CALLBACK(on_window_close_request), app);
 
     app->root_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_window_set_child(GTK_WINDOW(app->window), app->root_box);
@@ -4121,15 +4276,27 @@ static void activate(GtkApplication *gtk_app, gpointer user_data)
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(app->area), on_draw, app, NULL);
     gtk_box_append(GTK_BOX(app->root_box), app->area);
 
+    app->status_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(app->status_box, 3);
+    gtk_widget_set_margin_bottom(app->status_box, 3);
+    gtk_widget_set_margin_start(app->status_box, 8);
+    gtk_widget_set_margin_end(app->status_box, 8);
+
     app->status_label = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(app->status_label), 0.0);
     gtk_label_set_ellipsize(GTK_LABEL(app->status_label), PANGO_ELLIPSIZE_MIDDLE);
     gtk_label_set_width_chars(GTK_LABEL(app->status_label), 1);
-    gtk_widget_set_margin_top(app->status_label, 3);
-    gtk_widget_set_margin_bottom(app->status_label, 3);
-    gtk_widget_set_margin_start(app->status_label, 8);
-    gtk_widget_set_margin_end(app->status_label, 8);
-    gtk_box_append(GTK_BOX(app->root_box), app->status_label);
+    gtk_widget_set_hexpand(app->status_label, TRUE);
+    gtk_box_append(GTK_BOX(app->status_box), app->status_label);
+
+    app->status_progress = gtk_progress_bar_new();
+    gtk_widget_set_size_request(app->status_progress, 120, -1);
+    gtk_widget_set_valign(app->status_progress, GTK_ALIGN_CENTER);
+    gtk_progress_bar_set_pulse_step(GTK_PROGRESS_BAR(app->status_progress), 0.08);
+    gtk_widget_set_visible(app->status_progress, FALSE);
+    gtk_box_append(GTK_BOX(app->status_box), app->status_progress);
+
+    gtk_box_append(GTK_BOX(app->root_box), app->status_box);
 
     GtkGesture *drag = gtk_gesture_drag_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), GDK_BUTTON_PRIMARY);
@@ -4487,6 +4654,7 @@ int main(int argc, char **argv)
 
     if (app.tick_id) g_source_remove(app.tick_id);
     if (app.watch_id) g_source_remove(app.watch_id);
+    if (app.busy_pulse_id) g_source_remove(app.busy_pulse_id);
     g_object_unref(gtk_app);
     svg_sequence_free(&app.sequence);
     if (app.annotations) g_ptr_array_free(app.annotations, TRUE);
