@@ -167,6 +167,37 @@ typedef struct {
 } ByteBuf;
 
 static const char *font_family_alias(const char *value);
+static bool g_verbose = false;
+static const char *g_progress_input = NULL;
+static const char *g_progress_stage = NULL;
+static int g_progress_next_percent = 0;
+
+static void progress_begin(const char *input, const char *stage)
+{
+    if (!g_verbose) return;
+    g_progress_input = input && *input ? input : "stdin";
+    g_progress_stage = stage && *stage ? stage : "convert";
+    g_progress_next_percent = 0;
+}
+
+static void progress_update(size_t pos, size_t len)
+{
+    int pct;
+
+    if (!g_verbose || len == 0) return;
+    pct = (int)((100.0 * (double)pos) / (double)len);
+    if (pct > 100) pct = 100;
+    if (pct < g_progress_next_percent && pct < 100) return;
+
+    fprintf(stderr, "vpl2svg: %s: %s %d%%\n",
+            g_progress_input ? g_progress_input : "stdin",
+            g_progress_stage ? g_progress_stage : "convert",
+            pct);
+    fflush(stderr);
+
+    g_progress_next_percent = pct + 5;
+    if (g_progress_next_percent > 100) g_progress_next_percent = 101;
+}
 
 static void die(const char *fmt, ...)
 {
@@ -1908,6 +1939,7 @@ static bool parse_vpl(Reader *r, SvgCtx *ctx, bool emit, int target_frame,
         bool frame_active = target_frame < 0 || current_frame == target_frame;
         bool drawable = !in_frame_number_group(&st);
         bool active = frame_active && drawable;
+        progress_update(r->pos, r->len);
         switch (cmd) {
             case VP_SETSTYLE:
                 if (!r_u8(r, &cmd)) return false;
@@ -2301,6 +2333,7 @@ static void usage(FILE *out)
             "\n"
             "Options:\n"
             "  --stream              Emit each completed frame as soon as VP_ERASE is read\n"
+            "  --verbose             Report coarse conversion progress to stderr\n"
             "  --border INCHES\n"
             "  --bgcolor COLOR\n"
             "  --fontcolor COLOR | --font FAMILY | --fontfamily FAMILY | --fontsz SIZE\n"
@@ -2501,6 +2534,7 @@ static bool emit_svg_frame(const unsigned char *data, size_t len,
     r.data = (unsigned char *)data;
     r.len = len;
     r.pos = 0;
+    progress_begin(input, "scanning bounds");
     if (!parse_vpl(&r, &ctx, false, frame_index, NULL, &saw_content)) {
         die("failed to parse VPL while scanning bounds");
     }
@@ -2535,6 +2569,7 @@ static bool emit_svg_frame(const unsigned char *data, size_t len,
     }
 
     r.pos = 0;
+    progress_begin(input, "emitting SVG");
     if (!parse_vpl(&r, &ctx, true, frame_index, NULL, NULL)) {
         die("failed to parse VPL while emitting SVG");
     }
@@ -2560,6 +2595,7 @@ static int stream_emit_available(ByteBuf *prefix, const char *input,
     r.len = prefix->len;
     r.pos = 0;
 
+    progress_begin(input, "streaming frames");
     if (!parse_vpl(&r, &ctx, false, 0, &frame_count, NULL)) {
         die("failed to parse streamed VPL prefix");
     }
@@ -2620,6 +2656,8 @@ int main(int argc, char **argv)
             return 0;
         } else if (strcmp(argv[i], "--stream") == 0) {
             stream = true;
+        } else if (strcmp(argv[i], "--verbose") == 0) {
+            g_verbose = true;
         } else if (strcmp(argv[i], "--border") == 0) {
             if (++i >= argc) die("--border needs a value");
             border_in = atof(argv[i]);
@@ -2651,6 +2689,7 @@ int main(int argc, char **argv)
     r.data = data;
     r.len = len;
     r.pos = 0;
+    progress_begin(input, "counting frames");
     if (!parse_vpl(&r, &ctx, false, 0, &frame_count, NULL)) {
         die("failed to parse VPL while counting frames");
     }

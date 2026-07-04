@@ -2,6 +2,7 @@
 #include <gdk/gdkkeysyms.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,12 @@ typedef struct {
     gboolean valid;
 } ViewTransform;
 
+typedef enum {
+    BUSY_OP_NONE = 0,
+    BUSY_OP_EXPORT,
+    BUSY_OP_CLIPBOARD
+} BusyOperation;
+
 typedef struct {
     GtkApplication *gtk_app;
     GtkWidget *window;
@@ -111,6 +118,7 @@ typedef struct {
     GtkWidget *status_box;
     GtkWidget *status_label;
     GtkWidget *status_progress;
+    GtkWidget *btn_abort;
     gchar *load_error;
 
     GtkWidget *btn_prev;
@@ -132,6 +140,10 @@ typedef struct {
     gchar *watch_path;
     gsize watch_offset;
     guint watch_id;
+    gchar *progress_path;
+    gsize progress_offset;
+    guint progress_id;
+    gchar *progress_message;
 
     int canvas_w;
     int canvas_h;
@@ -164,7 +176,18 @@ typedef struct {
     gboolean updating_ui;
     gboolean updating_width_ui;
     gboolean busy;
+    gboolean abort_requested;
+    gboolean exit_after_abort;
+    gboolean exit_prompt_open;
     guint busy_pulse_id;
+    BusyOperation busy_operation;
+    GSubprocess *busy_process;
+    gchar *busy_tmpdir;
+    gchar *busy_output_path;
+    gchar *busy_clip_svg_path;
+    gchar *busy_clip_png_path;
+    gchar *self_path;
+    GtkWidget *exit_prompt_dialog;
 
     GPtrArray *annotations;
     GPtrArray *undo_stack;
@@ -178,6 +201,7 @@ typedef struct {
 static const char *APP_ID = "org.rsfpy.svgviewer.gtk";
 #define UNDO_LIMIT 64
 #define CLIPBOARD_SVG_WARN_BYTES (2 * 1024 * 1024)
+#define CLIPBOARD_SVG_ELEMENT_LIMIT 10000
 
 static void update_ui(App *app);
 
@@ -357,8 +381,22 @@ static gboolean pen_tool_is_partial_eraser(App *app);
 static void on_export_clicked(GtkButton *button, gpointer user_data);
 static void on_copy_clicked(GtkButton *button, gpointer user_data);
 static void on_quit_clicked(GtkButton *button, gpointer user_data);
+static void on_abort_clicked(GtkButton *button, gpointer user_data);
 static gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
-static gchar *build_current_view_svg(App *app, gsize *out_len, GError **err);
+static void show_abort_exit_dialog(App *app);
+static gboolean start_worker_operation(App *app,
+                                       BusyOperation operation,
+                                       const gchar *output_path,
+                                       GError **err);
+static int run_worker_from_manifest(const gchar *manifest_path);
+#ifdef G_OS_WIN32
+static gboolean win32_copy_svg_text_to_clipboard(const gchar *svg,
+                                                 gsize svg_len,
+                                                 const guint8 *png,
+                                                 gsize png_len,
+                                                 HGLOBAL dib_handle,
+                                                 GError **err);
+#endif
 
 static gint64 now_ms(void)
 {
@@ -909,8 +947,12 @@ static void update_ui(App *app)
         char *color_text = gdk_rgba_to_string(&app->pen_color);
 
         if (app->sequence.count <= 0) {
-            g_snprintf(status, sizeof(status), "%s",
-                       str_empty(app->load_error) ? "No displayable SVG content." : app->load_error);
+            if (!str_empty(app->progress_message)) {
+                g_snprintf(status, sizeof(status), "%s", app->progress_message);
+            } else {
+                g_snprintf(status, sizeof(status), "%s",
+                           str_empty(app->load_error) ? "No displayable SVG content." : app->load_error);
+            }
             gtk_label_set_text(GTK_LABEL(app->status_label), status);
             g_free(color_text);
             return;
@@ -927,7 +969,9 @@ static void update_ui(App *app)
 
         if (nframe > 1) {
             g_snprintf(status, sizeof(status),
-                       "%s%s%s | Frame %d/%d | FPS %d | %s | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       "%s%s%s%s%s | Frame %d/%d | FPS %d | %s | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       app->progress_message ? app->progress_message : "",
+                       app->progress_message ? " | " : "",
                        frame_label ? frame_label : "",
                        frame_label ? " | " : "",
                        path,
@@ -944,7 +988,9 @@ static void update_ui(App *app)
                        app->stretch_mode ? "" : " locked");
         } else {
             g_snprintf(status, sizeof(status),
-                       "%s | Single file | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       "%s%s%s | Single file | Zoom %.0f%% | Tool %s | Pen %s %.2g %s | Anno %u | %s%s",
+                       app->progress_message ? app->progress_message : "",
+                       app->progress_message ? " | " : "",
                        path,
                        app->zoom_scale * 100.0,
                        tool_name(app->tool),
@@ -977,15 +1023,21 @@ static void set_busy(App *app, gboolean busy, const char *message)
 
     if (busy) {
         app->sequence.playing = FALSE;
+        app->abort_requested = FALSE;
         if (app->status_progress) {
             gtk_widget_set_visible(app->status_progress, TRUE);
             gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->status_progress), 0.0);
             gtk_progress_bar_pulse(GTK_PROGRESS_BAR(app->status_progress));
         }
+        if (app->btn_abort) {
+            gtk_widget_set_visible(app->btn_abort, TRUE);
+            gtk_widget_set_sensitive(app->btn_abort, TRUE);
+        }
         if (app->busy_pulse_id == 0) {
             app->busy_pulse_id = g_timeout_add(120, busy_progress_pulse, app);
         }
     } else {
+        app->abort_requested = FALSE;
         if (app->busy_pulse_id != 0) {
             g_source_remove(app->busy_pulse_id);
             app->busy_pulse_id = 0;
@@ -994,11 +1046,52 @@ static void set_busy(App *app, gboolean busy, const char *message)
             gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->status_progress), 0.0);
             gtk_widget_set_visible(app->status_progress, FALSE);
         }
+        if (app->btn_abort) {
+            gtk_widget_set_visible(app->btn_abort, FALSE);
+            gtk_widget_set_sensitive(app->btn_abort, FALSE);
+        }
     }
 
     update_ui(app);
     if (message && app->status_label) {
         gtk_label_set_text(GTK_LABEL(app->status_label), message);
+    }
+}
+
+static void request_abort_operation(App *app, const char *message)
+{
+    if (!app || !app->busy) return;
+
+    app->abort_requested = TRUE;
+    if (app->busy_process) {
+        g_subprocess_force_exit(app->busy_process);
+    }
+    if (app->btn_abort) {
+        gtk_widget_set_sensitive(app->btn_abort, FALSE);
+    }
+    if (message && app->status_label) {
+        gtk_label_set_text(GTK_LABEL(app->status_label), message);
+    }
+}
+
+static void finish_busy(App *app, const char *message)
+{
+    gboolean exit_after_abort;
+
+    if (!app) return;
+    exit_after_abort = app->exit_after_abort;
+    set_busy(app, FALSE, message);
+
+    if (app->exit_prompt_dialog) {
+        GtkWidget *dialog = app->exit_prompt_dialog;
+        app->exit_prompt_dialog = NULL;
+        app->exit_prompt_open = FALSE;
+        gtk_window_destroy(GTK_WINDOW(dialog));
+    }
+
+    if (exit_after_abort) {
+        app->exit_after_abort = FALSE;
+        if (app->window) gtk_window_close(GTK_WINDOW(app->window));
     }
 }
 
@@ -1299,6 +1392,20 @@ static void ensure_app_css(void)
         "button.rsfpy-quit:disabled {"
         "  background: rgba(199, 54, 47, 0.08);"
         "  color: rgba(143, 47, 43, 0.55);"
+        "}"
+        "button.rsfpy-abort-link {"
+        "  background: transparent;"
+        "  border: 0;"
+        "  box-shadow: none;"
+        "  padding: 0 2px;"
+        "  color: #8f2f2b;"
+        "  text-decoration-line: underline;"
+        "}"
+        "button.rsfpy-abort-link:hover {"
+        "  background: rgba(199, 54, 47, 0.08);"
+        "}"
+        "button.rsfpy-abort-link:disabled {"
+        "  color: rgba(143, 47, 43, 0.45);"
         "}";
 
     if (installed) return;
@@ -2555,54 +2662,6 @@ static gboolean current_visible_doc_rect(App *app,
     return TRUE;
 }
 
-static cairo_surface_t *render_current_svg_area_surface(App *app, GError **err)
-{
-    int width = app && app->canvas_w > 1 ? app->canvas_w : DEFAULT_WIDTH;
-    int height = app && app->canvas_h > 1 ? app->canvas_h : DEFAULT_HEIGHT;
-    ImageRect rect;
-    cairo_surface_t *full;
-    cairo_surface_t *crop;
-    cairo_t *cr;
-
-    if (!app) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "viewer is not ready");
-        return NULL;
-    }
-
-    if (!current_svg_screen_rect(app, &rect)) {
-        rect.x = 0;
-        rect.y = 0;
-        rect.width = width;
-        rect.height = height;
-    }
-
-    full = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
-    if (cairo_surface_status(full) != CAIRO_STATUS_SUCCESS) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "failed to create render surface");
-        cairo_surface_destroy(full);
-        return NULL;
-    }
-
-    cr = cairo_create(full);
-    draw_canvas_layers(app, cr, FALSE);
-    cairo_destroy(cr);
-
-    crop = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, rect.width, rect.height);
-    if (cairo_surface_status(crop) != CAIRO_STATUS_SUCCESS) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "failed to create cropped surface");
-        cairo_surface_destroy(full);
-        cairo_surface_destroy(crop);
-        return NULL;
-    }
-
-    cr = cairo_create(crop);
-    cairo_set_source_surface(cr, full, -rect.x, -rect.y);
-    cairo_paint(cr);
-    cairo_destroy(cr);
-    cairo_surface_destroy(full);
-    return crop;
-}
-
 static gchar *default_export_filename(App *app)
 {
     SvgFrame *f = current_frame(app);
@@ -2674,170 +2733,47 @@ static GdkPixbuf *surface_to_pixbuf(cairo_surface_t *surface, gboolean alpha)
     return pixbuf;
 }
 
-static gboolean export_current_view(App *app, const gchar *path, GError **err)
-{
-    cairo_surface_t *surface;
-    GdkPixbuf *pixbuf;
-    gboolean alpha = FALSE;
-    const char *type;
-    gboolean ok;
-
-    if (!app || !path || !*path) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "no export path selected");
-        return FALSE;
-    }
-
-    if (is_svg_export_path(path)) {
-        gchar *svg = NULL;
-        gsize svg_len = 0;
-        gboolean ok;
-
-        svg = build_current_view_svg(app, &svg_len, err);
-        if (!svg) return FALSE;
-
-        ok = g_file_set_contents(path, svg, (gssize)svg_len, err);
-        g_free(svg);
-        return ok;
-    }
-
-    type = export_type_for_path(path, &alpha);
-    surface = render_current_svg_area_surface(app, err);
-    if (!surface) return FALSE;
-
-    pixbuf = surface_to_pixbuf(surface, alpha);
-    cairo_surface_destroy(surface);
-    if (!pixbuf) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "failed to create export image");
-        return FALSE;
-    }
-
-    ok = gdk_pixbuf_save(pixbuf, path, type, err, NULL);
-    g_object_unref(pixbuf);
-    return ok;
-}
-
-static gboolean build_current_view_png(App *app,
-                                       guint8 **out_png,
-                                       gsize *out_len,
-                                       GError **err)
-{
-    cairo_surface_t *surface;
-    GdkPixbuf *pixbuf;
-    gchar *buffer = NULL;
-    gsize len = 0;
-    gboolean ok;
-
-    if (out_png) *out_png = NULL;
-    if (out_len) *out_len = 0;
-    if (!out_png || !out_len) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
-                    "invalid PNG output buffer");
-        return FALSE;
-    }
-
-    surface = render_current_svg_area_surface(app, err);
-    if (!surface) return FALSE;
-
-    pixbuf = surface_to_pixbuf(surface, FALSE);
-    cairo_surface_destroy(surface);
-    if (!pixbuf) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
-                    "failed to create clipboard PNG");
-        return FALSE;
-    }
-
-    ok = gdk_pixbuf_save_to_buffer(pixbuf, &buffer, &len, "png", err, NULL);
-    g_object_unref(pixbuf);
-    if (!ok) return FALSE;
-
-    *out_png = (guint8 *)buffer;
-    *out_len = len;
-    return TRUE;
-}
-
 typedef struct {
     App *app;
     GtkFileChooserNative *dialog;
 } ExportDialogState;
 
-typedef struct {
-    App *app;
-    gchar *path;
-} ExportJob;
-
-static void export_job_free(ExportJob *job)
+static void start_export_task(App *app, const gchar *path)
 {
-    if (!job) return;
-    g_free(job->path);
-    g_free(job);
-}
-
-static void export_task_thread(GTask *task,
-                               gpointer source_object,
-                               gpointer task_data,
-                               GCancellable *cancellable)
-{
-    (void)source_object;
-    (void)cancellable;
-    ExportJob *job = task_data;
     GError *err = NULL;
+    gchar *msg;
 
-    if (job && job->app && export_current_view(job->app, job->path, &err)) {
-        g_task_return_boolean(task, TRUE);
-    } else {
-        if (!err) {
-            g_set_error(&err, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "export failed");
-        }
-        g_task_return_error(task, err);
-    }
-}
+    if (!app || !path || !*path || app->busy) return;
 
-static void on_export_task_done(GObject *source_object,
-                                GAsyncResult *result,
-                                gpointer user_data)
-{
-    (void)source_object;
-    (void)user_data;
-    GTask *task = G_TASK(result);
-    ExportJob *job = g_task_get_task_data(task);
-    GError *err = NULL;
+    msg = g_strdup_printf("Exporting view: %s", path);
+    if (app->status_label) gtk_label_set_text(GTK_LABEL(app->status_label), msg);
+    g_free(msg);
 
-    if (g_task_propagate_boolean(task, &err)) {
-        gchar *msg = g_strdup_printf("Exported view: %s",
-                                     job && job->path ? job->path : "");
-        set_busy(job ? job->app : NULL, FALSE, msg);
-        g_free(msg);
-    } else {
-        gchar *msg = g_strdup_printf("Export failed: %s",
-                                     err ? err->message : "unknown error");
-        set_busy(job ? job->app : NULL, FALSE, msg);
+    if (!start_worker_operation(app, BUSY_OP_EXPORT, path, &err)) {
+        msg = g_strdup_printf("Export failed: %s",
+                              err ? err->message : "unknown error");
+        if (app->status_label) gtk_label_set_text(GTK_LABEL(app->status_label), msg);
         g_printerr("%s\n", msg);
         g_free(msg);
         if (err) g_error_free(err);
     }
 }
 
-static void start_export_task(App *app, const gchar *path)
+static void start_clipboard_task(App *app)
 {
-    ExportJob *job;
-    GTask *task;
+    GError *err = NULL;
     gchar *msg;
 
-    if (!app || !path || !*path || app->busy) return;
+    if (!app || app->busy) return;
 
-    job = g_new0(ExportJob, 1);
-    job->app = app;
-    job->path = g_strdup(path);
-
-    msg = g_strdup_printf("Exporting view: %s", path);
-    set_busy(app, TRUE, msg);
-    g_free(msg);
-
-    task = g_task_new(NULL, NULL, on_export_task_done, NULL);
-    g_task_set_task_data(task, job, (GDestroyNotify)export_job_free);
-    g_task_run_in_thread(task, export_task_thread);
-    g_object_unref(task);
+    if (!start_worker_operation(app, BUSY_OP_CLIPBOARD, NULL, &err)) {
+        msg = g_strdup_printf("Copy failed: %s",
+                              err ? err->message : "unknown error");
+        if (app->status_label) gtk_label_set_text(GTK_LABEL(app->status_label), msg);
+        g_printerr("%s\n", msg);
+        g_free(msg);
+        if (err) g_error_free(err);
+    }
 }
 
 static void on_export_dialog_response(GtkNativeDialog *dialog,
@@ -3154,33 +3090,97 @@ static void append_tag_without_attr(GString *out,
     g_string_append_len(out, p, (gssize)(tag_end - p));
 }
 
+static gboolean svg_has_image_tag_len(const gchar *svg, gsize len)
+{
+    if (!svg || len == 0) return FALSE;
+    return g_strstr_len(svg, (gssize)len, "<image") != NULL ||
+           g_strstr_len(svg, (gssize)len, "<svg:image") != NULL;
+}
+
+static gboolean svg_has_image_tag(const gchar *svg)
+{
+    return svg && (strstr(svg, "<image") != NULL ||
+                   strstr(svg, "<svg:image") != NULL);
+}
+
+static gsize clipboard_svg_element_limit(void)
+{
+    const gchar *value = g_getenv("RSFPY_CLIPBOARD_SVG_ELEMENT_LIMIT");
+    guint64 parsed;
+    gchar *end = NULL;
+
+    if (!value || !*value) return CLIPBOARD_SVG_ELEMENT_LIMIT;
+    parsed = g_ascii_strtoull(value, &end, 10);
+    if (end == value || parsed == 0) return CLIPBOARD_SVG_ELEMENT_LIMIT;
+    if (parsed > G_MAXSIZE) return G_MAXSIZE;
+    return (gsize)parsed;
+}
+
+static gsize count_svg_elements_len(const gchar *svg, gsize len)
+{
+    const gchar *p;
+    const gchar *end;
+    gsize count = 0;
+
+    if (!svg || len == 0) return 0;
+    p = svg;
+    end = svg + len;
+    while (p < end) {
+        const gchar *hit = memchr(p, '<', (size_t)(end - p));
+        if (!hit || hit + 1 >= end) break;
+        p = hit + 1;
+        if (*p == '/' || *p == '!' || *p == '?') continue;
+        if (g_ascii_isalpha((guchar)*p) || *p == '_') count++;
+    }
+    return count;
+}
+
+static gboolean svg_open_tag_is(const gchar *p, const gchar *name)
+{
+    gsize len;
+
+    if (!p || !name || p[0] != '<' || p[1] == '/') return FALSE;
+    p++;
+    if (g_str_has_prefix(p, "svg:")) p += 4;
+
+    len = strlen(name);
+    if (strncmp(p, name, len) != 0) return FALSE;
+    return p[len] == '>' || p[len] == '/' || g_ascii_isspace((guchar)p[len]);
+}
+
 static gchar *sanitize_svg_for_office_image_clip(const gchar *svg)
 {
     GString *out;
     const gchar *p;
 
     if (!svg) return NULL;
+    if (!svg_has_image_tag(svg)) return NULL;
+
     out = g_string_new(NULL);
     p = svg;
 
     while (*p) {
-        if (g_str_has_prefix(p, "<image")) {
+        if (svg_open_tag_is(p, "image")) {
             const gchar *tag_end = find_svg_tag_end(p);
             if (!tag_end) break;
             append_tag_without_attr(out, p, tag_end + 1, "clip-path");
             p = tag_end + 1;
-        } else if (g_str_has_prefix(p, "<g")) {
+        } else if (svg_open_tag_is(p, "g")) {
             const gchar *tag_end = find_svg_tag_end(p);
             const gchar *group_end;
             const gchar *image_in_group;
+            const gchar *svg_image_in_group;
 
             if (!tag_end) break;
             group_end = g_strstr_len(tag_end + 1, -1, "</g>");
             image_in_group = group_end
                 ? g_strstr_len(tag_end + 1, (gssize)(group_end - tag_end - 1), "<image")
                 : NULL;
+            svg_image_in_group = group_end
+                ? g_strstr_len(tag_end + 1, (gssize)(group_end - tag_end - 1), "<svg:image")
+                : NULL;
 
-            if (image_in_group) {
+            if (image_in_group || svg_image_in_group) {
                 append_tag_without_attr(out, p, tag_end + 1, "clip-path");
             } else {
                 g_string_append_len(out, p, (gssize)(tag_end + 1 - p));
@@ -3195,72 +3195,723 @@ static gchar *sanitize_svg_for_office_image_clip(const gchar *svg)
     return g_string_free(out, FALSE);
 }
 
-static gchar *build_current_view_svg(App *app, gsize *out_len, GError **err)
+static gchar *build_view_svg_from_parts(const gchar *src,
+                                        gsize src_len,
+                                        const gchar *overlay,
+                                        gboolean crop,
+                                        double doc_x,
+                                        double doc_y,
+                                        double doc_w,
+                                        double doc_h,
+                                        int pixel_w,
+                                        int pixel_h,
+                                        gsize *out_len,
+                                        GError **err)
 {
-    gchar *src = NULL;
-    gsize src_len = 0;
     gchar *close_tag;
     gchar *sanitized;
-    GString *overlay;
     GString *merged;
-    double doc_x, doc_y, doc_w, doc_h;
-    int pixel_w, pixel_h;
+    const gchar *working;
+    gsize working_len;
+    gboolean has_overlay;
+    gboolean has_image;
 
     if (out_len) *out_len = 0;
-    if (!read_current_svg_source(app, &src, &src_len, err)) return NULL;
-
-    overlay = g_string_new(NULL);
-    append_annotations_as_svg(app, overlay);
-
-    close_tag = g_strrstr(src, "</svg");
-    if (!close_tag) {
-        merged = g_string_new_len(src, src_len);
-        g_string_append(merged, overlay->str);
-    } else {
-        gsize prefix_len = (gsize)(close_tag - src);
-        merged = g_string_new_len(src, prefix_len);
-        g_string_append(merged, overlay->str);
-        g_string_append(merged, close_tag);
+    if (!src || src_len == 0) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "empty SVG source");
+        return NULL;
     }
 
-    g_string_free(overlay, TRUE);
-    g_free(src);
+    merged = NULL;
+    has_overlay = overlay && *overlay;
+    has_image = svg_has_image_tag_len(src, src_len) ||
+                (has_overlay && svg_has_image_tag(overlay));
 
-    sanitized = sanitize_svg_for_office_image_clip(merged->str);
+    if (has_overlay) {
+        close_tag = g_strrstr(src, "</svg");
+        if (!close_tag) {
+            merged = g_string_new_len(src, src_len);
+            g_string_append(merged, overlay);
+        } else {
+            gsize prefix_len = (gsize)(close_tag - src);
+            merged = g_string_new_len(src, prefix_len);
+            g_string_append(merged, overlay);
+            g_string_append(merged, close_tag);
+        }
+        working = merged->str;
+        working_len = merged->len;
+    } else {
+        working = src;
+        working_len = src_len;
+    }
+
+    sanitized = has_image ? sanitize_svg_for_office_image_clip(working) : NULL;
     if (sanitized) {
-        g_string_free(merged, TRUE);
+        if (merged) g_string_free(merged, TRUE);
         merged = g_string_new(sanitized);
+        working = merged->str;
+        working_len = merged->len;
         g_free(sanitized);
     }
 
-    if (current_visible_doc_rect(app, &doc_x, &doc_y, &doc_w, &doc_h, &pixel_w, &pixel_h)) {
-        const gchar *svg_start = g_strstr_len(merged->str, (gssize)merged->len, "<svg");
+    if (crop && doc_w > 0.0 && doc_h > 0.0 && pixel_w > 0 && pixel_h > 0) {
+        const gchar *svg_start = g_strstr_len(working, (gssize)working_len, "<svg");
         const gchar *open_end = find_svg_tag_end(svg_start);
-        const gchar *svg_close = g_strrstr(merged->str, "</svg");
+        const gchar *svg_close = g_strrstr(working, "</svg");
 
         if (svg_start && open_end && svg_close && svg_close > open_end) {
             const gchar *content_start = open_end + 1;
             gsize content_len = (gsize)(svg_close - content_start);
             GString *cropped = g_string_new(NULL);
 
-            g_string_append_printf(cropped,
-                                   "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-                                   "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
-                                   "width=\"%d\" height=\"%d\" "
-                                   "viewBox=\"%.12g %.12g %.12g %.12g\" "
-                                   "style=\"overflow:hidden\">\n",
-                                   pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
+            if (has_image) {
+                g_string_append_printf(cropped,
+                                       "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                                       "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                                       "width=\"%d\" height=\"%d\" "
+                                       "viewBox=\"0 0 %.12g %.12g\" "
+                                       "style=\"overflow:hidden\">\n"
+                                       "<g transform=\"translate(%.12g %.12g)\">\n",
+                                       pixel_w, pixel_h,
+                                       doc_w, doc_h,
+                                       -doc_x, -doc_y);
+            } else {
+                g_string_append_printf(cropped,
+                                       "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                                       "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                                       "width=\"%d\" height=\"%d\" "
+                                       "viewBox=\"%.12g %.12g %.12g %.12g\" "
+                                       "style=\"overflow:hidden\">\n",
+                                       pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
+            }
             g_string_append_len(cropped, content_start, content_len);
-            g_string_append(cropped, "\n</svg>\n");
+            g_string_append(cropped, has_image ? "\n</g>\n</svg>\n" : "\n</svg>\n");
 
-            g_string_free(merged, TRUE);
+            if (merged) g_string_free(merged, TRUE);
             if (out_len) *out_len = cropped->len;
             return g_string_free(cropped, FALSE);
         }
     }
 
-    if (out_len) *out_len = merged->len;
-    return g_string_free(merged, FALSE);
+    if (merged) {
+        if (out_len) *out_len = merged->len;
+        return g_string_free(merged, FALSE);
+    }
+
+    if (out_len) *out_len = src_len;
+    return g_strndup(src, src_len);
+}
+
+static cairo_surface_t *render_svg_bytes_surface(const gchar *svg,
+                                                 gsize svg_len,
+                                                 int width,
+                                                 int height,
+                                                 GError **err)
+{
+    RsvgHandle *handle;
+    cairo_surface_t *surface;
+    cairo_t *cr;
+    RsvgRectangle viewport;
+
+    if (!svg || svg_len == 0 || width <= 0 || height <= 0) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "invalid SVG render payload");
+        return NULL;
+    }
+
+    handle = rsvg_handle_new_from_data((const guint8 *)svg, svg_len, err);
+    if (!handle) return NULL;
+
+    surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "failed to create worker render surface");
+        g_object_unref(handle);
+        cairo_surface_destroy(surface);
+        return NULL;
+    }
+
+    cr = cairo_create(surface);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    viewport.x = 0.0;
+    viewport.y = 0.0;
+    viewport.width = width;
+    viewport.height = height;
+    if (!rsvg_handle_render_document(handle, cr, &viewport, err)) {
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        g_object_unref(handle);
+        return NULL;
+    }
+
+    cairo_destroy(cr);
+    g_object_unref(handle);
+    return surface;
+}
+
+static gboolean save_svg_bytes_as_image(const gchar *svg,
+                                        gsize svg_len,
+                                        const gchar *path,
+                                        const gchar *type,
+                                        gboolean alpha,
+                                        int width,
+                                        int height,
+                                        GError **err)
+{
+    cairo_surface_t *surface;
+    GdkPixbuf *pixbuf;
+    gboolean ok;
+
+    surface = render_svg_bytes_surface(svg, svg_len, width, height, err);
+    if (!surface) return FALSE;
+
+    pixbuf = surface_to_pixbuf(surface, alpha);
+    cairo_surface_destroy(surface);
+    if (!pixbuf) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "failed to create worker image");
+        return FALSE;
+    }
+
+    ok = gdk_pixbuf_save(pixbuf, path, type, err, NULL);
+    g_object_unref(pixbuf);
+    return ok;
+}
+
+static gboolean write_worker_file(const gchar *path,
+                                  const gchar *data,
+                                  gsize len,
+                                  GError **err)
+{
+    if (!path || !data) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "invalid worker file");
+        return FALSE;
+    }
+    return g_file_set_contents(path, data, (gssize)len, err);
+}
+
+static void remove_tree(const gchar *path)
+{
+    GDir *dir;
+    const gchar *name;
+
+    if (!path || !g_file_test(path, G_FILE_TEST_EXISTS)) return;
+    if (!g_file_test(path, G_FILE_TEST_IS_DIR)) {
+        g_remove(path);
+        return;
+    }
+
+    dir = g_dir_open(path, 0, NULL);
+    if (dir) {
+        while ((name = g_dir_read_name(dir)) != NULL) {
+            gchar *child = g_build_filename(path, name, NULL);
+            remove_tree(child);
+            g_free(child);
+        }
+        g_dir_close(dir);
+    }
+    g_rmdir(path);
+}
+
+static int run_worker_from_manifest(const gchar *manifest_path)
+{
+    GKeyFile *kf;
+    GError *err = NULL;
+    gchar *op = NULL;
+    gchar *source_path = NULL;
+    gchar *overlay_path = NULL;
+    gchar *output_path = NULL;
+    gchar *output_png_path = NULL;
+    gchar *format = NULL;
+    gchar *src = NULL;
+    gchar *overlay = NULL;
+    gchar *svg = NULL;
+    gsize src_len = 0;
+    gsize overlay_len = 0;
+    gsize svg_len = 0;
+    gboolean crop;
+    gboolean alpha;
+    gboolean copy_svg;
+    gboolean copy_png;
+    double doc_x, doc_y, doc_w, doc_h;
+    int pixel_w, pixel_h;
+    int rc = 1;
+
+    kf = g_key_file_new();
+    if (!g_key_file_load_from_file(kf, manifest_path, G_KEY_FILE_NONE, &err)) {
+        g_printerr("worker failed to read manifest: %s\n",
+                   err ? err->message : "unknown error");
+        goto out;
+    }
+
+    op = g_key_file_get_string(kf, "task", "op", &err);
+    if (err) {
+        g_printerr("worker manifest is incomplete: %s\n", err->message);
+        goto out;
+    }
+    source_path = g_key_file_get_string(kf, "task", "source", &err);
+    if (err) {
+        g_printerr("worker manifest is incomplete: %s\n", err->message);
+        goto out;
+    }
+    overlay_path = g_key_file_get_string(kf, "task", "overlay", NULL);
+    output_path = g_key_file_get_string(kf, "task", "output", &err);
+    if (err) {
+        g_printerr("worker manifest is incomplete: %s\n", err->message);
+        goto out;
+    }
+    output_png_path = g_key_file_get_string(kf, "task", "output_png", NULL);
+    format = g_key_file_get_string(kf, "task", "format", NULL);
+    crop = g_key_file_get_boolean(kf, "task", "crop", NULL);
+    alpha = g_key_file_get_boolean(kf, "task", "alpha", NULL);
+    copy_svg = g_key_file_get_boolean(kf, "task", "copy_svg", NULL);
+    copy_png = g_key_file_get_boolean(kf, "task", "copy_png", NULL);
+    doc_x = g_key_file_get_double(kf, "task", "doc_x", NULL);
+    doc_y = g_key_file_get_double(kf, "task", "doc_y", NULL);
+    doc_w = g_key_file_get_double(kf, "task", "doc_w", NULL);
+    doc_h = g_key_file_get_double(kf, "task", "doc_h", NULL);
+    pixel_w = g_key_file_get_integer(kf, "task", "pixel_w", NULL);
+    pixel_h = g_key_file_get_integer(kf, "task", "pixel_h", NULL);
+
+    if (!g_file_get_contents(source_path, &src, &src_len, &err)) {
+        g_printerr("worker failed to read source SVG: %s\n",
+                   err ? err->message : "unknown error");
+        goto out;
+    }
+    if (overlay_path && *overlay_path &&
+        !g_file_get_contents(overlay_path, &overlay, &overlay_len, NULL)) {
+        overlay = g_strdup("");
+        overlay_len = 0;
+    }
+
+    svg = build_view_svg_from_parts(src, src_len,
+                                    overlay ? overlay : "",
+                                    crop,
+                                    doc_x, doc_y, doc_w, doc_h,
+                                    pixel_w, pixel_h,
+                                    &svg_len, &err);
+    if (!svg) {
+        g_printerr("worker failed to build SVG: %s\n",
+                   err ? err->message : "unknown error");
+        goto out;
+    }
+
+    if (g_strcmp0(op, "copy") == 0) {
+        if (!copy_svg && !copy_png) {
+            g_printerr("worker clipboard task requested no payload\n");
+            goto out;
+        }
+        if (copy_svg && !write_worker_file(output_path, svg, svg_len, &err)) {
+            g_printerr("worker failed to write clipboard SVG: %s\n",
+                       err ? err->message : "unknown error");
+            goto out;
+        }
+        if (copy_png && output_png_path && *output_png_path &&
+            !save_svg_bytes_as_image(svg, svg_len, output_png_path, "png",
+                                     FALSE, pixel_w, pixel_h, &err)) {
+            g_printerr("worker failed to write clipboard PNG: %s\n",
+                       err ? err->message : "unknown error");
+            goto out;
+        }
+    } else {
+        if (format && g_ascii_strcasecmp(format, "svg") == 0) {
+            if (!write_worker_file(output_path, svg, svg_len, &err)) {
+                g_printerr("worker failed to write SVG export: %s\n",
+                           err ? err->message : "unknown error");
+                goto out;
+            }
+        } else {
+            const gchar *type = format && *format ? format : "png";
+            if (!save_svg_bytes_as_image(svg, svg_len, output_path, type,
+                                         alpha, pixel_w, pixel_h, &err)) {
+                g_printerr("worker failed to write image export: %s\n",
+                           err ? err->message : "unknown error");
+                goto out;
+            }
+        }
+    }
+
+    rc = 0;
+
+out:
+    if (err) g_error_free(err);
+    g_free(op);
+    g_free(source_path);
+    g_free(overlay_path);
+    g_free(output_path);
+    g_free(output_png_path);
+    g_free(format);
+    g_free(src);
+    g_free(overlay);
+    g_free(svg);
+    g_key_file_unref(kf);
+    return rc;
+}
+
+static void clear_worker_state(App *app)
+{
+    if (!app) return;
+    if (app->busy_tmpdir) {
+        remove_tree(app->busy_tmpdir);
+        g_free(app->busy_tmpdir);
+        app->busy_tmpdir = NULL;
+    }
+    g_free(app->busy_output_path);
+    app->busy_output_path = NULL;
+    g_free(app->busy_clip_svg_path);
+    app->busy_clip_svg_path = NULL;
+    g_free(app->busy_clip_png_path);
+    app->busy_clip_png_path = NULL;
+    if (app->busy_process) {
+        g_object_unref(app->busy_process);
+        app->busy_process = NULL;
+    }
+    app->busy_operation = BUSY_OP_NONE;
+}
+
+static gboolean set_clipboard_from_worker_payload(App *app,
+                                                  const gchar *svg_path,
+                                                  const gchar *png_path,
+                                                  GError **err)
+{
+    (void)app;
+    gchar *svg = NULL;
+    gchar *png = NULL;
+    gsize svg_len = 0;
+    gsize png_len = 0;
+    gboolean have_svg;
+    gboolean have_png;
+
+    have_svg = svg_path && g_file_get_contents(svg_path, &svg, &svg_len, NULL);
+    have_png = png_path && g_file_get_contents(png_path, &png, &png_len, NULL);
+
+#ifdef G_OS_WIN32
+    HGLOBAL dib_handle = have_png
+        ? win32_clipboard_dib_from_png_bytes((const guint8 *)png, png_len, NULL)
+        : NULL;
+    if ((have_svg || have_png) &&
+        win32_copy_svg_text_to_clipboard(svg, svg_len,
+                                         (const guint8 *)png, png_len,
+                                         dib_handle, err)) {
+        dib_handle = NULL;
+        g_free(svg);
+        g_free(png);
+        return TRUE;
+    }
+    if (dib_handle) GlobalFree(dib_handle);
+#elif defined(__APPLE__) && defined(__MACH__)
+    if ((have_svg || have_png) &&
+        rsfpy_macos_copy_svg_text_to_clipboard(svg,
+                                               svg_len,
+                                               (const guint8 *)png,
+                                               png_len,
+                                               err)) {
+        g_free(svg);
+        g_free(png);
+        return TRUE;
+    }
+#else
+    if (have_svg && (svg_len <= CLIPBOARD_SVG_WARN_BYTES || !have_png)) {
+        GdkDisplay *display = gdk_display_get_default();
+        GdkClipboard *clipboard = display ? gdk_display_get_clipboard(display) : NULL;
+        if (clipboard) {
+            gdk_clipboard_set_text(clipboard, svg);
+            g_free(svg);
+            g_free(png);
+            return TRUE;
+        }
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "clipboard is not available");
+    } else if (have_png) {
+        GdkDisplay *display = gdk_display_get_default();
+        GdkClipboard *clipboard = display ? gdk_display_get_clipboard(display) : NULL;
+        GBytes *bytes = g_bytes_new(png, png_len);
+        GdkTexture *texture = gdk_texture_new_from_bytes(bytes, err);
+        g_bytes_unref(bytes);
+
+        if (clipboard && texture) {
+            gdk_clipboard_set_texture(clipboard, texture);
+            g_object_unref(texture);
+            g_free(svg);
+            g_free(png);
+            return TRUE;
+        }
+        if (texture) g_object_unref(texture);
+        if (!clipboard && (!err || !*err)) {
+            g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "clipboard is not available");
+        }
+    } else if (have_svg) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "SVG clipboard payload is large");
+    }
+#endif
+
+    if (!have_svg && !have_png && (!err || !*err)) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "worker did not produce clipboard data");
+    }
+    g_free(svg);
+    g_free(png);
+    return FALSE;
+}
+
+static void on_worker_done(GObject *source_object,
+                           GAsyncResult *result,
+                           gpointer user_data)
+{
+    App *app = user_data;
+    GSubprocess *proc = G_SUBPROCESS(source_object);
+    GError *err = NULL;
+    gboolean waited;
+    gboolean successful;
+    BusyOperation operation;
+    gchar *output_path;
+    gchar *clip_svg_path;
+    gchar *clip_png_path;
+    gboolean aborted;
+    gchar *msg = NULL;
+
+    if (!app) return;
+
+    waited = g_subprocess_wait_finish(proc, result, &err);
+    successful = waited && g_subprocess_get_successful(proc);
+    aborted = app->abort_requested;
+    operation = app->busy_operation;
+    output_path = g_strdup(app->busy_output_path);
+    clip_svg_path = g_strdup(app->busy_clip_svg_path);
+    clip_png_path = g_strdup(app->busy_clip_png_path);
+
+    if (aborted) {
+        msg = g_strdup(operation == BUSY_OP_CLIPBOARD
+            ? "Copy aborted."
+            : "Export aborted.");
+    } else if (!successful) {
+        if (err) {
+            msg = g_strdup_printf("%s failed: %s",
+                                  operation == BUSY_OP_CLIPBOARD ? "Copy" : "Export",
+                                  err->message);
+        } else if (waited && g_subprocess_get_if_exited(proc)) {
+            msg = g_strdup_printf("%s failed with code %d.",
+                                  operation == BUSY_OP_CLIPBOARD ? "Copy" : "Export",
+                                  g_subprocess_get_exit_status(proc));
+        } else {
+            msg = g_strdup_printf("%s failed.",
+                                  operation == BUSY_OP_CLIPBOARD ? "Copy" : "Export");
+        }
+        g_printerr("%s\n", msg);
+    } else if (operation == BUSY_OP_CLIPBOARD) {
+        gboolean copied_png = clip_png_path &&
+            g_file_test(clip_png_path, G_FILE_TEST_EXISTS);
+        gboolean copied_svg = clip_svg_path &&
+            g_file_test(clip_svg_path, G_FILE_TEST_EXISTS);
+        if (set_clipboard_from_worker_payload(app, clip_svg_path, clip_png_path, &err)) {
+            if (copied_svg && copied_png) {
+                msg = g_strdup("Copied SVG plus PNG fallback to clipboard.");
+            } else if (copied_png) {
+                msg = g_strdup("Copied PNG to clipboard; SVG skipped because it is too complex.");
+            } else {
+                msg = g_strdup("Copied SVG to clipboard.");
+            }
+        } else {
+            msg = g_strdup_printf("Copy failed: %s",
+                                  err ? err->message : "unknown error");
+            g_printerr("%s\n", msg);
+        }
+    } else {
+        msg = g_strdup_printf("Exported view: %s", output_path ? output_path : "");
+    }
+
+    if (err) g_error_free(err);
+    clear_worker_state(app);
+    finish_busy(app, msg);
+    g_free(msg);
+    g_free(output_path);
+    g_free(clip_svg_path);
+    g_free(clip_png_path);
+}
+
+static gchar *resolve_self_path(App *app)
+{
+    gchar *found;
+
+    if (app && app->self_path && *app->self_path) return g_strdup(app->self_path);
+    found = g_find_program_in_path(g_get_prgname());
+    if (found) return found;
+    return g_strdup(g_get_prgname() ? g_get_prgname() : "svgviewer");
+}
+
+static gboolean start_worker_operation(App *app,
+                                       BusyOperation operation,
+                                       const gchar *requested_output_path,
+                                       GError **err)
+{
+    SvgFrame *frame;
+    gchar *tmpdir = NULL;
+    gchar *source_path = NULL;
+    gchar *overlay_path = NULL;
+    gchar *manifest_path = NULL;
+    gchar *effective_output_path = NULL;
+    gchar *clip_png_path = NULL;
+    gchar *source_svg = NULL;
+    GString *overlay = NULL;
+    gsize source_len = 0;
+    GKeyFile *kf = NULL;
+    gchar *key_data = NULL;
+    gsize key_len = 0;
+    gchar *exe_path = NULL;
+    GSubprocess *proc = NULL;
+    GError *local_err = NULL;
+    double doc_x = 0.0, doc_y = 0.0, doc_w = 0.0, doc_h = 0.0;
+    int pixel_w = 0, pixel_h = 0;
+    gboolean crop;
+    gsize source_element_count = 0;
+    gsize svg_element_limit = clipboard_svg_element_limit();
+    gboolean copy_svg = TRUE;
+    gboolean copy_png = FALSE;
+    gboolean alpha = TRUE;
+    const gchar *format = "svg";
+
+    if (!app || app->busy) return FALSE;
+    frame = current_frame(app);
+    if (!frame) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "no SVG frame is available");
+        return FALSE;
+    }
+
+    crop = current_visible_doc_rect(app, &doc_x, &doc_y, &doc_w, &doc_h,
+                                    &pixel_w, &pixel_h);
+    if (!crop) {
+        doc_x = 0.0;
+        doc_y = 0.0;
+        doc_w = frame->width > 0.0 ? frame->width : DEFAULT_WIDTH;
+        doc_h = frame->height > 0.0 ? frame->height : DEFAULT_HEIGHT;
+        pixel_w = (int)ceil(doc_w);
+        pixel_h = (int)ceil(doc_h);
+        if (pixel_w < 1) pixel_w = DEFAULT_WIDTH;
+        if (pixel_h < 1) pixel_h = DEFAULT_HEIGHT;
+    }
+
+    if (!read_current_svg_source(app, &source_svg, &source_len, err)) return FALSE;
+    source_element_count = count_svg_elements_len(source_svg, source_len);
+    if (operation == BUSY_OP_CLIPBOARD) {
+        copy_png = TRUE;
+        copy_svg = source_element_count <= svg_element_limit;
+    }
+
+    tmpdir = g_dir_make_tmp("rsfpy-svgviewer-XXXXXX", err);
+    if (!tmpdir) goto fail;
+    source_path = g_build_filename(tmpdir, "source.svg", NULL);
+    overlay_path = g_build_filename(tmpdir, "overlay.svgpart", NULL);
+    manifest_path = g_build_filename(tmpdir, "task.ini", NULL);
+
+    overlay = g_string_new(NULL);
+    append_annotations_as_svg(app, overlay);
+    if (!write_worker_file(source_path, source_svg, source_len, err)) goto fail;
+    if (!write_worker_file(overlay_path, overlay->str, overlay->len, err)) goto fail;
+
+    kf = g_key_file_new();
+    g_key_file_set_string(kf, "task", "op",
+                          operation == BUSY_OP_CLIPBOARD ? "copy" : "export");
+    g_key_file_set_string(kf, "task", "source", source_path);
+    g_key_file_set_string(kf, "task", "overlay", overlay_path);
+    if (operation == BUSY_OP_CLIPBOARD) {
+        effective_output_path = g_build_filename(tmpdir, "payload.svg", NULL);
+        clip_png_path = g_build_filename(tmpdir, "payload.png", NULL);
+        g_key_file_set_string(kf, "task", "output_png", clip_png_path);
+        format = "svg";
+        alpha = TRUE;
+    } else if (is_svg_export_path(requested_output_path)) {
+        effective_output_path = g_strdup(requested_output_path);
+        format = "svg";
+        alpha = TRUE;
+    } else {
+        effective_output_path = g_strdup(requested_output_path);
+        format = export_type_for_path(requested_output_path, &alpha);
+    }
+    g_key_file_set_string(kf, "task", "output", effective_output_path);
+    g_key_file_set_string(kf, "task", "format", format);
+    g_key_file_set_boolean(kf, "task", "alpha", alpha);
+    g_key_file_set_boolean(kf, "task", "copy_svg", copy_svg);
+    g_key_file_set_boolean(kf, "task", "copy_png", copy_png);
+    g_key_file_set_boolean(kf, "task", "crop", crop);
+    g_key_file_set_double(kf, "task", "doc_x", doc_x);
+    g_key_file_set_double(kf, "task", "doc_y", doc_y);
+    g_key_file_set_double(kf, "task", "doc_w", doc_w);
+    g_key_file_set_double(kf, "task", "doc_h", doc_h);
+    g_key_file_set_integer(kf, "task", "pixel_w", pixel_w);
+    g_key_file_set_integer(kf, "task", "pixel_h", pixel_h);
+
+    key_data = g_key_file_to_data(kf, &key_len, err);
+    if (!key_data) goto fail;
+    if (!write_worker_file(manifest_path, key_data, key_len, err)) goto fail;
+
+    exe_path = resolve_self_path(app);
+    proc = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE,
+                            &local_err,
+                            exe_path,
+                            "--rsfpy-export-worker",
+                            manifest_path,
+                            NULL);
+    if (!proc) {
+        if (err) {
+            *err = local_err;
+        } else {
+            g_error_free(local_err);
+        }
+        local_err = NULL;
+        goto fail;
+    }
+
+    app->busy_operation = operation;
+    app->busy_process = proc;
+    app->busy_tmpdir = g_strdup(tmpdir);
+    app->busy_output_path = g_strdup(effective_output_path);
+    app->busy_clip_svg_path = operation == BUSY_OP_CLIPBOARD && copy_svg
+        ? g_strdup(effective_output_path)
+        : NULL;
+    app->busy_clip_png_path = operation == BUSY_OP_CLIPBOARD ? g_strdup(clip_png_path) : NULL;
+    proc = NULL;
+
+    set_busy(app, TRUE,
+             operation == BUSY_OP_CLIPBOARD
+                 ? "Preparing clipboard data..."
+                 : "Exporting view...");
+    g_subprocess_wait_async(app->busy_process, NULL, on_worker_done, app);
+
+    g_free(tmpdir);
+    g_free(source_path);
+    g_free(overlay_path);
+    g_free(manifest_path);
+    g_free(effective_output_path);
+    g_free(clip_png_path);
+    g_free(source_svg);
+    if (overlay) g_string_free(overlay, TRUE);
+    if (kf) g_key_file_unref(kf);
+    g_free(key_data);
+    g_free(exe_path);
+    return TRUE;
+
+fail:
+    if (proc) g_object_unref(proc);
+    if (tmpdir) remove_tree(tmpdir);
+    if (local_err) g_error_free(local_err);
+    g_free(tmpdir);
+    g_free(source_path);
+    g_free(overlay_path);
+    g_free(manifest_path);
+    g_free(effective_output_path);
+    g_free(clip_png_path);
+    g_free(source_svg);
+    if (overlay) g_string_free(overlay, TRUE);
+    if (kf) g_key_file_unref(kf);
+    g_free(key_data);
+    g_free(exe_path);
+    return FALSE;
 }
 
 #ifdef G_OS_WIN32
@@ -3282,10 +3933,8 @@ static HGLOBAL win32_clipboard_mem_from_bytes(const void *data, SIZE_T len)
     return handle;
 }
 
-static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
+static HGLOBAL win32_clipboard_dib_from_pixbuf(GdkPixbuf *pixbuf, GError **err)
 {
-    cairo_surface_t *surface;
-    GdkPixbuf *pixbuf;
     HGLOBAL handle;
     BITMAPINFOHEADER *header;
     guint8 *bits;
@@ -3298,11 +3947,6 @@ static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
     SIZE_T image_size;
     SIZE_T total_size;
 
-    surface = render_current_svg_area_surface(app, err);
-    if (!surface) return NULL;
-
-    pixbuf = surface_to_pixbuf(surface, FALSE);
-    cairo_surface_destroy(surface);
     if (!pixbuf) {
         g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "failed to create clipboard bitmap");
@@ -3315,7 +3959,6 @@ static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
     channels = gdk_pixbuf_get_n_channels(pixbuf);
     src = gdk_pixbuf_get_pixels(pixbuf);
     if (width <= 0 || height <= 0 || !src || channels < 3) {
-        g_object_unref(pixbuf);
         g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "invalid clipboard bitmap");
         return NULL;
@@ -3326,7 +3969,6 @@ static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
     total_size = sizeof(BITMAPINFOHEADER) + image_size;
     handle = GlobalAlloc(GMEM_MOVEABLE, total_size);
     if (!handle) {
-        g_object_unref(pixbuf);
         g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "failed to allocate clipboard bitmap");
         return NULL;
@@ -3335,7 +3977,6 @@ static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
     header = (BITMAPINFOHEADER *)GlobalLock(handle);
     if (!header) {
         GlobalFree(handle);
-        g_object_unref(pixbuf);
         g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "failed to lock clipboard bitmap");
         return NULL;
@@ -3362,6 +4003,24 @@ static HGLOBAL win32_clipboard_dib_from_current_view(App *app, GError **err)
     }
 
     GlobalUnlock(handle);
+    return handle;
+}
+
+static HGLOBAL win32_clipboard_dib_from_png_bytes(const guint8 *png,
+                                                  gsize png_len,
+                                                  GError **err)
+{
+    GInputStream *stream;
+    GdkPixbuf *pixbuf;
+    HGLOBAL handle;
+
+    if (!png || png_len == 0) return NULL;
+    stream = g_memory_input_stream_new_from_data(png, (gssize)png_len, NULL);
+    pixbuf = gdk_pixbuf_new_from_stream(stream, NULL, err);
+    g_object_unref(stream);
+    if (!pixbuf) return NULL;
+
+    handle = win32_clipboard_dib_from_pixbuf(pixbuf, err);
     g_object_unref(pixbuf);
     return handle;
 }
@@ -3387,27 +4046,30 @@ static gboolean win32_copy_svg_text_to_clipboard(const gchar *svg,
     gboolean copied_png = FALSE;
     gboolean copied_dib = FALSE;
 
-    if (!svg) {
+    if (!svg && !png && !dib_handle) {
         if (dib_handle) GlobalFree(dib_handle);
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "no SVG data to copy");
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "no clipboard data to copy");
         return FALSE;
     }
 
-    wide = g_utf8_to_utf16(svg, (glong)svg_len, NULL, &wide_len, err);
-    if (!wide) {
-        if (dib_handle) GlobalFree(dib_handle);
-        return FALSE;
+    if (svg) {
+        wide = g_utf8_to_utf16(svg, (glong)svg_len, NULL, &wide_len, err);
+        if (!wide) {
+            if (dib_handle) GlobalFree(dib_handle);
+            return FALSE;
+        }
+
+        text_handle = win32_clipboard_mem_from_bytes(
+            wide, (SIZE_T)(wide_len + 1) * sizeof(gunichar2));
+        svg_handle = win32_clipboard_mem_from_bytes(
+            svg, (SIZE_T)svg_len + 1);
+        g_free(wide);
     }
 
-    text_handle = win32_clipboard_mem_from_bytes(
-        wide, (SIZE_T)(wide_len + 1) * sizeof(gunichar2));
-    svg_handle = win32_clipboard_mem_from_bytes(
-        svg, (SIZE_T)svg_len + 1);
     if (png && png_len > 0) {
         png_handle = win32_clipboard_mem_from_bytes(png, (SIZE_T)png_len);
         png_mime_handle = win32_clipboard_mem_from_bytes(png, (SIZE_T)png_len);
     }
-    g_free(wide);
 
     if (!text_handle && !svg_handle && !png_handle &&
         !png_mime_handle && !dib_handle) {
@@ -3476,92 +4138,74 @@ static gboolean win32_copy_svg_text_to_clipboard(const gchar *svg,
 }
 #endif
 
-static GdkTexture *make_current_view_texture(App *app, GError **err)
+static void copy_current_view_to_clipboard(App *app)
 {
-    cairo_surface_t *surface;
-    GdkPixbuf *pixbuf;
-    GdkTexture *texture;
-
-    surface = render_current_svg_area_surface(app, err);
-    if (!surface) return NULL;
-    pixbuf = surface_to_pixbuf(surface, FALSE);
-    cairo_surface_destroy(surface);
-    if (!pixbuf) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "failed to create clipboard image");
-        return NULL;
-    }
-
-    texture = gdk_texture_new_for_pixbuf(pixbuf);
-    g_object_unref(pixbuf);
-    return texture;
-}
-
-static gboolean copy_current_view_texture_to_clipboard(App *app, GError **err)
-{
-    GdkDisplay *display = gdk_display_get_default();
-    GdkClipboard *clipboard = display ? gdk_display_get_clipboard(display) : NULL;
-    GdkTexture *texture;
-
-    if (!clipboard) {
-        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "clipboard is not available");
-        return FALSE;
-    }
-
-    texture = make_current_view_texture(app, err);
-    if (!texture) return FALSE;
-
-    gdk_clipboard_set_texture(clipboard, texture);
-    g_object_unref(texture);
-    return TRUE;
-}
-
-typedef struct {
-    App *app;
-    GtkWidget *dialog;
-} ClipboardWarnState;
-
-static void on_clipboard_warn_response(GtkDialog *dialog,
-                                       int response,
-                                       gpointer user_data)
-{
-    ClipboardWarnState *st = user_data;
-    if (st && response == GTK_RESPONSE_ACCEPT) {
-        GError *err = NULL;
-        if (copy_current_view_texture_to_clipboard(st->app, &err)) {
-            gtk_label_set_text(GTK_LABEL(st->app->status_label),
-                               "Copied current SVG area as an image.");
-        } else {
-            gchar *msg = g_strdup_printf("Copy failed: %s", err ? err->message : "unknown error");
-            gtk_label_set_text(GTK_LABEL(st->app->status_label), msg);
-            g_printerr("%s\n", msg);
-            g_free(msg);
+    if (!app) return;
+    if (app->busy) {
+        if (app->status_label) {
+            gtk_label_set_text(GTK_LABEL(app->status_label),
+                               "Another operation is already running.");
         }
-        if (err) g_error_free(err);
+        return;
+    }
+    start_clipboard_task(app);
+}
+
+static void on_copy_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    copy_current_view_to_clipboard((App *)user_data);
+}
+
+static void on_abort_clicked(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    request_abort_operation((App *)user_data, "Aborting...");
+}
+
+static void on_abort_exit_dialog_response(GtkDialog *dialog,
+                                          int response,
+                                          gpointer user_data)
+{
+    App *app = user_data;
+
+    if (app) {
+        app->exit_prompt_open = FALSE;
+        app->exit_prompt_dialog = NULL;
+    }
+
+    if (app && response == GTK_RESPONSE_ACCEPT) {
+        app->exit_after_abort = TRUE;
+        request_abort_operation(app, "Aborting; will exit when the operation stops...");
+        if (!app->busy && app->window) {
+            app->exit_after_abort = FALSE;
+            gtk_window_close(GTK_WINDOW(app->window));
+        }
     }
 
     gtk_window_destroy(GTK_WINDOW(dialog));
-    g_free(st);
 }
 
-static void show_clipboard_size_warning(App *app)
+static void show_abort_exit_dialog(App *app)
 {
-    ClipboardWarnState *st;
     GtkWidget *dialog;
     GtkWidget *content;
     GtkWidget *label;
 
-    if (!app || !app->window) return;
+    if (!app || !app->window || app->exit_prompt_open) return;
+    app->exit_prompt_open = TRUE;
 
-    dialog = gtk_dialog_new_with_buttons("Clipboard SVG is large",
+    dialog = gtk_dialog_new_with_buttons("Operation in Progress",
                                          GTK_WINDOW(app->window),
                                          GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                         "Copy image",
+                                         "Abort & Exit",
                                          GTK_RESPONSE_ACCEPT,
                                          "_Cancel",
                                          GTK_RESPONSE_CANCEL,
                                          NULL);
+    app->exit_prompt_dialog = dialog;
     content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    label = gtk_label_new("The SVG clipboard payload is large. Copy a raster image instead?");
+    label = gtk_label_new("An export or clipboard operation is still running.");
     gtk_widget_set_margin_top(label, 12);
     gtk_widget_set_margin_bottom(label, 12);
     gtk_widget_set_margin_start(label, 12);
@@ -3569,157 +4213,9 @@ static void show_clipboard_size_warning(App *app)
     gtk_label_set_wrap(GTK_LABEL(label), TRUE);
     gtk_box_append(GTK_BOX(content), label);
 
-    st = g_new0(ClipboardWarnState, 1);
-    st->app = app;
-    st->dialog = dialog;
-    g_signal_connect(dialog, "response", G_CALLBACK(on_clipboard_warn_response), st);
+    g_signal_connect(dialog, "response",
+                     G_CALLBACK(on_abort_exit_dialog_response), app);
     gtk_window_present(GTK_WINDOW(dialog));
-}
-
-static void copy_current_view_to_clipboard(App *app)
-{
-#ifdef G_OS_WIN32
-    gchar *svg = NULL;
-    guint8 *png = NULL;
-    gsize svg_len = 0;
-    gsize png_len = 0;
-    HGLOBAL dib_handle = NULL;
-    GError *err = NULL;
-
-    if (!app) return;
-
-    svg = build_current_view_svg(app, &svg_len, &err);
-    if (err) {
-        g_error_free(err);
-        err = NULL;
-    }
-    if (!build_current_view_png(app, &png, &png_len, &err)) {
-        g_clear_error(&err);
-    }
-    dib_handle = win32_clipboard_dib_from_current_view(app, &err);
-    if (!dib_handle) {
-        g_clear_error(&err);
-    }
-
-    if (svg && win32_copy_svg_text_to_clipboard(svg, svg_len,
-                                                png, png_len,
-                                                dib_handle, &err)) {
-        const gchar *msg = svg_len > CLIPBOARD_SVG_WARN_BYTES
-            ? "Copied large SVG plus PNG fallback to clipboard."
-            : "Copied SVG plus PNG fallback to clipboard.";
-        gtk_label_set_text(GTK_LABEL(app->status_label), msg);
-        g_free(svg);
-        g_free(png);
-        if (err) g_error_free(err);
-        return;
-    }
-
-    if (!svg && dib_handle) {
-        GlobalFree(dib_handle);
-        dib_handle = NULL;
-    }
-    g_free(svg);
-    g_free(png);
-    {
-        gchar *msg = g_strdup_printf("Copy failed: %s",
-                                     err ? err->message : "unknown error");
-        gtk_label_set_text(GTK_LABEL(app->status_label), msg);
-        g_printerr("%s\n", msg);
-        g_free(msg);
-    }
-    if (err) g_error_free(err);
-#elif defined(__APPLE__) && defined(__MACH__)
-    gchar *svg = NULL;
-    guint8 *png = NULL;
-    gsize svg_len = 0;
-    gsize png_len = 0;
-    GError *err = NULL;
-
-    if (!app) return;
-
-    svg = build_current_view_svg(app, &svg_len, &err);
-    if (err) {
-        g_error_free(err);
-        err = NULL;
-    }
-    if (!build_current_view_png(app, &png, &png_len, &err)) {
-        g_clear_error(&err);
-    }
-
-    if (svg && rsfpy_macos_copy_svg_text_to_clipboard(svg, svg_len,
-                                                      png, png_len,
-                                                      &err)) {
-        const gchar *msg = svg_len > CLIPBOARD_SVG_WARN_BYTES
-            ? "Copied large SVG plus PNG fallback to clipboard."
-            : "Copied SVG plus PNG fallback to clipboard.";
-        gtk_label_set_text(GTK_LABEL(app->status_label), msg);
-        g_free(svg);
-        g_free(png);
-        if (err) g_error_free(err);
-        return;
-    }
-
-    g_free(svg);
-    g_free(png);
-    {
-        gchar *msg = g_strdup_printf("Copy failed: %s",
-                                     err ? err->message : "unknown error");
-        gtk_label_set_text(GTK_LABEL(app->status_label), msg);
-        g_printerr("%s\n", msg);
-        g_free(msg);
-    }
-    if (err) g_error_free(err);
-#else
-    GdkDisplay *display = gdk_display_get_default();
-    GdkClipboard *clipboard = display ? gdk_display_get_clipboard(display) : NULL;
-    gchar *svg = NULL;
-    gsize svg_len = 0;
-    GError *err = NULL;
-
-    if (!app || !clipboard) {
-        if (app && app->status_label) {
-            gtk_label_set_text(GTK_LABEL(app->status_label), "Copy failed: clipboard is not available.");
-        }
-        return;
-    }
-
-    svg = build_current_view_svg(app, &svg_len, &err);
-    if (svg && svg_len <= CLIPBOARD_SVG_WARN_BYTES) {
-        gdk_clipboard_set_text(clipboard, svg);
-        gtk_label_set_text(GTK_LABEL(app->status_label),
-                           "Copied SVG text with annotations to clipboard.");
-        if (err) g_error_free(err);
-        g_free(svg);
-        return;
-    } else if (svg) {
-        g_free(svg);
-        show_clipboard_size_warning(app);
-        if (err) g_error_free(err);
-        return;
-    }
-
-    g_free(svg);
-    if (err) {
-        g_error_free(err);
-        err = NULL;
-    }
-    if (copy_current_view_texture_to_clipboard(app, &err)) {
-        gtk_label_set_text(GTK_LABEL(app->status_label),
-                           "Copied current SVG area as an image.");
-    } else {
-        gchar *msg = g_strdup_printf("Copy failed: %s", err ? err->message : "unknown error");
-        gtk_label_set_text(GTK_LABEL(app->status_label), msg);
-        g_printerr("%s\n", msg);
-        g_free(msg);
-    }
-    if (err) g_error_free(err);
-#endif
-}
-
-static void on_copy_clicked(GtkButton *button, gpointer user_data)
-{
-    (void)button;
-    copy_current_view_to_clipboard((App *)user_data);
 }
 
 static void on_quit_clicked(GtkButton *button, gpointer user_data)
@@ -3734,10 +4230,7 @@ static gboolean on_window_close_request(GtkWindow *window, gpointer user_data)
     (void)window;
     App *app = user_data;
     if (app && app->busy) {
-        if (app->status_label) {
-            gtk_label_set_text(GTK_LABEL(app->status_label),
-                               "Export is still running; please wait.");
-        }
+        show_abort_exit_dialog(app);
         return TRUE;
     }
     return FALSE;
@@ -4296,6 +4789,15 @@ static void activate(GtkApplication *gtk_app, gpointer user_data)
     gtk_widget_set_visible(app->status_progress, FALSE);
     gtk_box_append(GTK_BOX(app->status_box), app->status_progress);
 
+    app->btn_abort = gtk_button_new_with_label("Abort");
+    gtk_widget_add_css_class(app->btn_abort, "flat");
+    gtk_widget_add_css_class(app->btn_abort, "rsfpy-abort-link");
+    gtk_widget_set_valign(app->btn_abort, GTK_ALIGN_CENTER);
+    gtk_widget_set_visible(app->btn_abort, FALSE);
+    gtk_widget_set_sensitive(app->btn_abort, FALSE);
+    g_signal_connect(app->btn_abort, "clicked", G_CALLBACK(on_abort_clicked), app);
+    gtk_box_append(GTK_BOX(app->status_box), app->btn_abort);
+
     gtk_box_append(GTK_BOX(app->root_box), app->status_box);
 
     GtkGesture *drag = gtk_gesture_drag_new();
@@ -4381,6 +4883,13 @@ static gboolean load_inputs(App *app, int argc, char **argv)
         if (g_str_has_prefix(argv[i], "--watch=")) {
             continue;
         }
+        if (strcmp(argv[i], "--progress") == 0) {
+            if (i + 1 < argc) i++;
+            continue;
+        }
+        if (g_str_has_prefix(argv[i], "--progress=")) {
+            continue;
+        }
         if (strcmp(argv[i], "--backend") == 0) {
             if (i + 1 < argc) i++;
             continue;
@@ -4449,6 +4958,70 @@ static gchar *parse_watch_arg(int argc, char **argv)
     }
 
     return NULL;
+}
+
+static gchar *parse_progress_arg(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--progress") == 0 && i + 1 < argc) {
+            return g_strdup(argv[i + 1]);
+        }
+        if (g_str_has_prefix(argv[i], "--progress=")) {
+            return g_strdup(argv[i] + strlen("--progress="));
+        }
+    }
+
+    return NULL;
+}
+
+static gboolean poll_progress_file(gpointer user_data)
+{
+    App *app = (App *)user_data;
+    gchar *content = NULL;
+    gsize len = 0;
+    GError *err = NULL;
+    gchar *start;
+    gchar *end;
+    gboolean changed = FALSE;
+
+    if (!app || str_empty(app->progress_path)) return G_SOURCE_REMOVE;
+
+    if (!g_file_get_contents(app->progress_path, &content, &len, &err)) {
+        g_clear_error(&err);
+        return G_SOURCE_CONTINUE;
+    }
+
+    if (len < app->progress_offset) app->progress_offset = 0;
+    if (len <= app->progress_offset) {
+        g_free(content);
+        return G_SOURCE_CONTINUE;
+    }
+
+    start = content + app->progress_offset;
+    end = content + len;
+
+    while (start < end) {
+        gchar *nl = memchr(start, '\n', (gsize)(end - start));
+        gchar saved;
+        gchar *line;
+
+        if (!nl) break;
+        saved = *nl;
+        *nl = '\0';
+        line = g_strstrip(start);
+        if (!str_empty(line)) {
+            g_free(app->progress_message);
+            app->progress_message = g_strdup(line);
+            changed = TRUE;
+        }
+        *nl = saved;
+        app->progress_offset = (gsize)(nl + 1 - content);
+        start = nl + 1;
+    }
+
+    if (changed) update_ui(app);
+    g_free(content);
+    return G_SOURCE_CONTINUE;
 }
 
 static void append_watch_line(App *app, gchar *line)
@@ -4574,10 +5147,20 @@ static void print_usage(const char *prog)
     fprintf(stderr,
             "Usage:\n"
             "  %s [--status file.status] [--backend gtk] file.svg   # Load from file\n"
-            "  %s --watch frames.manifest            # Append streamed SVG frames\n"
+            "  %s --watch frames.manifest [--progress progress.log]\n"
             "  cat file.svg | %s                    # Load from stdin\n"
             "  %s - < file.svg                      # Explicit stdin\n",
             prog, prog, prog, prog);
+}
+
+static gchar *parse_worker_manifest_arg(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--rsfpy-export-worker") == 0) {
+            return (i + 1 < argc) ? g_strdup(argv[i + 1]) : NULL;
+        }
+    }
+    return NULL;
 }
 
 int main(int argc, char **argv)
@@ -4585,10 +5168,21 @@ int main(int argc, char **argv)
     gboolean has_stdin = !isatty(fileno(stdin));
     gchar *status_path = parse_status_arg(argc, argv);
     gchar *watch_path = parse_watch_arg(argc, argv);
+    gchar *progress_path = parse_progress_arg(argc, argv);
+    gchar *worker_manifest = parse_worker_manifest_arg(argc, argv);
 
 #ifdef G_OS_WIN32
     setup_windows_bundle_env(argc > 0 ? argv[0] : NULL);
 #endif
+
+    if (worker_manifest) {
+        int rc = run_worker_from_manifest(worker_manifest);
+        g_free(worker_manifest);
+        g_free(status_path);
+        g_free(watch_path);
+        g_free(progress_path);
+        return rc;
+    }
 
     sf_init(argc, argv);
 
@@ -4617,6 +5211,13 @@ int main(int argc, char **argv)
     app.sequence.fps = 12;
     app.sequence.playing = FALSE;
     app.watch_path = watch_path;
+    app.progress_path = progress_path;
+    if (argc > 0 && argv[0] && g_path_is_absolute(argv[0])) {
+        app.self_path = g_strdup(argv[0]);
+    } else if (argc > 0 && argv[0]) {
+        app.self_path = g_find_program_in_path(argv[0]);
+        if (!app.self_path) app.self_path = g_strdup(argv[0]);
+    }
 
     if (!load_inputs(&app, argc, argv)) {
         if (!str_empty(app.watch_path)) {
@@ -4645,6 +5246,10 @@ int main(int argc, char **argv)
         poll_watch_manifest(&app);
         app.watch_id = g_timeout_add(200, poll_watch_manifest, &app);
     }
+    if (!str_empty(app.progress_path)) {
+        poll_progress_file(&app);
+        app.progress_id = g_timeout_add(200, poll_progress_file, &app);
+    }
 
     GtkApplication *gtk_app = gtk_application_new(APP_ID, G_APPLICATION_NON_UNIQUE);
     g_signal_connect(gtk_app, "activate", G_CALLBACK(activate), &app);
@@ -4654,7 +5259,9 @@ int main(int argc, char **argv)
 
     if (app.tick_id) g_source_remove(app.tick_id);
     if (app.watch_id) g_source_remove(app.watch_id);
+    if (app.progress_id) g_source_remove(app.progress_id);
     if (app.busy_pulse_id) g_source_remove(app.busy_pulse_id);
+    clear_worker_state(&app);
     g_object_unref(gtk_app);
     svg_sequence_free(&app.sequence);
     if (app.annotations) g_ptr_array_free(app.annotations, TRUE);
@@ -4662,7 +5269,11 @@ int main(int argc, char **argv)
     if (app.redo_stack) g_ptr_array_free(app.redo_stack, TRUE);
     g_free(app.load_error);
     g_free(app.watch_path);
+    g_free(app.progress_path);
+    g_free(app.progress_message);
+    g_free(app.self_path);
     g_free(status_path);
+    g_free(worker_manifest);
 
     (void)status;
     return 0;

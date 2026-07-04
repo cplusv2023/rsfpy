@@ -35,6 +35,8 @@ gboolean rsfpy_macos_copy_svg_text_to_clipboard(const gchar *svg,
         NSString *svgPath;
         NSURL *svgURL;
         NSPasteboard *pasteboard;
+        NSMutableArray *types;
+        BOOL wroteTempSvg;
         BOOL wroteSvgType;
         BOOL wroteSvgAltType;
         BOOL wroteMimeType;
@@ -48,32 +50,39 @@ gboolean rsfpy_macos_copy_svg_text_to_clipboard(const gchar *svg,
         BOOL wroteText;
         BOOL wroteLegacyText;
 
-        if (!svg) {
+        if (!svg && (!png || png_len == 0)) {
             g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "no SVG data to copy");
+                        "no clipboard data to copy");
             return FALSE;
         }
 
-        svgData = [NSData dataWithBytes:svg length:(NSUInteger)svg_len];
+        svgData = svg ? [NSData dataWithBytes:svg length:(NSUInteger)svg_len] : nil;
         pngData = (png && png_len > 0)
             ? [NSData dataWithBytes:png length:(NSUInteger)png_len]
             : nil;
-        svgString = [NSString stringWithUTF8String:svg];
-        if (!svgString) {
+        svgString = svg ? [NSString stringWithUTF8String:svg] : nil;
+        if (svg && !svgString) {
             svgString = [NSString stringWithFormat:@"%.*s", (int)svg_len, svg];
         }
-        if (!svgData || !svgString) {
+        if (svg && (!svgData || !svgString)) {
             g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
                         "failed to prepare SVG clipboard data");
             return FALSE;
         }
+        if (png && !pngData) {
+            g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "failed to prepare PNG clipboard data");
+            return FALSE;
+        }
 
-        svgPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        svgPath = svgData ? [NSTemporaryDirectory() stringByAppendingPathComponent:
             [NSString stringWithFormat:@"rsfpy-clipboard-%@.svg",
-             [[NSUUID UUID] UUIDString]]];
+             [[NSUUID UUID] UUIDString]]] : nil;
         svgURL = svgPath ? [NSURL fileURLWithPath:svgPath] : nil;
-        if (svgPath) {
-            [svgData writeToFile:svgPath atomically:YES];
+        wroteTempSvg = svgPath ? [svgData writeToFile:svgPath atomically:YES] : NO;
+        if (!wroteTempSvg) {
+            svgURL = nil;
+            svgPath = nil;
         }
 
         pasteboard = [NSPasteboard generalPasteboard];
@@ -83,26 +92,33 @@ gboolean rsfpy_macos_copy_svg_text_to_clipboard(const gchar *svg,
             return FALSE;
         }
 
-        [pasteboard declareTypes:@[
-            RSFPY_PB_SVG_UTI,
-            RSFPY_PB_SVG_UTI_ALT,
-            RSFPY_PB_SVG_MIME,
-            RSFPY_PB_SVG_ADOBE,
-            RSFPY_PB_SVG_W3C,
-            RSFPY_PB_PNG_UTI,
-            RSFPY_PB_PNG_MIME,
-            RSFPY_PB_FILE_URL,
-            RSFPY_PB_FILE_URL_OLD,
-            RSFPY_PB_FILENAMES_OLD,
-            RSFPY_PB_TEXT_UTF8,
-            RSFPY_PB_TEXT_LEGACY
-        ] owner:nil];
+        types = [NSMutableArray array];
+        if (svgData) {
+            [types addObject:RSFPY_PB_SVG_UTI];
+            [types addObject:RSFPY_PB_SVG_UTI_ALT];
+            [types addObject:RSFPY_PB_SVG_MIME];
+            [types addObject:RSFPY_PB_SVG_ADOBE];
+            [types addObject:RSFPY_PB_SVG_W3C];
+            [types addObject:RSFPY_PB_TEXT_UTF8];
+            [types addObject:RSFPY_PB_TEXT_LEGACY];
+        }
+        if (pngData) {
+            [types addObject:RSFPY_PB_PNG_UTI];
+            [types addObject:RSFPY_PB_PNG_MIME];
+        }
+        if (svgURL && svgPath) {
+            [types addObject:RSFPY_PB_FILE_URL];
+            [types addObject:RSFPY_PB_FILE_URL_OLD];
+            [types addObject:RSFPY_PB_FILENAMES_OLD];
+        }
 
-        wroteSvgType = [pasteboard setData:svgData forType:RSFPY_PB_SVG_UTI];
-        wroteSvgAltType = [pasteboard setData:svgData forType:RSFPY_PB_SVG_UTI_ALT];
-        wroteMimeType = [pasteboard setData:svgData forType:RSFPY_PB_SVG_MIME];
-        wroteAdobeType = [pasteboard setData:svgData forType:RSFPY_PB_SVG_ADOBE];
-        wroteW3cType = [pasteboard setData:svgData forType:RSFPY_PB_SVG_W3C];
+        [pasteboard declareTypes:types owner:nil];
+
+        wroteSvgType = svgData ? [pasteboard setData:svgData forType:RSFPY_PB_SVG_UTI] : NO;
+        wroteSvgAltType = svgData ? [pasteboard setData:svgData forType:RSFPY_PB_SVG_UTI_ALT] : NO;
+        wroteMimeType = svgData ? [pasteboard setData:svgData forType:RSFPY_PB_SVG_MIME] : NO;
+        wroteAdobeType = svgData ? [pasteboard setData:svgData forType:RSFPY_PB_SVG_ADOBE] : NO;
+        wroteW3cType = svgData ? [pasteboard setData:svgData forType:RSFPY_PB_SVG_W3C] : NO;
         wrotePngType = pngData ? [pasteboard setData:pngData forType:RSFPY_PB_PNG_UTI] : NO;
         wrotePngMimeType = pngData ? [pasteboard setData:pngData forType:RSFPY_PB_PNG_MIME] : NO;
         wroteFileUrl = svgURL ? [pasteboard setString:[svgURL absoluteString]
@@ -111,8 +127,8 @@ gboolean rsfpy_macos_copy_svg_text_to_clipboard(const gchar *svg,
                                               forType:RSFPY_PB_FILE_URL_OLD] : NO;
         wroteOldFilenames = svgPath ? [pasteboard setPropertyList:@[svgPath]
                                                  forType:RSFPY_PB_FILENAMES_OLD] : NO;
-        wroteText = [pasteboard setString:svgString forType:RSFPY_PB_TEXT_UTF8];
-        wroteLegacyText = [pasteboard setString:svgString forType:RSFPY_PB_TEXT_LEGACY];
+        wroteText = svgString ? [pasteboard setString:svgString forType:RSFPY_PB_TEXT_UTF8] : NO;
+        wroteLegacyText = svgString ? [pasteboard setString:svgString forType:RSFPY_PB_TEXT_LEGACY] : NO;
 
         if (!wroteSvgType && !wroteSvgAltType &&
             !wroteMimeType && !wroteAdobeType && !wroteW3cType &&

@@ -228,21 +228,62 @@ def converter_supports_path_arg(cmd):
     return os.path.basename(cmd[0]).lower().startswith("vpl2svg")
 
 
-def convert_one_vpl(cmd, converter_args, title, data, source_path, convert_path=None):
+def append_progress_line(progress_path, message):
+    if not progress_path or not message:
+        return
+    try:
+        with open(progress_path, "a", encoding="utf-8") as f:
+            f.write(str(message).rstrip() + "\n")
+            f.flush()
+    except OSError:
+        pass
+
+
+def converter_args_for_progress(cmd, converter_args, progress_path):
+    if not progress_path or not converter_supports_path_arg(cmd):
+        return list(converter_args)
+    if "--verbose" in converter_args:
+        return list(converter_args)
+    return ["--verbose"] + list(converter_args)
+
+
+def convert_one_vpl(
+    cmd,
+    converter_args,
+    title,
+    data,
+    source_path,
+    convert_path=None,
+    progress_path=None,
+):
     use_path = (
         convert_path is not None
         and os.path.exists(convert_path)
         and converter_supports_path_arg(cmd)
     )
+    stderr_target = PIPE
+    progress_file = None
 
-    result = run(
-        cmd + converter_args + [convert_path] if use_path else cmd + converter_args,
-        input=None if use_path else data,
-        stdout=-1,
-        stderr=-1,
-    )
+    if progress_path:
+        try:
+            progress_file = open(progress_path, "ab", buffering=0)
+            stderr_target = progress_file
+        except OSError:
+            progress_file = None
+            stderr_target = PIPE
 
-    if result.stderr:
+    try:
+        result = run(
+            cmd + converter_args + [convert_path] if use_path else cmd + converter_args,
+            input=None if use_path else data,
+            stdout=-1,
+            stderr=stderr_target,
+        )
+    finally:
+        if progress_file:
+            progress_file.close()
+
+    if getattr(result, "stderr", None):
         try:
             sys.stderr.buffer.write(result.stderr)
         except Exception:
@@ -405,7 +446,15 @@ def append_manifest_line(manifest, svg_path, source_path, label):
         pass
 
 
-def write_stream_frames(tempdir, manifest, source_title, source_path, svg, start_index):
+def write_stream_frames(
+    tempdir,
+    manifest,
+    source_title,
+    source_path,
+    svg,
+    start_index,
+    progress_path=None,
+):
     frames = split_svg_frames(svg)
     if not frames:
         frames = [svg]
@@ -423,6 +472,10 @@ def write_stream_frames(tempdir, manifest, source_title, source_path, svg, start
 
         append_manifest_line(manifest, svg_path, source_path, label)
         count += 1
+        append_progress_line(
+            progress_path,
+            "vplviewer: loaded frame %d from %s" % (frame_index + 1, source_path),
+        )
 
     return count
 
@@ -455,22 +508,48 @@ def stream_convert_one_vpl_to_manifest(
     source_path,
     convert_path,
     start_index,
+    progress_path=None,
 ):
+    progress_file = None
     if source_path == "stdin" and data is None and convert_path is None:
+        try:
+            progress_file = open(progress_path, "ab", buffering=0) if progress_path else None
+        except OSError:
+            progress_file = None
         proc = Popen(
             cmd + ["--stream"] + converter_args,
             stdin=sys.stdin.buffer,
             stdout=PIPE,
-            stderr=None,
+            stderr=progress_file if progress_file else None,
         )
     elif not convert_path or not os.path.exists(convert_path) or not converter_supports_path_arg(cmd):
-        svg = convert_one_vpl(cmd, converter_args, title, data, source_path, convert_path)
-        return write_stream_frames(tempdir, manifest, title, source_path, svg, start_index)
+        svg = convert_one_vpl(
+            cmd,
+            converter_args,
+            title,
+            data,
+            source_path,
+            convert_path,
+            progress_path=progress_path,
+        )
+        return write_stream_frames(
+            tempdir,
+            manifest,
+            title,
+            source_path,
+            svg,
+            start_index,
+            progress_path=progress_path,
+        )
     else:
+        try:
+            progress_file = open(progress_path, "ab", buffering=0) if progress_path else None
+        except OSError:
+            progress_file = None
         proc = Popen(
             cmd + ["--stream"] + converter_args + [convert_path],
             stdout=PIPE,
-            stderr=None,
+            stderr=progress_file if progress_file else None,
         )
 
     count = 0
@@ -485,12 +564,15 @@ def stream_convert_one_vpl_to_manifest(
                 source_path,
                 frame,
                 start_index + count,
+                progress_path=progress_path,
             )
 
         ret = proc.wait()
     finally:
         if proc.stdout:
             proc.stdout.close()
+        if progress_file:
+            progress_file.close()
 
     if ret != 0:
         raise RuntimeError(
@@ -512,14 +594,16 @@ def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepip
 
     tempdir = tempfile.mkdtemp(prefix="rsfpy-vplstream-")
     manifest_path = os.path.join(tempdir, "frames.manifest")
+    progress_path = os.path.join(tempdir, "progress.log")
     temp_paths = []
     viewer = None
     frame_index = 0
 
     try:
+        append_progress_line(progress_path, "vplviewer: preparing VPL inputs")
         with open(manifest_path, "w", encoding="utf-8") as manifest:
             viewer = Popen(
-                [str(path), "--watch", manifest_path],
+                [str(path), "--watch", manifest_path, "--progress", progress_path],
                 env=svgviewer.viewer_env_for_backend(name),
             )
 
@@ -533,13 +617,24 @@ def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepip
                 raise RuntimeError("no VPL input")
 
             cmd = converter_command()
-            for title, data, source_path, convert_path in sources:
+            progress_converter_args = converter_args_for_progress(
+                cmd,
+                converter_args,
+                progress_path,
+            )
+            total_sources = len(sources)
+            for source_index, (title, data, source_path, convert_path) in enumerate(sources, 1):
                 if viewer.poll() is not None:
                     return viewer.returncode
 
+                append_progress_line(
+                    progress_path,
+                    "vplviewer: converting %d/%d: %s"
+                    % (source_index, total_sources, source_path),
+                )
                 frame_index += stream_convert_one_vpl_to_manifest(
                     cmd,
-                    converter_args,
+                    progress_converter_args,
                     tempdir,
                     manifest,
                     title,
@@ -547,7 +642,15 @@ def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepip
                     source_path,
                     convert_path,
                     frame_index,
+                    progress_path=progress_path,
                 )
+                append_progress_line(
+                    progress_path,
+                    "vplviewer: finished %d/%d: %s"
+                    % (source_index, total_sources, source_path),
+                )
+
+            append_progress_line(progress_path, "vplviewer: conversion complete")
 
         return viewer.wait() if viewer else 1
 
