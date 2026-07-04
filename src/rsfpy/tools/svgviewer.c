@@ -201,7 +201,7 @@ typedef struct {
 static const char *APP_ID = "org.rsfpy.svgviewer.gtk";
 #define UNDO_LIMIT 64
 #define CLIPBOARD_SVG_WARN_BYTES (2 * 1024 * 1024)
-#define CLIPBOARD_SVG_ELEMENT_LIMIT 10000
+#define CLIPBOARD_SVG_TEXT_LIMIT_BYTES (10 * 1024 * 1024)
 
 static void update_ui(App *app);
 
@@ -3103,36 +3103,116 @@ static gboolean svg_has_image_tag(const gchar *svg)
                    strstr(svg, "<svg:image") != NULL);
 }
 
-static gsize clipboard_svg_element_limit(void)
+static gsize clipboard_svg_text_limit_bytes(void)
 {
-    const gchar *value = g_getenv("RSFPY_CLIPBOARD_SVG_ELEMENT_LIMIT");
+    const gchar *value = g_getenv("RSFPY_CLIPBOARD_SVG_TEXT_LIMIT_MB");
     guint64 parsed;
     gchar *end = NULL;
 
-    if (!value || !*value) return CLIPBOARD_SVG_ELEMENT_LIMIT;
+    if (!value || !*value) {
+        value = g_getenv("RSFPY_CLIPBOARD_SVG_TEXT_LIMIT_BYTES");
+        if (!value || !*value) return CLIPBOARD_SVG_TEXT_LIMIT_BYTES;
+        parsed = g_ascii_strtoull(value, &end, 10);
+        if (end == value || parsed == 0) return CLIPBOARD_SVG_TEXT_LIMIT_BYTES;
+        if (parsed > G_MAXSIZE) return G_MAXSIZE;
+        return (gsize)parsed;
+    }
     parsed = g_ascii_strtoull(value, &end, 10);
-    if (end == value || parsed == 0) return CLIPBOARD_SVG_ELEMENT_LIMIT;
-    if (parsed > G_MAXSIZE) return G_MAXSIZE;
-    return (gsize)parsed;
+    if (end == value || parsed == 0) return CLIPBOARD_SVG_TEXT_LIMIT_BYTES;
+    if (parsed > G_MAXSIZE / (1024 * 1024)) return G_MAXSIZE;
+    return (gsize)(parsed * 1024 * 1024);
 }
 
-static gsize count_svg_elements_len(const gchar *svg, gsize len)
+static gboolean svg_tag_name_is_image(const gchar *p, const gchar *end)
+{
+    if (!p || p >= end || *p != '<') return FALSE;
+    p++;
+    if (p >= end || *p == '/' || *p == '!' || *p == '?') return FALSE;
+    if (end - p >= 4 && g_ascii_strncasecmp(p, "svg:", 4) == 0) p += 4;
+    return end - p >= 5 &&
+           g_ascii_strncasecmp(p, "image", 5) == 0 &&
+           (p + 5 == end || g_ascii_isspace((guchar)p[5]) ||
+            p[5] == '/' || p[5] == '>');
+}
+
+static const gchar *skip_svg_image_element(const gchar *tag_start,
+                                           const gchar *end)
+{
+    const gchar *tag_end;
+    const gchar *scan;
+
+    tag_end = memchr(tag_start, '>', (size_t)(end - tag_start));
+    if (!tag_end) return end;
+
+    scan = tag_end;
+    while (scan > tag_start && g_ascii_isspace((guchar)scan[-1])) scan--;
+    if (scan > tag_start && scan[-1] == '/') return tag_end + 1;
+
+    scan = tag_end + 1;
+    while (scan < end) {
+        const gchar *close = memchr(scan, '<', (size_t)(end - scan));
+        if (!close || close + 2 >= end) return tag_end + 1;
+        if (close[1] == '/') {
+            const gchar *name = close + 2;
+            if (end - name >= 4 && g_ascii_strncasecmp(name, "svg:", 4) == 0) {
+                name += 4;
+            }
+            if (end - name >= 5 &&
+                g_ascii_strncasecmp(name, "image", 5) == 0 &&
+                (name + 5 == end || g_ascii_isspace((guchar)name[5]) ||
+                 name[5] == '>')) {
+                const gchar *close_end = memchr(close, '>',
+                                                (size_t)(end - close));
+                return close_end ? close_end + 1 : end;
+            }
+        }
+        scan = close + 1;
+    }
+    return tag_end + 1;
+}
+
+static gsize svg_limit_exceeded_value(gsize limit)
+{
+    return limit < G_MAXSIZE ? limit + 1 : G_MAXSIZE;
+}
+
+static gsize add_svg_text_bytes_checked(gsize bytes, gsize add, gsize limit)
+{
+    if (limit > 0 && bytes >= limit) return svg_limit_exceeded_value(limit);
+    if (limit > 0 && add >= limit - bytes) return svg_limit_exceeded_value(limit);
+    return bytes + add;
+}
+
+static gsize count_non_image_svg_text_bytes_len(const gchar *svg,
+                                                gsize len,
+                                                gsize limit)
 {
     const gchar *p;
     const gchar *end;
-    gsize count = 0;
+    const gchar *kept_start;
+    gsize bytes = 0;
 
     if (!svg || len == 0) return 0;
     p = svg;
     end = svg + len;
+    kept_start = svg;
     while (p < end) {
         const gchar *hit = memchr(p, '<', (size_t)(end - p));
         if (!hit || hit + 1 >= end) break;
-        p = hit + 1;
-        if (*p == '/' || *p == '!' || *p == '?') continue;
-        if (g_ascii_isalpha((guchar)*p) || *p == '_') count++;
+        if (svg_tag_name_is_image(hit, end)) {
+            const gchar *after_image = skip_svg_image_element(hit, end);
+            bytes = add_svg_text_bytes_checked(bytes,
+                                               (gsize)(hit - kept_start),
+                                               limit);
+            if (limit > 0 && bytes > limit) return bytes;
+            p = after_image;
+            kept_start = after_image;
+        } else {
+            p = hit + 1;
+        }
     }
-    return count;
+    bytes = add_svg_text_bytes_checked(bytes, (gsize)(end - kept_start), limit);
+    return bytes;
 }
 
 static gboolean svg_open_tag_is(const gchar *p, const gchar *name)
@@ -3768,8 +3848,8 @@ static gboolean start_worker_operation(App *app,
     double doc_x = 0.0, doc_y = 0.0, doc_w = 0.0, doc_h = 0.0;
     int pixel_w = 0, pixel_h = 0;
     gboolean crop;
-    gsize source_element_count = 0;
-    gsize svg_element_limit = clipboard_svg_element_limit();
+    gsize source_non_image_text_bytes = 0;
+    gsize svg_text_limit_bytes = clipboard_svg_text_limit_bytes();
     gboolean copy_svg = TRUE;
     gboolean copy_png = FALSE;
     gboolean alpha = TRUE;
@@ -3797,10 +3877,12 @@ static gboolean start_worker_operation(App *app,
     }
 
     if (!read_current_svg_source(app, &source_svg, &source_len, err)) return FALSE;
-    source_element_count = count_svg_elements_len(source_svg, source_len);
+    source_non_image_text_bytes =
+        count_non_image_svg_text_bytes_len(source_svg, source_len,
+                                           svg_text_limit_bytes);
     if (operation == BUSY_OP_CLIPBOARD) {
         copy_png = TRUE;
-        copy_svg = source_element_count <= svg_element_limit;
+        copy_svg = source_non_image_text_bytes <= svg_text_limit_bytes;
     }
 
     tmpdir = g_dir_make_tmp("rsfpy-svgviewer-XXXXXX", err);

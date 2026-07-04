@@ -63,7 +63,8 @@ import sys
 import shlex
 import shutil
 import tempfile
-from subprocess import PIPE, run, Popen
+import threading
+from subprocess import PIPE, run, Popen, TimeoutExpired
 from textwrap import dedent
 
 from rsfpy.tools import Msvgviewer as svgviewer
@@ -121,6 +122,10 @@ for _prefix in CONVERTER_PREFIXES:
 
 CONVERTER_OPTION_FLAGS = {"--" + name for name in CONVERTER_OPTION_NAMES}
 STREAM_STDIN = object()
+
+
+class ViewerExited(RuntimeError):
+    pass
 
 
 def falsey(value):
@@ -239,6 +244,43 @@ def append_progress_line(progress_path, message):
         pass
 
 
+def terminate_process(proc):
+    if not proc or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=1.0)
+    except TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
+def viewer_has_exited(viewer_process):
+    return viewer_process is not None and viewer_process.poll() is not None
+
+
+def start_viewer_exit_monitor(viewer_process, proc, progress_path=None):
+    if viewer_process is None or proc is None:
+        return None
+
+    def monitor():
+        viewer_process.wait()
+        if proc.poll() is None:
+            append_progress_line(
+                progress_path,
+                "vplviewer: viewer exited; stopping VPL conversion",
+            )
+            terminate_process(proc)
+
+    thread = threading.Thread(target=monitor, daemon=True)
+    thread.start()
+    return thread
+
+
 def converter_args_for_progress(cmd, converter_args, progress_path):
     if not progress_path or not converter_supports_path_arg(cmd):
         return list(converter_args)
@@ -255,6 +297,7 @@ def convert_one_vpl(
     source_path,
     convert_path=None,
     progress_path=None,
+    viewer_process=None,
 ):
     use_path = (
         convert_path is not None
@@ -272,30 +315,39 @@ def convert_one_vpl(
             progress_file = None
             stderr_target = PIPE
 
+    if viewer_has_exited(viewer_process):
+        raise ViewerExited()
+
+    proc = None
     try:
-        result = run(
+        proc = Popen(
             cmd + converter_args + [convert_path] if use_path else cmd + converter_args,
-            input=None if use_path else data,
-            stdout=-1,
+            stdin=None if use_path else PIPE,
+            stdout=PIPE,
             stderr=stderr_target,
         )
+        start_viewer_exit_monitor(viewer_process, proc, progress_path)
+        stdout, stderr = proc.communicate(input=None if use_path else data)
     finally:
         if progress_file:
             progress_file.close()
 
-    if getattr(result, "stderr", None):
-        try:
-            sys.stderr.buffer.write(result.stderr)
-        except Exception:
-            sys.stderr.write(result.stderr.decode("utf-8", "replace"))
+    if viewer_has_exited(viewer_process) and proc and proc.returncode != 0:
+        raise ViewerExited()
 
-    if result.returncode != 0:
+    if stderr:
+        try:
+            sys.stderr.buffer.write(stderr)
+        except Exception:
+            sys.stderr.write(stderr.decode("utf-8", "replace"))
+
+    if proc.returncode != 0:
         raise RuntimeError(
             "VPL conversion failed for %s with code %s"
-            % (source_path, result.returncode)
+            % (source_path, proc.returncode)
         )
 
-    svg = result.stdout
+    svg = stdout
     if b"<svg" not in svg[:4096]:
         raise RuntimeError("VPL conversion did not produce SVG for %s" % source_path)
 
@@ -509,7 +561,11 @@ def stream_convert_one_vpl_to_manifest(
     convert_path,
     start_index,
     progress_path=None,
+    viewer_process=None,
 ):
+    if viewer_has_exited(viewer_process):
+        raise ViewerExited()
+
     progress_file = None
     if source_path == "stdin" and data is None and convert_path is None:
         try:
@@ -531,6 +587,7 @@ def stream_convert_one_vpl_to_manifest(
             source_path,
             convert_path,
             progress_path=progress_path,
+            viewer_process=viewer_process,
         )
         return write_stream_frames(
             tempdir,
@@ -554,7 +611,11 @@ def stream_convert_one_vpl_to_manifest(
 
     count = 0
     try:
+        start_viewer_exit_monitor(viewer_process, proc, progress_path)
         for frame in iter_svg_frames_from_stream(proc.stdout):
+            if viewer_has_exited(viewer_process):
+                terminate_process(proc)
+                raise ViewerExited()
             if b"<svg" not in frame[:8192]:
                 continue
             count += write_stream_frames(
@@ -573,6 +634,9 @@ def stream_convert_one_vpl_to_manifest(
             proc.stdout.close()
         if progress_file:
             progress_file.close()
+
+    if viewer_has_exited(viewer_process) and ret != 0:
+        raise ViewerExited()
 
     if ret != 0:
         raise RuntimeError(
@@ -643,6 +707,7 @@ def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepip
                     convert_path,
                     frame_index,
                     progress_path=progress_path,
+                    viewer_process=viewer,
                 )
                 append_progress_line(
                     progress_path,
@@ -654,6 +719,8 @@ def run_streaming_svg_viewer(backend, args, stdin_data, converter_args, cachepip
 
         return viewer.wait() if viewer else 1
 
+    except ViewerExited:
+        return viewer.returncode if viewer and viewer.returncode is not None else 0
     except Exception:
         if viewer and viewer.poll() is None:
             viewer.terminate()
