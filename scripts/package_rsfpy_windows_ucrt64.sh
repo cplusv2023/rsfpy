@@ -18,6 +18,7 @@ COPY_GTK_MODULES="${COPY_GTK_MODULES:-0}"
 
 SVGVIEWER_C="${SVGVIEWER_C:-$TOOLS_DIR/svgviewer.c}"
 SVGSEQUENCE_C="${SVGSEQUENCE_C:-$TOOLS_DIR/svgsequence.c}"
+SVG_PNG_TILER_C="${SVG_PNG_TILER_C:-$TOOLS_DIR/svg_png_tiler.c}"
 SVGVIEWER_X11_C="${SVGVIEWER_X11_C:-$TOOLS_DIR/svgviewer_x11.c}"
 SVGSEQUENCE_X11_C="${SVGSEQUENCE_X11_C:-$TOOLS_DIR/svgsequence_x11.c}"
 RSFCLIENT_C="${RSFCLIENT_C:-$TOOLS_DIR/rsfclient.c}"
@@ -92,7 +93,7 @@ pkg-config --modversion glib-2.0 >/dev/null
 pkg-config --modversion gdk-pixbuf-2.0 >/dev/null
 
 log "Building svgviewer-gtk.exe"
-viewer_sources=("$SVGVIEWER_C" "$SVGSEQUENCE_C")
+viewer_sources=("$SVGVIEWER_C" "$SVGSEQUENCE_C" "$SVG_PNG_TILER_C")
 [[ -n "$ICON_VIEWER" && -f "$ICON_VIEWER" ]] && viewer_sources+=("$ICON_VIEWER")
 build_exe "$OUTDIR/svgviewer-gtk.exe" "${viewer_sources[@]}" -- \
     gtk4 librsvg-2.0 cairo glib-2.0 gio-2.0 gdk-pixbuf-2.0

@@ -1,4 +1,5 @@
 #include "svgsequence.h"
+#include "svg_png_tiler.h"
 
 #include <errno.h>
 #include <gio/gio.h>
@@ -283,6 +284,7 @@ static void svg_frame_free(SvgFrame *f)
     g_free(f->framelabel);
     g_free(f->source_path);
     if (f->source_bytes) g_bytes_unref(f->source_bytes);
+    if (f->safe_source_bytes) g_bytes_unref(f->safe_source_bytes);
     memset(f, 0, sizeof(*f));
 }
 
@@ -529,10 +531,76 @@ static gboolean set_frame_dimensions_from_handle(SvgFrame *f)
     return TRUE;
 }
 
+static gboolean load_handle_from_tiled_svg_if_needed(SvgFrame *f,
+                                                     const gchar *content,
+                                                     gsize len,
+                                                     const char *label,
+                                                     gboolean *out_attempted)
+{
+    SvgPngTilerOptions opt;
+    GError *err = NULL;
+    gchar *rewritten;
+    gboolean changed = FALSE;
+
+    if (out_attempted) *out_attempted = FALSE;
+    if (!f || !content || len == 0) return FALSE;
+
+    svg_png_tiler_options_init_from_env(&opt);
+    rewritten = svg_png_tiler_rewrite_all_full(content, &opt, &changed, &err);
+    if (!rewritten) {
+        fprintf(stderr, "Warning: SVG image tiling failed for %s: %s\n",
+                label ? label : "(unknown)", err ? err->message : "unknown");
+        g_clear_error(&err);
+        return FALSE;
+    }
+
+    if (!changed) {
+        g_free(rewritten);
+        return FALSE;
+    }
+
+    if (out_attempted) *out_attempted = TRUE;
+    f->handle = rsvg_handle_new_from_data((const guint8 *)rewritten,
+                                          strlen(rewritten),
+                                          &err);
+    if (!f->handle) {
+        fprintf(stderr, "Failed to load tiled SVG for %s: %s\n",
+                label ? label : "(unknown)", err ? err->message : "unknown");
+        g_clear_error(&err);
+        g_free(rewritten);
+        return FALSE;
+    }
+
+    if (f->safe_source_bytes) g_bytes_unref(f->safe_source_bytes);
+    {
+        gsize rewritten_len = strlen(rewritten);
+        f->safe_source_bytes = g_bytes_new_take((guint8 *)rewritten, rewritten_len);
+    }
+    fprintf(stderr, "Tiled large embedded PNG images in %s\n",
+            label ? label : "(unknown)");
+    return TRUE;
+}
+
 static gboolean load_handle_from_file(SvgFrame *f)
 {
     GError *err = NULL;
-    GFile *gfile = g_file_new_for_path(f->source_path);
+    GFile *gfile;
+    gchar *content = NULL;
+    gsize len = 0;
+    gboolean tiling_attempted = FALSE;
+
+    if (g_file_get_contents(f->source_path, &content, &len, NULL) &&
+        load_handle_from_tiled_svg_if_needed(f, content, len, f->source_path,
+                                             &tiling_attempted)) {
+        g_free(content);
+        return set_frame_dimensions_from_handle(f);
+    }
+    if (tiling_attempted) {
+        g_free(content);
+        return FALSE;
+    }
+
+    gfile = g_file_new_for_path(f->source_path);
     f->handle = rsvg_handle_new_from_gfile_sync(gfile, RSVG_HANDLE_FLAGS_NONE, NULL, &err);
     g_object_unref(gfile);
 
@@ -541,9 +609,8 @@ static gboolean load_handle_from_file(SvgFrame *f)
                 f->source_path, err ? err->message : "unknown");
         g_clear_error(&err);
 
-        gchar *content = NULL;
-        gsize len = 0;
-        if (!g_file_get_contents(f->source_path, &content, &len, &err)) {
+        if (!content &&
+            !g_file_get_contents(f->source_path, &content, &len, &err)) {
             fprintf(stderr, "Failed to read %s for base64 fallback: %s\n",
                     f->source_path, err ? err->message : "unknown");
             g_clear_error(&err);
@@ -551,6 +618,7 @@ static gboolean load_handle_from_file(SvgFrame *f)
         }
         f->handle = extract_base64((const guint8 *)content, RSVG_HANDLE_FLAGS_NONE, NULL, &err);
         g_free(content);
+        content = NULL;
 
         if (!f->handle) {
             fprintf(stderr, "Failed to load SVG file %s: %s\n",
@@ -560,6 +628,7 @@ static gboolean load_handle_from_file(SvgFrame *f)
         }
     }
 
+    g_free(content);
     return set_frame_dimensions_from_handle(f);
 }
 
@@ -570,6 +639,13 @@ static gboolean load_handle_from_range(SvgFrame *f)
     GError *err = NULL;
 
     if (!read_frame_range(f, &content, &len)) return FALSE;
+
+    if (load_handle_from_tiled_svg_if_needed(f, content, len,
+                                             f->path ? f->path : "(range)",
+                                             NULL)) {
+        g_free(content);
+        return set_frame_dimensions_from_handle(f);
+    }
 
     f->handle = rsvg_handle_new_from_data((const guint8 *)content, len, &err);
     if (!f->handle) {

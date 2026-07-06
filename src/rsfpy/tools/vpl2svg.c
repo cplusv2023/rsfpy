@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #define RPERIN 600.0
 #define TXPERIN 33.0
@@ -363,6 +364,41 @@ static void write_base64(FILE *out, const unsigned char *data, size_t n)
         fputc((i + 1 < n) ? tab[((b & 15) << 2) | ((c >> 6) & 3)] : '=', out);
         fputc((i + 2 < n) ? tab[c & 63] : '=', out);
     }
+}
+
+static bool env_truthy(const char *name)
+{
+    const char *v = getenv(name);
+    if (!v || !*v) return false;
+    return strcasecmp(v, "0") != 0 &&
+           strcasecmp(v, "n") != 0 &&
+           strcasecmp(v, "no") != 0 &&
+           strcasecmp(v, "false") != 0 &&
+           strcasecmp(v, "off") != 0;
+}
+
+static size_t env_size_value(const char *name, size_t fallback)
+{
+    const char *v = getenv(name);
+    char *end = NULL;
+    unsigned long long parsed;
+    if (!v || !*v) return fallback;
+    parsed = strtoull(v, &end, 10);
+    if (end == v || parsed == 0) return fallback;
+    if (parsed > (unsigned long long)SIZE_MAX) return SIZE_MAX;
+    return (size_t)parsed;
+}
+
+static int env_int_value(const char *name, int fallback)
+{
+    size_t v = env_size_value(name, (size_t)fallback);
+    if (v > (size_t)INT32_MAX) return fallback;
+    return (int)v;
+}
+
+static size_t data_uri_chars_for_png_len(size_t png_len)
+{
+    return strlen("data:image/png;base64,") + 4 * ((png_len + 2) / 3);
 }
 
 static unsigned char *read_all_file(const char *path, size_t *len)
@@ -1868,6 +1904,170 @@ static unsigned char *orient_raster_rgba(const unsigned char *src,
     return dst;
 }
 
+static void copy_rgba_tile(const unsigned char *src, int src_w, int src_h,
+                           int x, int y, int w, int h,
+                           unsigned char *dst)
+{
+    int row;
+    if (!src || !dst || w <= 0 || h <= 0) return;
+    for (row = 0; row < h; row++) {
+        const unsigned char *sp = src + ((size_t)(y + row) * (size_t)src_w + (size_t)x) * 4;
+        unsigned char *dp = dst + (size_t)row * (size_t)w * 4;
+        memcpy(dp, sp, (size_t)w * 4);
+    }
+    (void)src_h;
+}
+
+static bool tile_png_too_large(const ByteBuf *png, size_t max_uri_chars)
+{
+    if (!png || max_uri_chars == 0) return false;
+    return data_uri_chars_for_png_len(png->len) > max_uri_chars;
+}
+
+static void emit_png_image_data(FILE *out, const ByteBuf *png)
+{
+    fputs(" href=\"data:image/png;base64,", out);
+    write_base64(out, png->data, png->len);
+    fputc('"', out);
+}
+
+static void emit_raster_tile_recursive(FILE *out,
+                                       const unsigned char *rgba,
+                                       int img_w, int img_h,
+                                       int lx, int ly, int lw, int lh,
+                                       double svg_x, double svg_y,
+                                       double svg_w, double svg_h,
+                                       int min_tile,
+                                       int bleed,
+                                       size_t max_uri_chars)
+{
+    int sx = lx - bleed;
+    int sy = ly - bleed;
+    int ex = lx + lw + bleed;
+    int ey = ly + lh + bleed;
+    int sw, sh;
+    unsigned char *tile_rgba;
+    ByteBuf tile_png = {0};
+
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (ex > img_w) ex = img_w;
+    if (ey > img_h) ey = img_h;
+    sw = ex - sx;
+    sh = ey - sy;
+    if (sw <= 0 || sh <= 0) return;
+
+    tile_rgba = (unsigned char *)malloc((size_t)sw * (size_t)sh * 4);
+    if (!tile_rgba) die("out of memory");
+    copy_rgba_tile(rgba, img_w, img_h, sx, sy, sw, sh, tile_rgba);
+    write_png_rgba(&tile_png, tile_rgba, sw, sh);
+    free(tile_rgba);
+
+    if (tile_png_too_large(&tile_png, max_uri_chars) &&
+        (lw > min_tile || lh > min_tile)) {
+        free(tile_png.data);
+        if (lw >= lh && lw > min_tile) {
+            int a = lw / 2;
+            emit_raster_tile_recursive(out, rgba, img_w, img_h,
+                                       lx, ly, a, lh,
+                                       svg_x, svg_y, svg_w, svg_h,
+                                       min_tile, bleed,
+                                       max_uri_chars);
+            emit_raster_tile_recursive(out, rgba, img_w, img_h,
+                                       lx + a, ly, lw - a, lh,
+                                       svg_x, svg_y, svg_w, svg_h, min_tile,
+                                       bleed, max_uri_chars);
+        } else {
+            int a = lh / 2;
+            emit_raster_tile_recursive(out, rgba, img_w, img_h,
+                                       lx, ly, lw, a,
+                                       svg_x, svg_y, svg_w, svg_h,
+                                       min_tile, bleed,
+                                       max_uri_chars);
+            emit_raster_tile_recursive(out, rgba, img_w, img_h,
+                                       lx, ly + a, lw, lh - a,
+                                       svg_x, svg_y, svg_w, svg_h, min_tile,
+                                       bleed, max_uri_chars);
+        }
+        return;
+    }
+
+    fprintf(out,
+            "  <image x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\" "
+            "preserveAspectRatio=\"none\" image-rendering=\"pixelated\" "
+            "style=\"image-rendering:pixelated;image-rendering:crisp-edges\"",
+            svg_x + svg_w * (double)sx / (double)img_w,
+            svg_y + svg_h * (double)sy / (double)img_h,
+            svg_w * (double)sw / (double)img_w,
+            svg_h * (double)sh / (double)img_h);
+    emit_png_image_data(out, &tile_png);
+    fputs("/>\n", out);
+    free(tile_png.data);
+}
+
+static void emit_tiled_raster_image(SvgCtx *ctx, VplState *st,
+                                    const unsigned char *rgba,
+                                    int img_w, int img_h,
+                                    double x, double y, double w, double h)
+{
+    int tile_px = env_int_value("RSFPY_SVG_IMAGE_TILE_SIZE", 512);
+    int min_tile = env_int_value("RSFPY_SVG_IMAGE_TILE_MIN_SIZE", 16);
+    int bleed = env_int_value("RSFPY_SVG_IMAGE_TILE_BLEED", 4);
+    size_t max_uri_chars = env_size_value("RSFPY_SVG_IMAGE_TILE_MAX_URI_CHARS",
+                                          96u * 1024u);
+    double clip_x = x;
+    double clip_y = y;
+    double clip_w = w;
+    double clip_h = h;
+    int image_clip_id;
+    int ty;
+
+    if (tile_px <= 0) tile_px = 512;
+    if (min_tile <= 0) min_tile = 16;
+    if (min_tile > tile_px) min_tile = tile_px;
+    if (bleed < 0) bleed = 0;
+
+    if (st->clip_active && st->clip_id > 0) {
+        double cx = sx(ctx, st->clip_xmin);
+        double cy = sy(ctx, st->clip_ymax);
+        double cw = u_to_px(st->clip_xmax - st->clip_xmin);
+        double ch = u_to_px(st->clip_ymax - st->clip_ymin);
+        double x0 = clip_x > cx ? clip_x : cx;
+        double y0 = clip_y > cy ? clip_y : cy;
+        double x1 = clip_x + clip_w < cx + cw ? clip_x + clip_w : cx + cw;
+        double y1 = clip_y + clip_h < cy + ch ? clip_y + clip_h : cy + ch;
+        if (x1 <= x0 || y1 <= y0) return;
+        clip_x = x0;
+        clip_y = y0;
+        clip_w = x1 - x0;
+        clip_h = y1 - y0;
+    }
+
+    image_clip_id = ++ctx->clip_id;
+    fprintf(ctx->out,
+            "<defs><clipPath id=\"vplimgclip%d\"><rect x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"/></clipPath></defs>\n",
+            image_clip_id, clip_x, clip_y, clip_w, clip_h);
+    fprintf(ctx->out,
+            "<g clip-path=\"url(#vplimgclip%d)\" image-rendering=\"pixelated\" "
+            "style=\"image-rendering:pixelated;image-rendering:crisp-edges\">\n",
+            image_clip_id);
+
+    for (ty = 0; ty < img_h; ty += tile_px) {
+        int tx;
+        int th = tile_px;
+        if (ty + th > img_h) th = img_h - ty;
+        for (tx = 0; tx < img_w; tx += tile_px) {
+            int tw = tile_px;
+            if (tx + tw > img_w) tw = img_w - tx;
+            emit_raster_tile_recursive(ctx->out, rgba, img_w, img_h,
+                                       tx, ty, tw, th, x, y, w, h,
+                                       min_tile, bleed,
+                                       max_uri_chars);
+        }
+    }
+    fputs("</g>\n", ctx->out);
+}
+
 static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
                               int offset, int x0, int y0, int x1, int y1,
                               int xpix, int ypix, int orient)
@@ -1881,6 +2081,13 @@ static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
     double y = sy(ctx, y1);
     double w = fabs(u_to_px(x1 - x0));
     double h = fabs(u_to_px(y1 - y0));
+    size_t max_uri_chars = env_size_value("RSFPY_SVG_IMAGE_TILE_MAX_URI_CHARS",
+                                          96u * 1024u);
+    size_t max_pixels = env_size_value("RSFPY_SVG_IMAGE_TILE_MAX_PIXELS",
+                                       1024u * 1024u);
+    bool tile_force = env_truthy("RSFPY_SVG_IMAGE_TILE_FORCE");
+    bool tile_disable = env_truthy("RSFPY_SVG_IMAGE_TILE_DISABLE");
+    bool should_tile;
 
     flush_line_path(ctx);
     if (!decode_raster_rgba(r, st, bit, offset, xpix, ypix, &rgba)) {
@@ -1889,16 +2096,27 @@ static void emit_raster_image(SvgCtx *ctx, VplState *st, Reader *r, bool bit,
     display_rgba = orient_raster_rgba(rgba, xpix, ypix, orient, &display_w, &display_h);
     free(rgba);
     write_png_rgba(&png, display_rgba, display_w, display_h);
-    free(display_rgba);
+
+    should_tile = !tile_disable &&
+        (tile_force ||
+         (max_uri_chars > 0 && data_uri_chars_for_png_len(png.len) > max_uri_chars) ||
+         (max_pixels > 0 && (size_t)display_w * (size_t)display_h > max_pixels));
 
     /* VPL rasters are indexed data samples, not photographs.  Keep the
      * source cells discrete when SVG viewers scale the embedded PNG. */
-    fprintf(ctx->out, "<image x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" preserveAspectRatio=\"none\" image-rendering=\"pixelated\" href=\"data:image/png;base64,",
-            x, y, w, h);
-    write_base64(ctx->out, png.data, png.len);
-    fputc('"', ctx->out);
-    emit_clip_attr(ctx, st);
-    fputs("/>\n", ctx->out);
+    if (should_tile) {
+        emit_tiled_raster_image(ctx, st, display_rgba, display_w, display_h,
+                                x, y, w, h);
+    } else {
+        fprintf(ctx->out,
+                "<image x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\" "
+                "preserveAspectRatio=\"none\" image-rendering=\"pixelated\"",
+                x, y, w, h);
+        emit_png_image_data(ctx->out, &png);
+        emit_clip_attr(ctx, st);
+        fputs("/>\n", ctx->out);
+    }
+    free(display_rgba);
     free(png.data);
 }
 

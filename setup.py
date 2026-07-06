@@ -75,6 +75,7 @@ NATIVE_TOOLS = {
         "sources": [
             TOOLS_DIR / "svgviewer.c",
             TOOLS_DIR / "svgsequence.c",
+            TOOLS_DIR / "svg_png_tiler.c",
         ],
         "darwin_sources": [
             TOOLS_DIR / "svgviewer_clipboard_macos.m",

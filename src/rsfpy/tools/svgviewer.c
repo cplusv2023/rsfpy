@@ -2569,17 +2569,6 @@ static gchar *normalize_export_path_for_extension(const gchar *path, const gchar
     return out;
 }
 
-static GtkFileFilter *make_export_filter(const char *name,
-                                         const char *pattern,
-                                         const char *ext)
-{
-    GtkFileFilter *filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, name);
-    gtk_file_filter_add_pattern(filter, pattern);
-    if (ext) g_object_set_data(G_OBJECT(filter), "rsfpy-ext", (gpointer)ext);
-    return filter;
-}
-
 typedef struct {
     int x;
     int y;
@@ -2735,7 +2724,9 @@ static GdkPixbuf *surface_to_pixbuf(cairo_surface_t *surface, gboolean alpha)
 
 typedef struct {
     App *app;
-    GtkFileChooserNative *dialog;
+    GtkWidget *dialog;
+    GtkWidget *entry;
+    GtkWidget *combo;
 } ExportDialogState;
 
 static void start_export_task(App *app, const gchar *path)
@@ -2776,17 +2767,15 @@ static void start_clipboard_task(App *app)
     }
 }
 
-static void on_export_dialog_response(GtkNativeDialog *dialog,
+static void on_export_dialog_response(GtkDialog *dialog,
                                       int response,
                                       gpointer user_data)
 {
     ExportDialogState *st = user_data;
 
     if (st && response == GTK_RESPONSE_ACCEPT) {
-        GFile *file = gtk_file_chooser_get_file(GTK_FILE_CHOOSER(dialog));
-        gchar *raw_path = file ? g_file_get_path(file) : NULL;
-        GtkFileFilter *filter = gtk_file_chooser_get_filter(GTK_FILE_CHOOSER(dialog));
-        const gchar *ext = filter ? g_object_get_data(G_OBJECT(filter), "rsfpy-ext") : NULL;
+        const gchar *raw_path = gtk_editable_get_text(GTK_EDITABLE(st->entry));
+        const gchar *ext = gtk_combo_box_get_active_id(GTK_COMBO_BOX(st->combo));
         gchar *path = normalize_export_path_for_extension(raw_path, ext);
 
         if (path && !st->app->busy) {
@@ -2797,14 +2786,13 @@ static void on_export_dialog_response(GtkNativeDialog *dialog,
         }
 
         g_free(path);
-        g_free(raw_path);
-        if (file) g_object_unref(file);
     }
 
     if (st) {
-        g_object_unref(st->dialog);
+        gtk_window_destroy(GTK_WINDOW(st->dialog));
         g_free(st);
     }
+    (void)dialog;
 }
 
 static void on_export_clicked(GtkButton *button, gpointer user_data)
@@ -2812,7 +2800,13 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     (void)button;
     App *app = user_data;
     ExportDialogState *st;
-    GtkFileChooserNative *dialog;
+    GtkWidget *dialog;
+    GtkWidget *content;
+    GtkWidget *grid;
+    GtkWidget *entry;
+    GtkWidget *combo;
+    GtkWidget *label;
+    gchar *default_name;
 
     if (!app || !app->window) return;
     if (app->busy) {
@@ -2823,36 +2817,57 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
         return;
     }
 
-    dialog = gtk_file_chooser_native_new("Export Current View",
+    dialog = gtk_dialog_new_with_buttons("Export Current View",
                                          GTK_WINDOW(app->window),
-                                         GTK_FILE_CHOOSER_ACTION_SAVE,
-                                         "_Export",
-                                         "_Cancel");
-    gchar *default_name = default_export_filename(app);
-    GtkFileFilter *filter_svg = make_export_filter("SVG with annotations (*.svg)", "*.svg", ".svg");
-    GtkFileFilter *filter_png = make_export_filter("PNG image (*.png)", "*.png", ".png");
-    GtkFileFilter *filter_jpg = make_export_filter("JPEG image (*.jpg)", "*.jpg", ".jpg");
-    GtkFileFilter *filter_jpeg = make_export_filter("JPEG image (*.jpeg)", "*.jpeg", ".jpeg");
-    GtkFileFilter *filter_bmp = make_export_filter("BMP image (*.bmp)", "*.bmp", ".bmp");
-    GtkFileFilter *filter_tiff = make_export_filter("TIFF image (*.tiff)", "*.tiff", ".tiff");
+                                         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                         "_Cancel", GTK_RESPONSE_CANCEL,
+                                         "_Export", GTK_RESPONSE_ACCEPT,
+                                         NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 560, -1);
+    content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 10);
+    gtk_widget_set_margin_top(grid, 14);
+    gtk_widget_set_margin_bottom(grid, 14);
+    gtk_widget_set_margin_start(grid, 14);
+    gtk_widget_set_margin_end(grid, 14);
+    gtk_box_append(GTK_BOX(content), grid);
 
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_svg);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_png);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_jpg);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_jpeg);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_bmp);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter_tiff);
-    gtk_file_chooser_set_filter(GTK_FILE_CHOOSER(dialog), filter_svg);
-    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), default_name);
+    label = gtk_label_new("File");
+    gtk_widget_set_halign(label, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), label, 0, 0, 1, 1);
+
+    default_name = default_export_filename(app);
+    entry = gtk_entry_new();
+    gtk_editable_set_text(GTK_EDITABLE(entry), default_name);
+    gtk_widget_set_hexpand(entry, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), entry, 1, 0, 1, 1);
     g_free(default_name);
+
+    label = gtk_label_new("Format");
+    gtk_widget_set_halign(label, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), label, 0, 1, 1, 1);
+
+    combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".svg", "SVG with annotations (*.svg)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".png", "PNG image (*.png)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".jpg", "JPEG image (*.jpg)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".jpeg", "JPEG image (*.jpeg)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".bmp", "BMP image (*.bmp)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".tiff", "TIFF image (*.tiff)");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    gtk_widget_set_hexpand(combo, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), combo, 1, 1, 1, 1);
 
     st = g_new0(ExportDialogState, 1);
     st->app = app;
-    st->dialog = g_object_ref(dialog);
+    st->dialog = dialog;
+    st->entry = entry;
+    st->combo = combo;
     g_signal_connect(dialog, "response", G_CALLBACK(on_export_dialog_response), st);
 
-    gtk_native_dialog_show(GTK_NATIVE_DIALOG(dialog));
-    g_object_unref(dialog);
+    gtk_window_present(GTK_WINDOW(dialog));
 }
 
 static gboolean read_current_svg_source(App *app, gchar **out, gsize *out_len, GError **err)
@@ -2866,6 +2881,21 @@ static gboolean read_current_svg_source(App *app, gchar **out, gsize *out_len, G
     if (!f || !out || !out_len) {
         g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "no SVG source is available");
         return FALSE;
+    }
+
+    if (f->safe_source_bytes) {
+        gsize safe_len = 0;
+        const guint8 *safe = g_bytes_get_data(f->safe_source_bytes, &safe_len);
+        if (!safe || safe_len == 0) {
+            g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "invalid safe SVG source");
+            return FALSE;
+        }
+        *out = g_malloc(safe_len + 1);
+        memcpy(*out, safe, safe_len);
+        (*out)[safe_len] = '\0';
+        *out_len = safe_len;
+        return TRUE;
     }
 
     if (f->source_bytes) {

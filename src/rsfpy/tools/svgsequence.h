@@ -84,6 +84,7 @@ typedef struct {
      * be memory-backed bytes plus byte range. */
     char *source_path;
     GBytes *source_bytes;
+    GBytes *safe_source_bytes;
     goffset data_offset;
     gsize data_len;
     gboolean use_range;
