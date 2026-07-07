@@ -43,6 +43,11 @@ typedef struct TileCtx {
     double svg_y;
     double svg_w;
     double svg_h;
+    gboolean bake_axis_transform;
+    double bake_a;
+    double bake_d;
+    double bake_e;
+    double bake_f;
     const SvgPngTilerOptions *opt;
     const gchar *href_attr_name;
     const gchar *id_prefix;
@@ -320,6 +325,64 @@ static gboolean parse_svg_number_or_px(const gchar *value, double fallback,
     return TRUE;
 }
 
+static gboolean parse_double_token(const gchar **p, double *out)
+{
+    gchar *end = NULL;
+    double v;
+
+    if (!p || !*p || !out) return FALSE;
+    while (**p && (is_xml_space(**p) || **p == ',')) (*p)++;
+    v = g_ascii_strtod(*p, &end);
+    if (end == *p || !isfinite(v)) return FALSE;
+    *out = v;
+    *p = end;
+    while (**p && (is_xml_space(**p) || **p == ',')) (*p)++;
+    return TRUE;
+}
+
+static gboolean parse_axis_aligned_matrix_transform(const gchar *value,
+                                                   double *a,
+                                                   double *d,
+                                                   double *e,
+                                                   double *f)
+{
+    const gchar *p;
+    double m0, m1, m2, m3, m4, m5;
+
+    if (!value) return FALSE;
+    p = value;
+    while (*p && is_xml_space(*p)) p++;
+    if (g_ascii_strncasecmp(p, "matrix", 6) != 0) return FALSE;
+    p += 6;
+    while (*p && is_xml_space(*p)) p++;
+    if (*p != '(') return FALSE;
+    p++;
+
+    if (!parse_double_token(&p, &m0) ||
+        !parse_double_token(&p, &m1) ||
+        !parse_double_token(&p, &m2) ||
+        !parse_double_token(&p, &m3) ||
+        !parse_double_token(&p, &m4) ||
+        !parse_double_token(&p, &m5)) {
+        return FALSE;
+    }
+    while (*p && is_xml_space(*p)) p++;
+    if (*p != ')') return FALSE;
+    p++;
+    while (*p && is_xml_space(*p)) p++;
+    if (*p) return FALSE;
+
+    if (fabs(m1) > 1e-12 || fabs(m2) > 1e-12 || m0 <= 0.0 || m3 <= 0.0) {
+        return FALSE;
+    }
+
+    if (a) *a = m0;
+    if (d) *d = m3;
+    if (e) *e = m4;
+    if (f) *f = m5;
+    return TRUE;
+}
+
 static gsize find_plain(const gchar *s, gsize len, gsize from, const gchar *needle)
 {
     gsize nlen = strlen(needle);
@@ -344,6 +407,110 @@ static gsize find_tag_end(const gchar *s, gsize len, gsize lt)
         }
     }
     return G_MAXSIZE;
+}
+
+static gboolean open_tag_local_name_is(const gchar *s,
+                                       gsize len,
+                                       gsize lt,
+                                       const gchar *local)
+{
+    gsize i, ns, ne;
+
+    if (!s || lt >= len || s[lt] != '<' || !local) return FALSE;
+    if (lt + 1 >= len || s[lt + 1] == '/' || s[lt + 1] == '!' || s[lt + 1] == '?') {
+        return FALSE;
+    }
+
+    i = lt + 1;
+    while (i < len && is_xml_space(s[i])) i++;
+    ns = i;
+    while (i < len && !is_name_break(s[i])) i++;
+    ne = i;
+    return ne > ns && qname_local_is(s + ns, ne - ns, local);
+}
+
+static gboolean tag_has_attr_local_name(const gchar *tag, gsize len,
+                                        const gchar *wanted)
+{
+    gsize i = 0;
+
+    if (!tag || !wanted) return FALSE;
+    while (i < len) {
+        gsize ns, ne, local_ns;
+
+        while (i < len && !is_xml_space(tag[i])) i++;
+        while (i < len && is_xml_space(tag[i])) i++;
+        if (i >= len || tag[i] == '/' || tag[i] == '>') return FALSE;
+
+        ns = i;
+        while (i < len && !is_name_break(tag[i])) i++;
+        ne = i;
+        if (ne > ns) {
+            local_ns = ns;
+            for (gsize j = ns; j < ne; j++) {
+                if (tag[j] == ':') local_ns = j + 1;
+            }
+            if (ascii_eq_nocase_n(tag + local_ns, ne - local_ns, wanted)) {
+                return TRUE;
+            }
+        }
+
+        while (i < len && is_xml_space(tag[i])) i++;
+        if (i < len && tag[i] == '=') {
+            i++;
+            while (i < len && is_xml_space(tag[i])) i++;
+            if (i < len && (tag[i] == '"' || tag[i] == '\'')) {
+                gchar q = tag[i++];
+                while (i < len && tag[i] != q) i++;
+                if (i < len) i++;
+            } else {
+                while (i < len && !is_xml_space(tag[i]) && tag[i] != '/' && tag[i] != '>') i++;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+static void normalize_clip_path_units(GString **io)
+{
+    GString *src;
+    GString *out = NULL;
+    const gchar *s;
+    gsize len, pos = 0, last = 0;
+
+    if (!io || !*io) return;
+    src = *io;
+    s = src->str;
+    len = src->len;
+
+    while (pos < len) {
+        gsize lt_plain = find_plain(s, len, pos, "<clipPath");
+        gsize lt_ns = find_plain(s, len, pos, "<svg:clipPath");
+        gsize lt;
+        gsize gt;
+
+        if (lt_plain == G_MAXSIZE) lt = lt_ns;
+        else if (lt_ns == G_MAXSIZE) lt = lt_plain;
+        else lt = MIN(lt_plain, lt_ns);
+        if (lt == G_MAXSIZE) break;
+        gt = find_tag_end(s, len, lt);
+        if (gt == G_MAXSIZE) break;
+
+        if (open_tag_local_name_is(s, len, lt, "clipPath") &&
+            !tag_has_attr_local_name(s + lt, gt + 1 - lt, "clipPathUnits")) {
+            if (!out) out = g_string_sized_new(len + 128);
+            g_string_append_len(out, s + last, (gssize)(gt - last));
+            g_string_append(out, " clipPathUnits=\"userSpaceOnUse\"");
+            last = gt;
+        }
+        pos = gt + 1;
+    }
+
+    if (!out) return;
+    g_string_append_len(out, s + last, (gssize)(len - last));
+    g_string_free(src, TRUE);
+    *io = out;
 }
 
 static GPtrArray *parse_attrs(const gchar *s, gsize from, gsize to)
@@ -728,6 +895,61 @@ static gchar *encode_png_tile_data_uri(cairo_surface_t *src,
     return uri;
 }
 
+static void map_tile_rect_to_svg(TileCtx *ctx,
+                                 int px, int py, int pw, int ph,
+                                 double *x, double *y,
+                                 double *w, double *h)
+{
+    double rx, ry, rw, rh;
+
+    rx = ctx->svg_x + ctx->svg_w * (double)px / (double)ctx->img_w;
+    ry = ctx->svg_y + ctx->svg_h * (double)py / (double)ctx->img_h;
+    rw = ctx->svg_w * (double)pw / (double)ctx->img_w;
+    rh = ctx->svg_h * (double)ph / (double)ctx->img_h;
+    if (ctx->bake_axis_transform) {
+        rx = ctx->bake_e + ctx->bake_a * rx;
+        ry = ctx->bake_f + ctx->bake_d * ry;
+        rw *= ctx->bake_a;
+        rh *= ctx->bake_d;
+    }
+
+    if (x) *x = rx;
+    if (y) *y = ry;
+    if (w) *w = rw;
+    if (h) *h = rh;
+}
+
+static void append_encoded_tile(TileCtx *ctx,
+                                guint idnum,
+                                const gchar *uri,
+                                int sx, int sy, int sw, int sh,
+                                int lx, int ly, int lw, int lh)
+{
+    double x, y, w, h;
+
+    (void)lx;
+    (void)ly;
+    (void)lw;
+    (void)lh;
+    map_tile_rect_to_svg(ctx, sx, sy, sw, sh, &x, &y, &w, &h);
+    g_string_append(ctx->out, "    <image");
+    if (ctx->id_prefix && *ctx->id_prefix) {
+        gchar *id = g_strdup_printf("%s__tile_%u", ctx->id_prefix, idnum);
+        append_attr(ctx->out, "id", id);
+        g_free(id);
+    }
+    g_string_append_printf(ctx->out,
+                           " x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"",
+                           x, y, w, h);
+    append_attr(ctx->out, "preserveAspectRatio", "none");
+    if (ctx->opt->inherit_image_rendering) {
+        append_attr(ctx->out, "style",
+                    "image-rendering:pixelated;image-rendering:crisp-edges");
+    }
+    append_attr(ctx->out, ctx->href_attr_name, uri);
+    g_string_append(ctx->out, "/>\n");
+}
+
 static gboolean append_one_tile(TileCtx *ctx, int sx, int sy, int sw, int sh,
                                 GError **error)
 {
@@ -738,26 +960,7 @@ static gboolean append_one_tile(TileCtx *ctx, int sx, int sy, int sw, int sh,
     if (!uri) return FALSE;
 
     idnum = (*ctx->tile_counter)++;
-    g_string_append(ctx->out, "    <image");
-    if (ctx->id_prefix && *ctx->id_prefix) {
-        gchar *id = g_strdup_printf("%s__tile_%u", ctx->id_prefix, idnum);
-        append_attr(ctx->out, "id", id);
-        g_free(id);
-    }
-    g_string_append_printf(ctx->out,
-                           " x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"",
-                           ctx->svg_x + ctx->svg_w * (double)sx / (double)ctx->img_w,
-                           ctx->svg_y + ctx->svg_h * (double)sy / (double)ctx->img_h,
-                           ctx->svg_w * (double)sw / (double)ctx->img_w,
-                           ctx->svg_h * (double)sh / (double)ctx->img_h);
-    append_attr(ctx->out, "preserveAspectRatio", "none");
-    if (ctx->opt->inherit_image_rendering) {
-            append_attr(ctx->out, "style",
-                        "image-rendering:pixelated;image-rendering:crisp-edges");
-    }
-    append_attr(ctx->out, ctx->href_attr_name, uri);
-    g_string_append(ctx->out, "/>\n");
-
+    append_encoded_tile(ctx, idnum, uri, sx, sy, sw, sh, sx, sy, sw, sh);
     g_free(uri);
     return TRUE;
 }
@@ -796,25 +999,7 @@ static gboolean append_tile_region(TileCtx *ctx,
         /* Avoid a second encode: append using the already-created uri. */
         {
             guint idnum = (*ctx->tile_counter)++;
-            g_string_append(ctx->out, "    <image");
-            if (ctx->id_prefix && *ctx->id_prefix) {
-                gchar *id = g_strdup_printf("%s__tile_%u", ctx->id_prefix, idnum);
-                append_attr(ctx->out, "id", id);
-                g_free(id);
-            }
-            g_string_append_printf(ctx->out,
-                                   " x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"",
-                                   ctx->svg_x + ctx->svg_w * (double)sx / (double)ctx->img_w,
-                                   ctx->svg_y + ctx->svg_h * (double)sy / (double)ctx->img_h,
-                                   ctx->svg_w * (double)sw / (double)ctx->img_w,
-                                   ctx->svg_h * (double)sh / (double)ctx->img_h);
-            append_attr(ctx->out, "preserveAspectRatio", "none");
-            if (ctx->opt->inherit_image_rendering) {
-                append_attr(ctx->out, "style",
-                            "image-rendering:pixelated;image-rendering:crisp-edges");
-            }
-            append_attr(ctx->out, ctx->href_attr_name, uri);
-            g_string_append(ctx->out, "/>\n");
+            append_encoded_tile(ctx, idnum, uri, sx, sy, sw, sh, lx, ly, lw, lh);
             g_free(uri);
             return TRUE;
         }
@@ -857,6 +1042,7 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
     const Attr *w_a = attrs_get(tag->attrs, "width");
     const Attr *h_a = attrs_get(tag->attrs, "height");
     const Attr *par_a = attrs_get(tag->attrs, "preserveAspectRatio");
+    const Attr *transform_a = attrs_get(tag->attrs, "transform");
     const gchar *href_attr_name;
     const gchar *href;
     gsize href_len;
@@ -869,6 +1055,8 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
     TileCtx ctx;
     const gchar *xv, *yv, *wv, *hv;
     double svg_x, svg_y, svg_w, svg_h;
+    gboolean bake_axis_transform = FALSE;
+    double bake_a = 1.0, bake_d = 1.0, bake_e = 0.0, bake_f = 0.0;
     gchar *clip_id;
 
     if (out_replaced) *out_replaced = FALSE;
@@ -932,6 +1120,12 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
         return FALSE;
     }
 
+    if (transform_a && transform_a->has_value) {
+        bake_axis_transform = parse_axis_aligned_matrix_transform(transform_a->value,
+                                                                 &bake_a, &bake_d,
+                                                                 &bake_e, &bake_f);
+    }
+
     if (opt->emit_comment) {
         g_string_append_printf(out,
             "<!-- svg_png_tiler: split embedded PNG %dx%d into tiled data URI images; bleed=%u -->\n",
@@ -944,6 +1138,7 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
     for (i = 0; i < tag->attrs->len; i++) {
         const Attr *a = (const Attr *)g_ptr_array_index(tag->attrs, i);
         if (is_geometry_or_href_attr(a->name)) continue;
+        if (bake_axis_transform && attr_name_is(a->name, "transform")) continue;
         if (!opt->keep_original_id_on_group && attr_name_is(a->name, "id")) continue;
         if (a->has_value) append_attr(out, a->name, a->value);
         else g_string_append_printf(out, " %s", a->name);
@@ -952,10 +1147,14 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
 
     g_string_append(out, "  <defs><clipPath");
     append_attr(out, "id", clip_id);
+    append_attr(out, "clipPathUnits", "userSpaceOnUse");
     g_string_append(out, "><rect");
     g_string_append_printf(out,
                            " x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"",
-                           svg_x, svg_y, svg_w, svg_h);
+                           bake_axis_transform ? bake_e + bake_a * svg_x : svg_x,
+                           bake_axis_transform ? bake_f + bake_d * svg_y : svg_y,
+                           bake_axis_transform ? bake_a * svg_w : svg_w,
+                           bake_axis_transform ? bake_d * svg_h : svg_h);
     g_string_append(out, "/></clipPath></defs>\n");
     g_string_append(out, "  <g");
     {
@@ -974,6 +1173,11 @@ static gboolean append_replacement_for_image(const gchar *svg_utf8,
     ctx.svg_y = svg_y;
     ctx.svg_w = svg_w;
     ctx.svg_h = svg_h;
+    ctx.bake_axis_transform = bake_axis_transform;
+    ctx.bake_a = bake_a;
+    ctx.bake_d = bake_d;
+    ctx.bake_e = bake_e;
+    ctx.bake_f = bake_f;
     ctx.opt = opt;
     ctx.href_attr_name = href_attr_name;
     ctx.id_prefix = (id_a && id_a->value && *id_a->value) ? id_a->value : NULL;
@@ -1079,6 +1283,10 @@ static gchar *rewrite_internal(const gchar *svg_utf8,
         g_set_error(error, SVG_PNG_TILER_ERROR, SVG_PNG_TILER_ERROR_NOT_FOUND,
                     "No embedded PNG <image> with id='%s' was found", image_id_or_null);
         return NULL;
+    }
+
+    if (replaced > 0) {
+        normalize_clip_path_units(&out);
     }
 
     if (out_changed) *out_changed = replaced > 0;

@@ -98,6 +98,7 @@ NATIVE_TOOLS = {
         "sources": [
             TOOLS_DIR / "svgviewer_x11.c",
             TOOLS_DIR / "svgsequence_x11.c",
+            TOOLS_DIR / "svg_png_tiler.c",
         ],
         "packages": [
             "x11",

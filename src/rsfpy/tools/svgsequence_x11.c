@@ -1,4 +1,5 @@
 #include "svgsequence_x11.h"
+#include "svg_png_tiler.h"
 
 static int npng = 0;
 static char *png_paths[MAX_TMP_FILES];
@@ -11,6 +12,51 @@ static char **argv_global;
 void sf_init(int argc, char **argv){
     argc_global = argc;
     argv_global = argv;
+}
+
+static RsvgHandle *load_svg_handle_with_tiling(const char *svg_content,
+                                               gsize len,
+                                               const char *label,
+                                               GError **err)
+{
+    SvgPngTilerOptions opt;
+    GError *local_err = NULL;
+    gchar *rewritten = NULL;
+    gboolean changed = FALSE;
+    RsvgHandle *handle = NULL;
+
+    if (!svg_content) return NULL;
+
+    svg_png_tiler_options_init_from_env(&opt);
+    rewritten = svg_png_tiler_rewrite_all_full(svg_content, &opt, &changed, &local_err);
+    if (rewritten && changed) {
+        handle = rsvg_handle_new_from_data((const guint8 *)rewritten,
+                                           strlen(rewritten),
+                                           &local_err);
+        if (handle) {
+            fprintf(stderr, "Tiled large embedded PNG images in %s\n",
+                    label ? label : "(svg)");
+            g_free(rewritten);
+            return handle;
+        }
+        fprintf(stderr, "Warning: failed to load tiled SVG %s: %s\n",
+                label ? label : "(svg)",
+                local_err ? local_err->message : "unknown error");
+        g_clear_error(&local_err);
+        g_free(rewritten);
+        g_set_error(err, g_quark_from_static_string("svg-png-tiler"),
+                    1, "failed to load tiled SVG");
+        return NULL;
+    }
+    if (!rewritten && local_err) {
+        fprintf(stderr, "Warning: SVG image tiling failed for %s: %s\n",
+                label ? label : "(svg)", local_err->message);
+        g_clear_error(&local_err);
+    }
+    g_free(rewritten);
+
+    handle = rsvg_handle_new_from_data((const guint8 *)svg_content, len, err);
+    return handle;
 }
 
 static char * sf_getstring(const char *key)
@@ -285,7 +331,8 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
                 SvgFrame *f = &seq->frames[seq->count];
                 f->path = g_strdup_printf("%s.frame[%d]", path, j-1);
                 f->framelabel = label ? label : g_strdup_printf("Frame %d", seq->count);
-                f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
+                f->handle = load_svg_handle_with_tiling(svg_content, strlen(svg_content),
+                                                        f->path, &err);
                 if (!f->handle) {
                     fprintf(stderr, "Warning: failed to load SVG segment %d from %s: %s\nTry extracting embedded PNGs instead.\n", j, path, err->message);
                     err = NULL;
@@ -321,7 +368,7 @@ gboolean svg_sequence_load_files(SvgSequence *seq, char **paths, int num) {
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup(path);
             f->framelabel = g_strdup("Single file");
-            f->handle = rsvg_handle_new_from_data((const guint8 *)content, len, &err);
+            f->handle = load_svg_handle_with_tiling(content, len, f->path, &err);
             if (!f->handle) {
                 fprintf(stderr, "Warning: failed to load SVG segment %d from %s: %s\nTry extracting embedded PNGs instead.\n", seq->count, path, err->message);
                 err = NULL;
@@ -584,7 +631,8 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
             SvgFrame *f = &seq->frames[seq->count];
             f->path = g_strdup_printf("stdin[%d]", i-1);
             f->framelabel = label ? label : g_strdup_printf("Frame %d", i);
-            f->handle = rsvg_handle_new_from_data((const guint8 *)svg_content, strlen(svg_content), &err);
+            f->handle = load_svg_handle_with_tiling(svg_content, strlen(svg_content),
+                                                    f->path, &err);
             if (!f->handle) {
                 fprintf(stderr, "Warning: failed to load SVG segment %d: %s\nTry extracting embedded PNGs instead.\n", i, err->message);
                 err = NULL;
@@ -617,7 +665,7 @@ gboolean svg_sequence_load_from_stream(SvgSequence *seq, const char *data, size_
         SvgFrame *f = &seq->frames[0];
         f->path = g_strdup("stdin");
         f->framelabel = g_strdup("Single file");
-        f->handle = rsvg_handle_new_from_data((const guint8 *)copy, len, &err);
+        f->handle = load_svg_handle_with_tiling(copy, len, f->path, &err);
         if (!f->handle) {
             fprintf(stderr, "Warning: failed to load single SVG stream: %s\nTry extracting embedded PNGs instead.\n", err->message);
             err = NULL;

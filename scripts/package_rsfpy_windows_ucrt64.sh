@@ -102,7 +102,7 @@ cp -f "$OUTDIR/svgviewer-gtk.exe" "$OUTDIR/svgviewer.exe"
 if [[ "$BUILD_X11" == "1" ]]; then
     log "Building svgviewer-x11.exe"
     pkg-config --modversion x11 >/dev/null
-    build_exe "$OUTDIR/svgviewer-x11.exe" "$SVGVIEWER_X11_C" "$SVGSEQUENCE_X11_C" -- \
+    build_exe "$OUTDIR/svgviewer-x11.exe" "$SVGVIEWER_X11_C" "$SVGSEQUENCE_X11_C" "$SVG_PNG_TILER_C" -- \
         x11 cairo glib-2.0 librsvg-2.0 gdk-pixbuf-2.0
 else
     log "Skipping svgviewer-x11.exe (set BUILD_X11=1 to include it)"

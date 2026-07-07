@@ -2729,6 +2729,18 @@ typedef struct {
     GtkWidget *combo;
 } ExportDialogState;
 
+typedef struct {
+    ExportDialogState *st;
+    gchar *path;
+} ExportConfirmState;
+
+static void export_dialog_state_destroy(ExportDialogState *st)
+{
+    if (!st) return;
+    if (st->dialog) gtk_window_destroy(GTK_WINDOW(st->dialog));
+    g_free(st);
+}
+
 static void start_export_task(App *app, const gchar *path)
 {
     GError *err = NULL;
@@ -2748,6 +2760,166 @@ static void start_export_task(App *app, const gchar *path)
         g_free(msg);
         if (err) g_error_free(err);
     }
+}
+
+#if defined(__APPLE__) && defined(__MACH__)
+static gchar *applescript_quote(const gchar *text)
+{
+    GString *s = g_string_new("\"");
+    const gchar *p = text ? text : "";
+    while (*p) {
+        if (*p == '"' || *p == '\\') g_string_append_c(s, '\\');
+        g_string_append_c(s, *p++);
+    }
+    g_string_append_c(s, '"');
+    return g_string_free(s, FALSE);
+}
+#endif
+
+static gchar *browse_export_path(App *app, const gchar *suggested_path)
+{
+#if defined(__APPLE__) && defined(__MACH__)
+    gchar *base = NULL;
+    gchar *dir = NULL;
+    gchar *qbase = NULL;
+    gchar *qdir = NULL;
+    gchar *script = NULL;
+    gchar *stdout_data = NULL;
+    gint status = 0;
+    GError *err = NULL;
+    gchar *argv[4];
+    gchar *result = NULL;
+
+    (void)app;
+    base = g_path_get_basename(suggested_path && *suggested_path
+                               ? suggested_path
+                               : "rsfpy-view.svg");
+    if (suggested_path && *suggested_path && g_path_is_absolute(suggested_path)) {
+        dir = g_path_get_dirname(suggested_path);
+    } else {
+        dir = g_get_current_dir();
+    }
+    qbase = applescript_quote(base);
+    qdir = applescript_quote(dir);
+    script = g_strdup_printf(
+        "set p to choose file name with prompt \"Export Current View\" default name %s default location POSIX file %s\n"
+        "POSIX path of p\n",
+        qbase, qdir);
+
+    argv[0] = (gchar *)"/usr/bin/osascript";
+    argv[1] = (gchar *)"-e";
+    argv[2] = script;
+    argv[3] = NULL;
+    if (g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, &stdout_data, NULL, &status, &err) &&
+        status == 0 && stdout_data && *stdout_data) {
+        result = g_strdup(g_strstrip(stdout_data));
+    } else if (app && app->status_label) {
+        gtk_label_set_text(GTK_LABEL(app->status_label),
+                           err ? err->message : "Browse was cancelled.");
+    }
+
+    if (err) g_error_free(err);
+    g_free(stdout_data);
+    g_free(script);
+    g_free(qdir);
+    g_free(qbase);
+    g_free(dir);
+    g_free(base);
+    return result;
+#else
+    (void)suggested_path;
+    if (app && app->status_label) {
+        gtk_label_set_text(GTK_LABEL(app->status_label),
+                           "Browse is not available in this build; type a path.");
+    }
+    return NULL;
+#endif
+}
+
+static void on_export_browse_clicked(GtkButton *button, gpointer user_data)
+{
+    ExportDialogState *st = user_data;
+    const gchar *current;
+    gchar *picked;
+
+    (void)button;
+    if (!st || !st->entry) return;
+    current = gtk_editable_get_text(GTK_EDITABLE(st->entry));
+    picked = browse_export_path(st->app, current);
+    if (picked && *picked) {
+        gtk_editable_set_text(GTK_EDITABLE(st->entry), picked);
+    }
+    g_free(picked);
+}
+
+static void export_path_or_confirm(ExportDialogState *st, const gchar *path);
+
+static void on_export_overwrite_response(GtkDialog *dialog,
+                                         int response,
+                                         gpointer user_data)
+{
+    ExportConfirmState *cs = user_data;
+
+    if (cs && response == GTK_RESPONSE_ACCEPT) {
+        if (cs->st && cs->path && !cs->st->app->busy) {
+            start_export_task(cs->st->app, cs->path);
+        }
+        export_dialog_state_destroy(cs->st);
+        cs->st = NULL;
+    }
+
+    gtk_window_destroy(GTK_WINDOW(dialog));
+    if (cs) {
+        g_free(cs->path);
+        g_free(cs);
+    }
+}
+
+static void export_path_or_confirm(ExportDialogState *st, const gchar *path)
+{
+    if (!st || !path || !*path) return;
+
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        GtkWidget *confirm;
+        GtkWidget *content;
+        GtkWidget *label;
+        gchar *msg;
+        ExportConfirmState *cs;
+
+        confirm = gtk_dialog_new_with_buttons("Overwrite File?",
+                                              GTK_WINDOW(st->dialog),
+                                              GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                              "_Cancel", GTK_RESPONSE_CANCEL,
+                                              "_Overwrite", GTK_RESPONSE_ACCEPT,
+                                              NULL);
+        content = gtk_dialog_get_content_area(GTK_DIALOG(confirm));
+        msg = g_strdup_printf("The file already exists:\n%s\n\nOverwrite it?", path);
+        label = gtk_label_new(msg);
+        gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+        gtk_widget_set_margin_top(label, 14);
+        gtk_widget_set_margin_bottom(label, 14);
+        gtk_widget_set_margin_start(label, 14);
+        gtk_widget_set_margin_end(label, 14);
+        gtk_box_append(GTK_BOX(content), label);
+        g_free(msg);
+
+        cs = g_new0(ExportConfirmState, 1);
+        cs->st = st;
+        cs->path = g_strdup(path);
+        g_signal_connect(confirm, "response",
+                         G_CALLBACK(on_export_overwrite_response), cs);
+        gtk_window_present(GTK_WINDOW(confirm));
+        return;
+    }
+
+    if (!st->app->busy) {
+        start_export_task(st->app, path);
+    } else if (st->app->status_label) {
+        gtk_label_set_text(GTK_LABEL(st->app->status_label),
+                           "Export is already running.");
+    }
+    export_dialog_state_destroy(st);
 }
 
 static void start_clipboard_task(App *app)
@@ -2778,20 +2950,16 @@ static void on_export_dialog_response(GtkDialog *dialog,
         const gchar *ext = gtk_combo_box_get_active_id(GTK_COMBO_BOX(st->combo));
         gchar *path = normalize_export_path_for_extension(raw_path, ext);
 
-        if (path && !st->app->busy) {
-            start_export_task(st->app, path);
-        } else if (st->app->status_label) {
-            gtk_label_set_text(GTK_LABEL(st->app->status_label),
-                               "Export is already running.");
+        if (path && *path) {
+            export_path_or_confirm(st, path);
+            g_free(path);
+            return;
         }
 
         g_free(path);
     }
 
-    if (st) {
-        gtk_window_destroy(GTK_WINDOW(st->dialog));
-        g_free(st);
-    }
+    export_dialog_state_destroy(st);
     (void)dialog;
 }
 
@@ -2805,6 +2973,7 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     GtkWidget *grid;
     GtkWidget *entry;
     GtkWidget *combo;
+    GtkWidget *browse;
     GtkWidget *label;
     gchar *default_name;
 
@@ -2845,6 +3014,9 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     gtk_grid_attach(GTK_GRID(grid), entry, 1, 0, 1, 1);
     g_free(default_name);
 
+    browse = gtk_button_new_with_label("Browse...");
+    gtk_grid_attach(GTK_GRID(grid), browse, 2, 0, 1, 1);
+
     label = gtk_label_new("Format");
     gtk_widget_set_halign(label, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), label, 0, 1, 1, 1);
@@ -2866,6 +3038,7 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     st->entry = entry;
     st->combo = combo;
     g_signal_connect(dialog, "response", G_CALLBACK(on_export_dialog_response), st);
+    g_signal_connect(browse, "clicked", G_CALLBACK(on_export_browse_clicked), st);
 
     gtk_window_present(GTK_WINDOW(dialog));
 }
@@ -2980,11 +3153,24 @@ static void append_svg_stroke_attrs(GString *s, const Annotation *a)
     }
 }
 
-static void append_annotations_as_svg(App *app, GString *s)
+static void append_annotations_as_svg(App *app,
+                                      GString *s,
+                                      gboolean use_transform,
+                                      double transform_sx,
+                                      double transform_sy,
+                                      double transform_tx,
+                                      double transform_ty)
 {
     if (!app || !s || !app->annotations || app->annotations->len == 0) return;
 
-    g_string_append(s, "\n<g id=\"rsfpy-annotations\">\n");
+    if (use_transform) {
+        g_string_append_printf(s,
+                               "\n<g id=\"rsfpy-annotations\" transform=\"matrix(%.12g 0 0 %.12g %.12g %.12g)\">\n",
+                               transform_sx, transform_sy,
+                               transform_tx, transform_ty);
+    } else {
+        g_string_append(s, "\n<g id=\"rsfpy-annotations\">\n");
+    }
     for (guint i = 0; i < app->annotations->len; i++) {
         Annotation *a = g_ptr_array_index(app->annotations, i);
         if (!annotation_is_valid(a)) continue;
@@ -3062,75 +3248,11 @@ static const gchar *find_svg_tag_end(const gchar *tag)
     return NULL;
 }
 
-static gboolean attr_name_matches_at(const gchar *p,
-                                     const gchar *end,
-                                     const gchar *name)
-{
-    gsize n;
-    if (!p || !end || !name) return FALSE;
-    n = strlen(name);
-    if ((gsize)(end - p) < n || strncmp(p, name, n) != 0) return FALSE;
-    return p + n < end && p[n] == '=';
-}
-
-static void append_tag_without_attr(GString *out,
-                                    const gchar *tag_start,
-                                    const gchar *tag_end,
-                                    const gchar *attr_name)
-{
-    const gchar *p = tag_start;
-    gsize attr_len;
-
-    if (!out || !tag_start || !tag_end || tag_end < tag_start || !attr_name) return;
-    attr_len = strlen(attr_name);
-
-    while (p < tag_end) {
-        const gchar *hit = g_strstr_len(p, (gssize)(tag_end - p), attr_name);
-        const gchar *attr_start;
-        const gchar *attr_end;
-
-        if (!hit) break;
-        if (hit > tag_start && !g_ascii_isspace((guchar)hit[-1])) {
-            p = hit + attr_len;
-            continue;
-        }
-        if (!attr_name_matches_at(hit, tag_end, attr_name)) {
-            p = hit + attr_len;
-            continue;
-        }
-
-        attr_start = hit;
-        while (attr_start > tag_start && g_ascii_isspace((guchar)attr_start[-1])) attr_start--;
-        attr_end = hit + attr_len + 1;
-        if (attr_end < tag_end && (*attr_end == '"' || *attr_end == '\'')) {
-            gchar quote = *attr_end++;
-            while (attr_end < tag_end && *attr_end != quote) attr_end++;
-            if (attr_end < tag_end) attr_end++;
-        } else {
-            while (attr_end < tag_end &&
-                   !g_ascii_isspace((guchar)*attr_end) &&
-                   *attr_end != '>') {
-                attr_end++;
-            }
-        }
-
-        g_string_append_len(out, p, (gssize)(attr_start - p));
-        p = attr_end;
-    }
-    g_string_append_len(out, p, (gssize)(tag_end - p));
-}
-
 static gboolean svg_has_image_tag_len(const gchar *svg, gsize len)
 {
     if (!svg || len == 0) return FALSE;
     return g_strstr_len(svg, (gssize)len, "<image") != NULL ||
            g_strstr_len(svg, (gssize)len, "<svg:image") != NULL;
-}
-
-static gboolean svg_has_image_tag(const gchar *svg)
-{
-    return svg && (strstr(svg, "<image") != NULL ||
-                   strstr(svg, "<svg:image") != NULL);
 }
 
 static gsize clipboard_svg_text_limit_bytes(void)
@@ -3245,63 +3367,296 @@ static gsize count_non_image_svg_text_bytes_len(const gchar *svg,
     return bytes;
 }
 
-static gboolean svg_open_tag_is(const gchar *p, const gchar *name)
+static gboolean svg_tag_name_matches(const gchar *p, const gchar *end,
+                                     const gchar *name)
 {
-    gsize len;
+    gsize n;
 
-    if (!p || !name || p[0] != '<' || p[1] == '/') return FALSE;
+    if (!p || p >= end || *p != '<' || !name) return FALSE;
     p++;
-    if (g_str_has_prefix(p, "svg:")) p += 4;
-
-    len = strlen(name);
-    if (strncmp(p, name, len) != 0) return FALSE;
-    return p[len] == '>' || p[len] == '/' || g_ascii_isspace((guchar)p[len]);
+    if (p >= end || *p == '/' || *p == '!' || *p == '?') return FALSE;
+    if (end - p >= 4 && g_ascii_strncasecmp(p, "svg:", 4) == 0) p += 4;
+    n = strlen(name);
+    return (gsize)(end - p) >= n &&
+           g_ascii_strncasecmp(p, name, n) == 0 &&
+           (p + n == end || g_ascii_isspace((guchar)p[n]) ||
+            p[n] == '/' || p[n] == '>');
 }
 
-static gchar *sanitize_svg_for_office_image_clip(const gchar *svg)
+static const gchar *find_svg_open_tag(const gchar *svg,
+                                      gsize len,
+                                      const gchar **tag_end_out)
 {
-    GString *out;
     const gchar *p;
+    const gchar *end;
 
-    if (!svg) return NULL;
-    if (!svg_has_image_tag(svg)) return NULL;
+    if (tag_end_out) *tag_end_out = NULL;
+    if (!svg || len == 0) return NULL;
 
-    out = g_string_new(NULL);
     p = svg;
+    end = svg + len;
+    while (p < end) {
+        const gchar *hit = memchr(p, '<', (size_t)(end - p));
+        const gchar *tag_end;
 
-    while (*p) {
-        if (svg_open_tag_is(p, "image")) {
-            const gchar *tag_end = find_svg_tag_end(p);
-            if (!tag_end) break;
-            append_tag_without_attr(out, p, tag_end + 1, "clip-path");
-            p = tag_end + 1;
-        } else if (svg_open_tag_is(p, "g")) {
-            const gchar *tag_end = find_svg_tag_end(p);
-            const gchar *group_end;
-            const gchar *image_in_group;
-            const gchar *svg_image_in_group;
+        if (!hit) break;
+        tag_end = find_svg_tag_end(hit);
+        if (!tag_end || tag_end >= end) return NULL;
+        if (svg_tag_name_matches(hit, end, "svg")) {
+            if (tag_end_out) *tag_end_out = tag_end;
+            return hit;
+        }
+        p = tag_end + 1;
+    }
 
-            if (!tag_end) break;
-            group_end = g_strstr_len(tag_end + 1, -1, "</g>");
-            image_in_group = group_end
-                ? g_strstr_len(tag_end + 1, (gssize)(group_end - tag_end - 1), "<image")
-                : NULL;
-            svg_image_in_group = group_end
-                ? g_strstr_len(tag_end + 1, (gssize)(group_end - tag_end - 1), "<svg:image")
-                : NULL;
+    return NULL;
+}
 
-            if (image_in_group || svg_image_in_group) {
-                append_tag_without_attr(out, p, tag_end + 1, "clip-path");
-            } else {
-                g_string_append_len(out, p, (gssize)(tag_end + 1 - p));
-            }
-            p = tag_end + 1;
+static gchar *svg_open_tag_get_attr(const gchar *tag_start,
+                                    const gchar *tag_end,
+                                    const gchar *attr_name)
+{
+    const gchar *p;
+    gsize attr_len;
+
+    if (!tag_start || !tag_end || tag_start >= tag_end || !attr_name) return NULL;
+    attr_len = strlen(attr_name);
+    p = tag_start + 1;
+    while (p < tag_end) {
+        const gchar *name_start;
+        const gchar *name_end;
+        const gchar *value_start;
+        const gchar *value_end;
+
+        while (p < tag_end && g_ascii_isspace((guchar)*p)) p++;
+        if (p >= tag_end || *p == '/' || *p == '>') break;
+
+        name_start = p;
+        while (p < tag_end &&
+               !g_ascii_isspace((guchar)*p) &&
+               *p != '=' &&
+               *p != '/' &&
+               *p != '>') {
+            p++;
+        }
+        name_end = p;
+        while (p < tag_end && g_ascii_isspace((guchar)*p)) p++;
+        if (p >= tag_end || *p != '=') continue;
+        p++;
+        while (p < tag_end && g_ascii_isspace((guchar)*p)) p++;
+        if (p >= tag_end) break;
+
+        if (*p == '"' || *p == '\'') {
+            gchar quote = *p++;
+            value_start = p;
+            while (p < tag_end && *p != quote) p++;
+            value_end = p;
+            if (p < tag_end) p++;
         } else {
-            g_string_append_c(out, *p++);
+            value_start = p;
+            while (p < tag_end &&
+                   !g_ascii_isspace((guchar)*p) &&
+                   *p != '/' &&
+                   *p != '>') {
+                p++;
+            }
+            value_end = p;
+        }
+
+        if ((gsize)(name_end - name_start) == attr_len &&
+            strncmp(name_start, attr_name, attr_len) == 0) {
+            return g_strndup(value_start, (gssize)(value_end - value_start));
         }
     }
 
-    if (*p) g_string_append(out, p);
+    return NULL;
+}
+
+static const gchar *skip_svg_number_sep(const gchar *p)
+{
+    while (p && (*p == ',' || g_ascii_isspace((guchar)*p))) p++;
+    return p;
+}
+
+static gboolean parse_svg_viewbox_value(const gchar *value,
+                                        double *vx,
+                                        double *vy,
+                                        double *vw,
+                                        double *vh)
+{
+    double vals[4];
+    const gchar *p;
+    gchar *endp = NULL;
+
+    if (!value) return FALSE;
+    p = value;
+    for (int i = 0; i < 4; i++) {
+        p = skip_svg_number_sep(p);
+        if (!p || !*p) return FALSE;
+        vals[i] = g_ascii_strtod(p, &endp);
+        if (endp == p || !isfinite(vals[i])) return FALSE;
+        p = endp;
+    }
+
+    if (vals[2] <= 0.0 || vals[3] <= 0.0) return FALSE;
+    if (vx) *vx = vals[0];
+    if (vy) *vy = vals[1];
+    if (vw) *vw = vals[2];
+    if (vh) *vh = vals[3];
+    return TRUE;
+}
+
+static gboolean parse_svg_root_viewbox(const gchar *svg,
+                                       gsize len,
+                                       double *vx,
+                                       double *vy,
+                                       double *vw,
+                                       double *vh)
+{
+    const gchar *tag_end = NULL;
+    const gchar *tag_start;
+    gchar *viewbox;
+    gboolean ok;
+
+    tag_start = find_svg_open_tag(svg, len, &tag_end);
+    if (!tag_start || !tag_end) return FALSE;
+    viewbox = svg_open_tag_get_attr(tag_start, tag_end, "viewBox");
+    if (!viewbox) return FALSE;
+
+    ok = parse_svg_viewbox_value(viewbox, vx, vy, vw, vh);
+    g_free(viewbox);
+    return ok;
+}
+
+static gboolean map_export_rect_to_source_svg_space(SvgFrame *frame,
+                                                    const gchar *source_svg,
+                                                    gsize source_len,
+                                                    gboolean *crop,
+                                                    double *doc_x,
+                                                    double *doc_y,
+                                                    double *doc_w,
+                                                    double *doc_h,
+                                                    int *pixel_w,
+                                                    int *pixel_h,
+                                                    gboolean *annotation_transform,
+                                                    double *anno_sx,
+                                                    double *anno_sy,
+                                                    double *anno_tx,
+                                                    double *anno_ty)
+{
+    double vb_x = 0.0, vb_y = 0.0, vb_w = 0.0, vb_h = 0.0;
+    double sx = 1.0, sy = 1.0, tx = 0.0, ty = 0.0;
+    gboolean has_viewbox;
+
+    if (annotation_transform) *annotation_transform = FALSE;
+    if (anno_sx) *anno_sx = 1.0;
+    if (anno_sy) *anno_sy = 1.0;
+    if (anno_tx) *anno_tx = 0.0;
+    if (anno_ty) *anno_ty = 0.0;
+
+    if (!frame || frame->width <= 0.0 || frame->height <= 0.0) return FALSE;
+
+    has_viewbox = parse_svg_root_viewbox(source_svg, source_len,
+                                         &vb_x, &vb_y, &vb_w, &vb_h);
+    if (has_viewbox) {
+        sx = vb_w / frame->width;
+        sy = vb_h / frame->height;
+        tx = vb_x;
+        ty = vb_y;
+        if (annotation_transform) {
+            *annotation_transform =
+                fabs(sx - 1.0) > 1e-9 ||
+                fabs(sy - 1.0) > 1e-9 ||
+                fabs(tx) > 1e-9 ||
+                fabs(ty) > 1e-9;
+        }
+        if (anno_sx) *anno_sx = sx;
+        if (anno_sy) *anno_sy = sy;
+        if (anno_tx) *anno_tx = tx;
+        if (anno_ty) *anno_ty = ty;
+    }
+
+    if (!crop || !*crop || !doc_x || !doc_y || !doc_w || !doc_h) return TRUE;
+    if (*doc_w <= 0.0 || *doc_h <= 0.0) {
+        *crop = FALSE;
+        return FALSE;
+    }
+
+    {
+        double raw_x0 = *doc_x;
+        double raw_y0 = *doc_y;
+        double raw_x1 = *doc_x + *doc_w;
+        double raw_y1 = *doc_y + *doc_h;
+        double fx0 = raw_x0 < raw_x1 ? raw_x0 : raw_x1;
+        double fx1 = raw_x0 < raw_x1 ? raw_x1 : raw_x0;
+        double fy0 = raw_y0 < raw_y1 ? raw_y0 : raw_y1;
+        double fy1 = raw_y0 < raw_y1 ? raw_y1 : raw_y0;
+        double orig_w = fx1 - fx0;
+        double orig_h = fy1 - fy0;
+
+        if (fx0 < 0.0) fx0 = 0.0;
+        if (fy0 < 0.0) fy0 = 0.0;
+        if (fx1 > frame->width) fx1 = frame->width;
+        if (fy1 > frame->height) fy1 = frame->height;
+
+        if (fx1 <= fx0 || fy1 <= fy0) {
+            *crop = FALSE;
+            return FALSE;
+        }
+
+        if (pixel_w && *pixel_w > 0 && orig_w > 1e-12) {
+            int adjusted = (int)ceil((double)*pixel_w * (fx1 - fx0) / orig_w);
+            *pixel_w = adjusted > 0 ? adjusted : 1;
+        }
+        if (pixel_h && *pixel_h > 0 && orig_h > 1e-12) {
+            int adjusted = (int)ceil((double)*pixel_h * (fy1 - fy0) / orig_h);
+            *pixel_h = adjusted > 0 ? adjusted : 1;
+        }
+
+        *doc_x = tx + fx0 * sx;
+        *doc_y = ty + fy0 * sy;
+        *doc_w = (fx1 - fx0) * sx;
+        *doc_h = (fy1 - fy0) * sy;
+    }
+
+    return TRUE;
+}
+
+static gchar *normalize_svg_clip_path_units(const gchar *svg, gsize len,
+                                            gsize *out_len)
+{
+    GString *out = NULL;
+    const gchar *p;
+    const gchar *end;
+    const gchar *last;
+
+    if (out_len) *out_len = len;
+    if (!svg || len == 0) return NULL;
+
+    p = svg;
+    end = svg + len;
+    last = svg;
+    while (p < end) {
+        const gchar *hit = memchr(p, '<', (size_t)(end - p));
+        const gchar *tag_end;
+
+        if (!hit) break;
+        tag_end = find_svg_tag_end(hit);
+        if (!tag_end || tag_end >= end) break;
+
+        if (svg_tag_name_matches(hit, end, "clipPath") &&
+            !g_strstr_len(hit, (gssize)(tag_end - hit), "clipPathUnits")) {
+            if (!out) out = g_string_sized_new(len + 128);
+            g_string_append_len(out, last, (gssize)(tag_end - last));
+            g_string_append(out, " clipPathUnits=\"userSpaceOnUse\"");
+            last = tag_end;
+        }
+        p = tag_end + 1;
+    }
+
+    if (!out) return NULL;
+    g_string_append_len(out, last, (gssize)(end - last));
+    if (out_len) *out_len = out->len;
     return g_string_free(out, FALSE);
 }
 
@@ -3319,12 +3674,11 @@ static gchar *build_view_svg_from_parts(const gchar *src,
                                         GError **err)
 {
     gchar *close_tag;
-    gchar *sanitized;
     GString *merged;
     const gchar *working;
     gsize working_len;
     gboolean has_overlay;
-    gboolean has_image;
+    gchar *normalized = NULL;
 
     if (out_len) *out_len = 0;
     if (!src || src_len == 0) {
@@ -3334,8 +3688,6 @@ static gchar *build_view_svg_from_parts(const gchar *src,
 
     merged = NULL;
     has_overlay = overlay && *overlay;
-    has_image = svg_has_image_tag_len(src, src_len) ||
-                (has_overlay && svg_has_image_tag(overlay));
 
     if (has_overlay) {
         close_tag = g_strrstr(src, "</svg");
@@ -3355,13 +3707,12 @@ static gchar *build_view_svg_from_parts(const gchar *src,
         working_len = src_len;
     }
 
-    sanitized = has_image ? sanitize_svg_for_office_image_clip(working) : NULL;
-    if (sanitized) {
+    normalized = normalize_svg_clip_path_units(working, working_len, &working_len);
+    if (normalized) {
         if (merged) g_string_free(merged, TRUE);
-        merged = g_string_new(sanitized);
+        merged = g_string_new_len(normalized, working_len);
         working = merged->str;
-        working_len = merged->len;
-        g_free(sanitized);
+        g_free(normalized);
     }
 
     if (crop && doc_w > 0.0 && doc_h > 0.0 && pixel_w > 0 && pixel_h > 0) {
@@ -3374,28 +3725,15 @@ static gchar *build_view_svg_from_parts(const gchar *src,
             gsize content_len = (gsize)(svg_close - content_start);
             GString *cropped = g_string_new(NULL);
 
-            if (has_image) {
-                g_string_append_printf(cropped,
-                                       "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-                                       "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
-                                       "width=\"%d\" height=\"%d\" "
-                                       "viewBox=\"0 0 %.12g %.12g\" "
-                                       "style=\"overflow:hidden\">\n"
-                                       "<g transform=\"translate(%.12g %.12g)\">\n",
-                                       pixel_w, pixel_h,
-                                       doc_w, doc_h,
-                                       -doc_x, -doc_y);
-            } else {
-                g_string_append_printf(cropped,
-                                       "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-                                       "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
-                                       "width=\"%d\" height=\"%d\" "
-                                       "viewBox=\"%.12g %.12g %.12g %.12g\" "
-                                       "style=\"overflow:hidden\">\n",
-                                       pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
-            }
+            g_string_append_printf(cropped,
+                                   "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                                   "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                                   "width=\"%d\" height=\"%d\" "
+                                   "viewBox=\"%.12g %.12g %.12g %.12g\" "
+                                   "style=\"overflow:hidden\">\n",
+                                   pixel_w, pixel_h, doc_x, doc_y, doc_w, doc_h);
             g_string_append_len(cropped, content_start, content_len);
-            g_string_append(cropped, has_image ? "\n</g>\n</svg>\n" : "\n</svg>\n");
+            g_string_append(cropped, "\n</svg>\n");
 
             if (merged) g_string_free(merged, TRUE);
             if (out_len) *out_len = cropped->len;
@@ -3876,8 +4214,10 @@ static gboolean start_worker_operation(App *app,
     GSubprocess *proc = NULL;
     GError *local_err = NULL;
     double doc_x = 0.0, doc_y = 0.0, doc_w = 0.0, doc_h = 0.0;
+    double anno_sx = 1.0, anno_sy = 1.0, anno_tx = 0.0, anno_ty = 0.0;
     int pixel_w = 0, pixel_h = 0;
     gboolean crop;
+    gboolean annotation_transform = FALSE;
     gsize source_non_image_text_bytes = 0;
     gsize svg_text_limit_bytes = clipboard_svg_text_limit_bytes();
     gboolean copy_svg = TRUE;
@@ -3907,6 +4247,13 @@ static gboolean start_worker_operation(App *app,
     }
 
     if (!read_current_svg_source(app, &source_svg, &source_len, err)) return FALSE;
+    map_export_rect_to_source_svg_space(frame, source_svg, source_len,
+                                        &crop,
+                                        &doc_x, &doc_y, &doc_w, &doc_h,
+                                        &pixel_w, &pixel_h,
+                                        &annotation_transform,
+                                        &anno_sx, &anno_sy,
+                                        &anno_tx, &anno_ty);
     source_non_image_text_bytes =
         count_non_image_svg_text_bytes_len(source_svg, source_len,
                                            svg_text_limit_bytes);
@@ -3922,7 +4269,10 @@ static gboolean start_worker_operation(App *app,
     manifest_path = g_build_filename(tmpdir, "task.ini", NULL);
 
     overlay = g_string_new(NULL);
-    append_annotations_as_svg(app, overlay);
+    append_annotations_as_svg(app, overlay,
+                              annotation_transform,
+                              anno_sx, anno_sy,
+                              anno_tx, anno_ty);
     if (!write_worker_file(source_path, source_svg, source_len, err)) goto fail;
     if (!write_worker_file(overlay_path, overlay->str, overlay->len, err)) goto fail;
 

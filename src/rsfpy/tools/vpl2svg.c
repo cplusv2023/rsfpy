@@ -761,7 +761,7 @@ static void emit_clip_def(SvgCtx *ctx, VplState *st)
     h = u_to_px(st->clip_ymax - st->clip_ymin);
     if (w <= 0.0 || h <= 0.0) return;
     fprintf(ctx->out,
-            "<defs><clipPath id=\"vplclip%d\"><rect x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\"/></clipPath></defs>\n",
+            "<defs><clipPath id=\"vplclip%d\" clipPathUnits=\"userSpaceOnUse\"><rect x=\"%.6g\" y=\"%.6g\" width=\"%.6g\" height=\"%.6g\"/></clipPath></defs>\n",
             st->clip_id, x, y, w, h);
 }
 
@@ -2045,7 +2045,7 @@ static void emit_tiled_raster_image(SvgCtx *ctx, VplState *st,
 
     image_clip_id = ++ctx->clip_id;
     fprintf(ctx->out,
-            "<defs><clipPath id=\"vplimgclip%d\"><rect x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"/></clipPath></defs>\n",
+            "<defs><clipPath id=\"vplimgclip%d\" clipPathUnits=\"userSpaceOnUse\"><rect x=\"%.12g\" y=\"%.12g\" width=\"%.12g\" height=\"%.12g\"/></clipPath></defs>\n",
             image_clip_id, clip_x, clip_y, clip_w, clip_h);
     fprintf(ctx->out,
             "<g clip-path=\"url(#vplimgclip%d)\" image-rendering=\"pixelated\" "
