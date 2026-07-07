@@ -1,4 +1,11 @@
 #include <gtk/gtk.h>
+#include <cairo.h>
+#if CAIRO_HAS_PDF_SURFACE
+#include <cairo-pdf.h>
+#endif
+#if CAIRO_HAS_PS_SURFACE
+#include <cairo-ps.h>
+#endif
 #include <gdk/gdkkeysyms.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
@@ -2522,6 +2529,12 @@ static const char *export_type_for_path(const char *path, gboolean *needs_alpha)
         if (needs_alpha) *needs_alpha = TRUE;
         return "tiff";
     }
+    if (g_ascii_strcasecmp(ext, "pdf") == 0) {
+        return "pdf";
+    }
+    if (g_ascii_strcasecmp(ext, "eps") == 0) {
+        return "eps";
+    }
 
     if (needs_alpha) *needs_alpha = TRUE;
     return "png";
@@ -2534,14 +2547,28 @@ static gboolean is_svg_export_path(const gchar *path)
     return g_ascii_strcasecmp(ext, "svg") == 0;
 }
 
+static const gchar *last_path_separator(const gchar *path)
+{
+    const gchar *last = NULL;
+    if (!path) return NULL;
+    for (const gchar *p = path; *p; p++) {
+        if (G_IS_DIR_SEPARATOR(*p)) last = p;
+    }
+    return last;
+}
+
 static gchar *normalize_export_path(const gchar *path)
 {
-    const char *dot;
+    const gchar *sep;
+    const gchar *name;
+    const gchar *dot;
 
     if (!path || !*path) return NULL;
 
-    dot = strrchr(path, '.');
-    if (!dot || dot == path || strchr(dot, G_DIR_SEPARATOR)) {
+    sep = last_path_separator(path);
+    name = sep ? sep + 1 : path;
+    dot = strrchr(name, '.');
+    if (!dot || dot == name) {
         return g_strconcat(path, ".png", NULL);
     }
 
@@ -2550,22 +2577,36 @@ static gchar *normalize_export_path(const gchar *path)
 
 static gchar *normalize_export_path_for_extension(const gchar *path, const gchar *ext)
 {
-    gchar *base;
-    gchar *dot;
+    gchar *normalized_ext = NULL;
+    const gchar *use_ext;
+    const gchar *sep;
+    const gchar *name;
+    const gchar *dot;
+    gchar *prefix;
     gchar *out;
 
     if (!ext || !*ext) return normalize_export_path(path);
+    if (!path || !*path) return NULL;
 
-    base = normalize_export_path(path);
-    if (!base) return NULL;
-
-    dot = strrchr(base, '.');
-    if (dot && dot != base && !strchr(dot, G_DIR_SEPARATOR)) {
-        *dot = '\0';
+    if (ext[0] == '.') {
+        use_ext = ext;
+    } else {
+        normalized_ext = g_strconcat(".", ext, NULL);
+        use_ext = normalized_ext;
     }
 
-    out = g_strconcat(base, ext, NULL);
-    g_free(base);
+    sep = last_path_separator(path);
+    name = sep ? sep + 1 : path;
+    dot = strrchr(name, '.');
+    if (dot && dot != name) {
+        prefix = g_strndup(path, (gssize)(dot - path));
+    } else {
+        prefix = g_strdup(path);
+    }
+
+    out = g_strconcat(prefix, use_ext, NULL);
+    g_free(prefix);
+    g_free(normalized_ext);
     return out;
 }
 
@@ -2656,15 +2697,37 @@ static gchar *default_export_filename(App *app)
     SvgFrame *f = current_frame(app);
     const char *src = f && f->path ? f->path : "rsfpy-view.svg";
     gchar *base = g_path_get_basename(src);
+    gchar *src_dir = NULL;
+    gchar *abs_dir = NULL;
     gchar *frame_suffix = strstr(base, ".frame[");
     gchar *dot;
+    gchar *filename;
     gchar *out;
 
     if (frame_suffix) *frame_suffix = '\0';
     dot = strrchr(base, '.');
     if (dot && dot != base) *dot = '\0';
 
-    out = g_strdup_printf("%s.svg", base && *base ? base : "rsfpy-view");
+    filename = g_strdup_printf("%s.png", base && *base ? base : "rsfpy-view");
+    if (src && *src) {
+        src_dir = g_path_get_dirname(src);
+    }
+    if (src_dir && g_path_is_absolute(src_dir)) {
+        abs_dir = g_strdup(src_dir);
+    } else {
+        gchar *cwd = g_get_current_dir();
+        if (src_dir && *src_dir && strcmp(src_dir, ".") != 0) {
+            abs_dir = g_build_filename(cwd, src_dir, NULL);
+            g_free(cwd);
+        } else {
+            abs_dir = cwd;
+        }
+    }
+
+    out = g_build_filename(abs_dir ? abs_dir : ".", filename, NULL);
+    g_free(filename);
+    g_free(abs_dir);
+    g_free(src_dir);
     g_free(base);
     return out;
 }
@@ -2841,16 +2904,39 @@ static void on_export_browse_clicked(GtkButton *button, gpointer user_data)
 {
     ExportDialogState *st = user_data;
     const gchar *current;
+    const gchar *ext;
     gchar *picked;
+    gchar *normalized;
 
     (void)button;
     if (!st || !st->entry) return;
     current = gtk_editable_get_text(GTK_EDITABLE(st->entry));
     picked = browse_export_path(st->app, current);
     if (picked && *picked) {
-        gtk_editable_set_text(GTK_EDITABLE(st->entry), picked);
+        ext = gtk_combo_box_get_active_id(GTK_COMBO_BOX(st->combo));
+        normalized = normalize_export_path_for_extension(picked, ext);
+        gtk_editable_set_text(GTK_EDITABLE(st->entry),
+                              normalized && *normalized ? normalized : picked);
+        g_free(normalized);
     }
     g_free(picked);
+}
+
+static void on_export_format_changed(GtkComboBox *combo, gpointer user_data)
+{
+    ExportDialogState *st = user_data;
+    const gchar *current;
+    const gchar *ext;
+    gchar *updated;
+
+    if (!st || !st->entry) return;
+    current = gtk_editable_get_text(GTK_EDITABLE(st->entry));
+    ext = gtk_combo_box_get_active_id(combo);
+    updated = normalize_export_path_for_extension(current, ext);
+    if (updated && strcmp(updated, current) != 0) {
+        gtk_editable_set_text(GTK_EDITABLE(st->entry), updated);
+    }
+    g_free(updated);
 }
 
 static void export_path_or_confirm(ExportDialogState *st, const gchar *path);
@@ -3022,12 +3108,18 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     gtk_grid_attach(GTK_GRID(grid), label, 0, 1, 1, 1);
 
     combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".svg", "SVG with annotations (*.svg)");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".png", "PNG image (*.png)");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".svg", "SVG (*.svg)");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".jpg", "JPEG image (*.jpg)");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".jpeg", "JPEG image (*.jpeg)");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".bmp", "BMP image (*.bmp)");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".tiff", "TIFF image (*.tiff)");
+#if CAIRO_HAS_PDF_SURFACE
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".pdf", "PDF (*.pdf)");
+#endif
+#if CAIRO_HAS_PS_SURFACE
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), ".eps", "EPS (*.eps)");
+#endif
     gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
     gtk_widget_set_hexpand(combo, TRUE);
     gtk_grid_attach(GTK_GRID(grid), combo, 1, 1, 1, 1);
@@ -3039,6 +3131,7 @@ static void on_export_clicked(GtkButton *button, gpointer user_data)
     st->combo = combo;
     g_signal_connect(dialog, "response", G_CALLBACK(on_export_dialog_response), st);
     g_signal_connect(browse, "clicked", G_CALLBACK(on_export_browse_clicked), st);
+    g_signal_connect(combo, "changed", G_CALLBACK(on_export_format_changed), st);
 
     gtk_window_present(GTK_WINDOW(dialog));
 }
@@ -3828,6 +3921,82 @@ static gboolean save_svg_bytes_as_image(const gchar *svg,
     return ok;
 }
 
+static gboolean save_svg_bytes_as_vector_document(const gchar *svg,
+                                                  gsize svg_len,
+                                                  const gchar *path,
+                                                  const gchar *type,
+                                                  int width,
+                                                  int height,
+                                                  GError **err)
+{
+    RsvgHandle *handle;
+    cairo_surface_t *surface = NULL;
+    cairo_t *cr = NULL;
+    RsvgRectangle viewport;
+    cairo_status_t status;
+    gboolean ok = FALSE;
+
+    if (!svg || svg_len == 0 || !path || !*path || width <= 0 || height <= 0) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "invalid vector export payload");
+        return FALSE;
+    }
+
+    handle = rsvg_handle_new_from_data((const guint8 *)svg, svg_len, err);
+    if (!handle) return FALSE;
+
+#if CAIRO_HAS_PDF_SURFACE
+    if (g_ascii_strcasecmp(type, "pdf") == 0) {
+        surface = cairo_pdf_surface_create(path, width, height);
+    }
+#endif
+#if CAIRO_HAS_PS_SURFACE
+    if (!surface && g_ascii_strcasecmp(type, "eps") == 0) {
+        surface = cairo_ps_surface_create(path, width, height);
+        cairo_ps_surface_set_eps(surface, TRUE);
+    }
+#endif
+
+    if (!surface) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                    "%s export is not supported by this cairo build", type);
+        g_object_unref(handle);
+        return FALSE;
+    }
+
+    status = cairo_surface_status(surface);
+    if (status != CAIRO_STATUS_SUCCESS) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "failed to create %s surface: %s",
+                    type, cairo_status_to_string(status));
+        cairo_surface_destroy(surface);
+        g_object_unref(handle);
+        return FALSE;
+    }
+
+    cr = cairo_create(surface);
+    viewport.x = 0.0;
+    viewport.y = 0.0;
+    viewport.width = width;
+    viewport.height = height;
+    ok = rsvg_handle_render_document(handle, cr, &viewport, err);
+    if (ok) cairo_show_page(cr);
+    cairo_destroy(cr);
+    cairo_surface_finish(surface);
+    status = cairo_surface_status(surface);
+    cairo_surface_destroy(surface);
+    g_object_unref(handle);
+
+    if (!ok) return FALSE;
+    if (status != CAIRO_STATUS_SUCCESS) {
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "failed to finish %s export: %s",
+                    type, cairo_status_to_string(status));
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean write_worker_file(const gchar *path,
                                   const gchar *data,
                                   gsize len,
@@ -3968,6 +4137,16 @@ static int run_worker_from_manifest(const gchar *manifest_path)
         if (format && g_ascii_strcasecmp(format, "svg") == 0) {
             if (!write_worker_file(output_path, svg, svg_len, &err)) {
                 g_printerr("worker failed to write SVG export: %s\n",
+                           err ? err->message : "unknown error");
+                goto out;
+            }
+        } else if (format &&
+                   (g_ascii_strcasecmp(format, "pdf") == 0 ||
+                    g_ascii_strcasecmp(format, "eps") == 0)) {
+            if (!save_svg_bytes_as_vector_document(svg, svg_len, output_path,
+                                                   format, pixel_w, pixel_h,
+                                                   &err)) {
+                g_printerr("worker failed to write vector export: %s\n",
                            err ? err->message : "unknown error");
                 goto out;
             }
