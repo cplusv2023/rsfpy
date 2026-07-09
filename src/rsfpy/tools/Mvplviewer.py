@@ -645,6 +645,31 @@ def stream_convert_one_vpl_to_manifest(
         )
 
     if count == 0:
+        if data is not None or (convert_path and os.path.exists(convert_path)):
+            append_progress_line(
+                progress_path,
+                "vplviewer: streaming produced no frames for %s; retrying full conversion"
+                % source_path,
+            )
+            svg = convert_one_vpl(
+                cmd,
+                converter_args,
+                title,
+                data,
+                source_path,
+                convert_path,
+                progress_path=progress_path,
+                viewer_process=viewer_process,
+            )
+            return write_stream_frames(
+                tempdir,
+                manifest,
+                title,
+                source_path,
+                svg,
+                start_index,
+                progress_path=progress_path,
+            )
         raise RuntimeError("VPL streaming conversion produced no SVG frames for %s" % source_path)
 
     return count

@@ -2822,8 +2822,10 @@ static int stream_emit_available(ByteBuf *prefix, const char *input,
         if (emit_svg_frame(prefix->data, prefix->len, input, opt,
                            *emitted, 0, border_in)) {
             made++;
+            (*emitted)++;
+        } else {
+            break;
         }
-        (*emitted)++;
     }
 
     return made;
