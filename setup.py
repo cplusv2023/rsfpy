@@ -106,6 +106,9 @@ NATIVE_TOOLS = {
             "glib-2.0",
             "librsvg-2.0",
         ],
+        "ldflags": [
+            "-lm",
+        ],
     },
     "rsfclient": {
         "sources": [
