@@ -134,10 +134,26 @@ try:
         if suffix == vpsuffix:
             viewer = _vpl_viewer(self)
             if viewer == self.sfpen:
-                self.Command(target + '.flip', target2,
-                             '%s $SOURCE %s' % (self.sfpen, locked))
+                self.Command(
+                    target + '.flip',
+                    target2,
+                    '%s $SOURCE %s' % (self.sfpen, locked),
+                )
             else:
-                self.Command(target + '.flip', target2, '%s $SOURCE %s' % (viewer, locked))
+                self.Command(
+                    target + '.flip',
+                    target2,
+                    '%s $SOURCE %s' % (viewer, locked),
+                )
+
+        elif suffix == '.svg':
+            svgviewer = WhereIs('svgviewer')
+            if svgviewer:
+                self.Command(
+                    target + '.flip',
+                    target2,
+                    '%s $SOURCE %s' % (svgviewer, locked),
+                )
 
         test = self.Test('.test_' + target, target2,
                          figdir=self.figs, bindir=self.bindir)
