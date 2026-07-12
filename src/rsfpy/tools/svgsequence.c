@@ -576,7 +576,7 @@ static gboolean load_handle_from_tiled_svg_if_needed(SvgFrame *f,
         gsize rewritten_len = strlen(rewritten);
         f->safe_source_bytes = g_bytes_new_take((guint8 *)rewritten, rewritten_len);
     }
-    fprintf(stderr, "Tiled large embedded PNG images in %s\n",
+    fprintf(stderr, "Rewrote SVG for librsvg safety in %s\n",
             label ? label : "(unknown)");
     return TRUE;
 }

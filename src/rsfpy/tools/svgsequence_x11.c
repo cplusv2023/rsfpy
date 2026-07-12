@@ -34,7 +34,7 @@ static RsvgHandle *load_svg_handle_with_tiling(const char *svg_content,
                                            strlen(rewritten),
                                            &local_err);
         if (handle) {
-            fprintf(stderr, "Tiled large embedded PNG images in %s\n",
+            fprintf(stderr, "Rewrote SVG for librsvg safety in %s\n",
                     label ? label : "(svg)");
             g_free(rewritten);
             return handle;

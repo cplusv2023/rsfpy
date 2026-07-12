@@ -10,6 +10,7 @@
 #define DEFAULT_MAX_DATA_URI_CHARS (96u * 1024u)
 #define DEFAULT_MAX_IMAGE_PIXELS (1024u * 1024u)
 #define DEFAULT_MIN_TILE_PX 16u
+#define DEFAULT_PATH_COMPACT_MIN_CHARS (32u * 1024u)
 
 typedef struct Attr {
     gchar *name;
@@ -511,6 +512,187 @@ static void normalize_clip_path_units(GString **io)
     g_string_append_len(out, s + last, (gssize)(len - last));
     g_string_free(src, TRUE);
     *io = out;
+}
+
+static gboolean find_raw_attr_value(const gchar *s,
+                                    gsize from,
+                                    gsize to,
+                                    const gchar *wanted,
+                                    gsize *value_start,
+                                    gsize *value_end)
+{
+    gsize i = from;
+
+    if (value_start) *value_start = G_MAXSIZE;
+    if (value_end) *value_end = G_MAXSIZE;
+    if (!s || !wanted) return FALSE;
+
+    while (i < to) {
+        gsize ns, ne, local_ns;
+        gboolean match = FALSE;
+
+        while (i < to && is_xml_space(s[i])) i++;
+        if (i >= to || s[i] == '/' || s[i] == '>') return FALSE;
+
+        ns = i;
+        while (i < to && !is_name_break(s[i])) i++;
+        ne = i;
+        if (ne == ns) { i++; continue; }
+
+        local_ns = ns;
+        for (gsize j = ns; j < ne; j++) {
+            if (s[j] == ':') local_ns = j + 1;
+        }
+        match = ascii_eq_nocase_n(s + local_ns, ne - local_ns, wanted);
+
+        while (i < to && is_xml_space(s[i])) i++;
+        if (i < to && s[i] == '=') {
+            gsize vs, ve;
+            i++;
+            while (i < to && is_xml_space(s[i])) i++;
+            if (i < to && (s[i] == '"' || s[i] == '\'')) {
+                gchar q = s[i++];
+                vs = i;
+                while (i < to && s[i] != q) i++;
+                ve = i;
+                if (i < to && s[i] == q) i++;
+            } else {
+                vs = i;
+                while (i < to && !is_xml_space(s[i]) && s[i] != '/' && s[i] != '>') i++;
+                ve = i;
+            }
+            if (match) {
+                if (value_start) *value_start = vs;
+                if (value_end) *value_end = ve;
+                return TRUE;
+            }
+        } else if (match) {
+            return FALSE;
+        }
+    }
+
+    return FALSE;
+}
+
+static gchar *compact_path_data_whitespace(const gchar *data,
+                                           gsize len,
+                                           gsize *out_len)
+{
+    GString *out = g_string_sized_new(len);
+    gboolean pending_space = FALSE;
+    gsize i;
+
+    for (i = 0; i < len; i++) {
+        if (is_xml_space(data[i])) {
+            pending_space = out->len > 0;
+            continue;
+        }
+        if (pending_space) {
+            g_string_append_c(out, ' ');
+            pending_space = FALSE;
+        }
+        g_string_append_c(out, data[i]);
+    }
+
+    if (out_len) *out_len = out->len;
+    return g_string_free(out, FALSE);
+}
+
+static gboolean tag_self_closing(const gchar *s, gsize lt, gsize gt);
+
+static void compact_long_path_data_values(GString **io, gboolean *out_changed)
+{
+    GString *src;
+    GString *out = NULL;
+    const gchar *s;
+    gsize len, pos = 0, last = 0;
+    gsize min_chars;
+    guint changed = 0;
+
+    if (out_changed) *out_changed = FALSE;
+    if (!io || !*io) return;
+    if (env_truthy_local("RSFPY_SVG_PATH_COMPACT_DISABLE")) return;
+
+    min_chars = env_size_local("RSFPY_SVG_PATH_COMPACT_MIN_CHARS",
+                               DEFAULT_PATH_COMPACT_MIN_CHARS);
+    if (min_chars == 0) min_chars = DEFAULT_PATH_COMPACT_MIN_CHARS;
+
+    src = *io;
+    s = src->str;
+    len = src->len;
+
+    while (pos < len) {
+        gsize lt = find_plain(s, len, pos, "<");
+        gsize j, ns, ne, gt, attr_to, d_start, d_end;
+        gboolean selfclose;
+
+        if (lt == G_MAXSIZE) break;
+        if (lt + 4 <= len && memcmp(s + lt, "<!--", 4) == 0) {
+            gsize end = find_plain(s, len, lt + 4, "-->");
+            pos = (end == G_MAXSIZE) ? len : end + 3;
+            continue;
+        }
+        if (lt + 9 <= len && memcmp(s + lt, "<![CDATA[", 9) == 0) {
+            gsize end = find_plain(s, len, lt + 9, "]]>");
+            pos = (end == G_MAXSIZE) ? len : end + 3;
+            continue;
+        }
+        if (lt + 2 <= len && s[lt + 1] == '?') {
+            gsize end = find_plain(s, len, lt + 2, "?>");
+            pos = (end == G_MAXSIZE) ? len : end + 2;
+            continue;
+        }
+        if (lt + 2 <= len && (s[lt + 1] == '!' || s[lt + 1] == '/')) {
+            gt = find_tag_end(s, len, lt);
+            pos = (gt == G_MAXSIZE) ? len : gt + 1;
+            continue;
+        }
+
+        j = lt + 1;
+        while (j < len && is_xml_space(s[j])) j++;
+        ns = j;
+        while (j < len && !is_name_break(s[j])) j++;
+        ne = j;
+        if (ne == ns || !qname_local_is(s + ns, ne - ns, "path")) {
+            gt = find_tag_end(s, len, lt);
+            pos = (gt == G_MAXSIZE) ? len : gt + 1;
+            continue;
+        }
+
+        gt = find_tag_end(s, len, lt);
+        if (gt == G_MAXSIZE) break;
+        selfclose = tag_self_closing(s, lt, gt);
+        attr_to = gt;
+        if (selfclose) {
+            while (attr_to > lt && is_xml_space(s[attr_to - 1])) attr_to--;
+            if (attr_to > lt && s[attr_to - 1] == '/') attr_to--;
+        }
+
+        if (find_raw_attr_value(s, ne, attr_to, "d", &d_start, &d_end) &&
+            d_end > d_start &&
+            (d_end - d_start >= min_chars || gt + 1 - lt >= min_chars)) {
+            gsize compact_len = 0;
+            gchar *compact = compact_path_data_whitespace(s + d_start,
+                                                          d_end - d_start,
+                                                          &compact_len);
+            if (compact && compact_len < d_end - d_start) {
+                if (!out) out = g_string_sized_new(len);
+                g_string_append_len(out, s + last, (gssize)(d_start - last));
+                g_string_append_len(out, compact, (gssize)compact_len);
+                last = d_end;
+                changed++;
+            }
+            g_free(compact);
+        }
+
+        pos = gt + 1;
+    }
+
+    if (!out) return;
+    g_string_append_len(out, s + last, (gssize)(len - last));
+    g_string_free(src, TRUE);
+    *io = out;
+    if (out_changed) *out_changed = changed > 0;
 }
 
 static GPtrArray *parse_attrs(const gchar *s, gsize from, gsize to)
@@ -1212,6 +1394,7 @@ static gchar *rewrite_internal(const gchar *svg_utf8,
     GString *out;
     gsize len, pos = 0, last = 0;
     guint replaced = 0;
+    gboolean compacted_paths = FALSE;
 
     if (out_changed) *out_changed = FALSE;
     if (!svg_utf8) {
@@ -1289,7 +1472,9 @@ static gchar *rewrite_internal(const gchar *svg_utf8,
         normalize_clip_path_units(&out);
     }
 
-    if (out_changed) *out_changed = replaced > 0;
+    compact_long_path_data_values(&out, &compacted_paths);
+
+    if (out_changed) *out_changed = replaced > 0 || compacted_paths;
     return g_string_free(out, FALSE);
 }
 
